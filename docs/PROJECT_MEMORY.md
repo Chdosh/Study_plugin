@@ -5,6 +5,7 @@
 - `AGENTS.md` is the architecture contract; this file is the cross-chat continuity record.
 - Core v1 vertical slice exists: local database schema/bootstrap, prompt profiles, DeepSeek-compatible AI client, import/planner/reflection agents, IPC bridge, tray/window shell, foreground app monitor, React workbench UI, and tests.
 - Verification completed: `npm run typecheck`, `npm test`, `npm run build`, `npm audit --omit=dev`, and a short `npm run preview` smoke launch.
+- Blank startup was fixed by pointing Electron preload at `out/preload/index.mjs`; automated smoke confirmed `window.studyApp` is injected and the main UI renders.
 
 ## Active Decisions
 - Build a Windows-first desktop app with Electron, React, TypeScript, SQLite, and Drizzle.
@@ -14,6 +15,7 @@
 - Use a local Windows API PowerShell probe for foreground app monitoring instead of the vulnerable `active-win` dependency chain.
 
 ## Recent Work Log
+- 2026-06-18T18:22:56.348Z [STEP] Fixed blank startup by correcting Electron preload path to index.mjs and adding visible boot error handling; smoke test confirmed main UI renders.
 - 2026-06-18T18:15:15.318Z [STEP] Removed active-win, replaced foreground monitoring with Windows API PowerShell probe, upgraded drizzle-orm, and verified production audit is clean.
 - 2026-06-18T18:11:59.417Z [STEP] Typecheck, tests, build, and short Electron preview smoke test completed.
 - 2026-06-18T18:09:07.827Z [STEP] Implemented the React workbench UI and fixed typecheck by adding React runtime/types.
