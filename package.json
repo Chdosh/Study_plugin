@@ -17,8 +17,7 @@
   },
   "dependencies": {
     "@libsql/client": "^0.15.15",
-    "active-win": "^9.0.0",
-    "drizzle-orm": "^0.44.7",
+    "drizzle-orm": "^0.45.2",
     "lucide-react": "^0.468.0",
     "openai": "^4.104.0",
     "react": "^18.3.1",
