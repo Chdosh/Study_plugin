@@ -99,7 +99,7 @@ function App(): JSX.Element {
       setBootError(null);
       setNotice(`${label}完成`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toUserErrorMessage(error);
       setBootError(message);
       setNotice(message);
     }
@@ -703,6 +703,15 @@ function EmptyState({ title, text }: { title: string; text: string }): JSX.Eleme
       <span>{text}</span>
     </div>
   );
+}
+
+function toUserErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const withoutIpcPrefix = raw.replace(/^Error invoking remote method '[^']+':\s*/u, '');
+  if (withoutIpcPrefix.includes('invalid_type') || withoutIpcPrefix.includes('Required')) {
+    return 'AI 返回内容格式不完整，已阻止写入正式计划。请重试生成，或在设置里调整提示词档位。';
+  }
+  return withoutIpcPrefix.length > 240 ? `${withoutIpcPrefix.slice(0, 240)}...` : withoutIpcPrefix;
 }
 
 createRoot(document.getElementById('root')!).render(

@@ -1,11 +1,12 @@
 import {
-  dailyPlanAgentOutputSchema,
   importAgentOutputSchema,
+  looseDailyPlanAgentOutputSchema,
   reviewAgentOutputSchema
 } from '../../shared/schemas';
 import type { AppSettings, PromptProfile, StudyWindow, TaskItem } from '../../shared/types';
 import { AiClient } from './ai-client';
 import { buildImportPrompt, buildPlanPrompt, buildReviewPrompt } from './agent-prompts';
+import { normalizeDailyPlanOutput } from './normalize-plan';
 
 export interface AgentRuntimeSettings extends AppSettings {
   deepseekApiKey: string | null;
@@ -29,18 +30,18 @@ export class ImportAgent {
 export class PlannerAgent {
   constructor(private readonly ai: AiClient) {}
 
-  run(params: {
+  async run(params: {
     date: string;
     windows: StudyWindow[];
     tasks: TaskItem[];
     profile: PromptProfile;
     settings: AgentRuntimeSettings;
   }) {
-    return this.ai.generateJson({
+    const raw = await this.ai.generateJson({
       apiKey: params.settings.deepseekApiKey,
       baseUrl: params.settings.deepseekBaseUrl,
       model: params.settings.deepseekModel,
-      schema: dailyPlanAgentOutputSchema,
+      schema: looseDailyPlanAgentOutputSchema,
       system: '你是本地优先 AI 学习管家的 planner-agent。只返回合法 JSON。',
       user: buildPlanPrompt({
         date: params.date,
@@ -49,6 +50,12 @@ export class PlannerAgent {
         profile: params.profile,
         blockMinutes: params.settings.defaultBlockMinutes
       })
+    });
+    return normalizeDailyPlanOutput({
+      raw,
+      windows: params.windows,
+      tasks: params.tasks,
+      blockMinutes: params.settings.defaultBlockMinutes
     });
   }
 }
