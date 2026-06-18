@@ -19,7 +19,7 @@ function createMainWindow(): BrowserWindow {
     height: 820,
     minWidth: 1040,
     minHeight: 680,
-    title: 'Study Supervisor',
+    title: '学习管家',
     show: false,
     autoHideMenuBar: true,
     webPreferences: {
@@ -60,40 +60,40 @@ function createTray(appService: AppService): void {
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAALUlEQVR4AWP4//8/AyUYTFhYGAZGRkYGEgATqAGjBoYaGGpgqIGhBoaSAAAncxM25FVcJwAAAABJRU5ErkJggg=='
   );
   tray = new Tray(icon);
-  tray.setToolTip('Study Supervisor');
+  tray.setToolTip('学习管家');
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
-        label: 'Open Study Supervisor',
+        label: '打开学习管家',
         click: () => showMainWindow()
       },
       {
-        label: 'Start Current Block',
+        label: '开始当前学习块',
         click: () => {
           showMainWindow();
           new Notification({
-            title: 'Study Supervisor',
-            body: 'Open Today and start the current focus block.'
+            title: '学习管家',
+            body: '打开“今日计划”，开始当前专注学习块。'
           }).show();
         }
       },
       {
-        label: 'Generate Review',
+        label: '生成今日复盘',
         click: async () => {
           showMainWindow();
           try {
             await appService.generateReview(new Date().toISOString().slice(0, 10));
           } catch {
             new Notification({
-              title: 'Review needs settings',
-              body: 'Add a DeepSeek API key before generating an AI review.'
+              title: '需要先完成设置',
+              body: '生成 AI 复盘前，请先在设置里填写 DeepSeek API Key。'
             }).show();
           }
         }
       },
       { type: 'separator' },
       {
-        label: 'Quit',
+        label: '退出',
         click: () => {
           isQuitting = true;
           app.quit();

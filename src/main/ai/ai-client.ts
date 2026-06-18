@@ -13,7 +13,7 @@ export interface AiJsonRequest<TSchema extends z.ZodTypeAny> {
 export class AiClient {
   async generateJson<TSchema extends z.ZodTypeAny>(request: AiJsonRequest<TSchema>): Promise<z.infer<TSchema>> {
     if (!request.apiKey) {
-      throw new Error('DeepSeek API key is missing. Add it in Settings before running AI actions.');
+      throw new Error('缺少 DeepSeek API Key。请先在“设置”里填写密钥，再运行 AI 功能。');
     }
 
     const client = new OpenAI({
@@ -26,7 +26,7 @@ export class AiClient {
       messages: [
         {
           role: 'system',
-          content: `${request.system}\nReturn only valid JSON. Do not include Markdown fences.`
+          content: `${request.system}\n只返回合法 JSON，不要包含 Markdown 代码块。`
         },
         {
           role: 'user',
@@ -41,7 +41,7 @@ export class AiClient {
 
     const content = response.choices[0]?.message?.content;
     if (!content) {
-      throw new Error('AI returned an empty response.');
+      throw new Error('AI 返回了空内容。');
     }
 
     const parsed = parseJsonObject(content);
@@ -56,7 +56,7 @@ function parseJsonObject(content: string): unknown {
   } catch {
     const match = trimmed.match(/\{[\s\S]*\}/);
     if (!match) {
-      throw new Error('AI response was not valid JSON.');
+      throw new Error('AI 返回内容不是合法 JSON。');
     }
     return JSON.parse(match[0]);
   }

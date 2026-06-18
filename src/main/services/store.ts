@@ -39,7 +39,40 @@ export class StudyStore {
         .from(promptProfiles)
         .where(eq(promptProfiles.key, prompt.key))
         .limit(1);
-      if (existing.length > 0) continue;
+      if (existing.length > 0) {
+        const profile = existing[0];
+        await this.db
+          .update(promptProfiles)
+          .set({
+            name: prompt.name,
+            description: prompt.description,
+            updatedAt: now
+          })
+          .where(eq(promptProfiles.id, profile.id));
+
+        const latestVersions = await this.db
+          .select()
+          .from(promptVersions)
+          .where(eq(promptVersions.profileId, profile.id))
+          .orderBy(desc(promptVersions.version))
+          .limit(1);
+        const latest = latestVersions[0];
+        if (!latest || latest.content.startsWith('Act as ')) {
+          const versionId = createId('prompt_version');
+          await this.db.insert(promptVersions).values({
+            id: versionId,
+            profileId: profile.id,
+            version: (latest?.version ?? 0) + 1,
+            content: prompt.content,
+            createdAt: now
+          });
+          await this.db
+            .update(promptProfiles)
+            .set({ activeVersionId: versionId, updatedAt: now })
+            .where(eq(promptProfiles.id, profile.id));
+        }
+        continue;
+      }
 
       const profileId = createId('prompt_profile');
       const versionId = createId('prompt_version');
