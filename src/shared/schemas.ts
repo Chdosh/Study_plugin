@@ -46,6 +46,10 @@ export const dailyPlanAgentOutputSchema = z.object({
   )
 });
 
+export const looseDailyPlanAgentOutputSchema = z.object({
+  blocks: z.array(z.record(z.unknown())).default([])
+});
+
 export const evaluationAgentOutputSchema = z.object({
   completionScore: z.number().min(0).max(100),
   focusScore: z.number().min(0).max(100),
@@ -63,4 +67,5 @@ export const reviewAgentOutputSchema = z.object({
 
 export type ImportAgentOutput = z.infer<typeof importAgentOutputSchema>;
 export type DailyPlanAgentOutput = z.infer<typeof dailyPlanAgentOutputSchema>;
+export type LooseDailyPlanAgentOutput = z.infer<typeof looseDailyPlanAgentOutputSchema>;
 export type ReviewAgentOutput = z.infer<typeof reviewAgentOutputSchema>;

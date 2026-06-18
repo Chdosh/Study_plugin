@@ -104,34 +104,58 @@ export class AppService {
     if (unresolvedTasks.length === 0) {
       throw new Error('没有可用于规划的未完成任务。');
     }
-    const output = await this.plannerAgent.run({
-      date,
-      windows: availableWindows,
-      tasks: unresolvedTasks,
-      profile,
-      settings: runtimeSettings
-    });
-    await this.store.saveAiReview({
-      kind: 'plan',
-      date,
-      provider: 'deepseek',
-      model: runtimeSettings.deepseekModel,
-      promptProfileId: profile.id,
-      promptVersionId: profile.activeVersionId,
-      inputSnapshot: {
+    try {
+      const output = await this.plannerAgent.run({
         date,
-        availableWindows,
-        tasks: unresolvedTasks
-      },
-      output,
-      outputSchemaVersion: 'daily-plan.v1',
-      status: 'success'
-    });
-    return this.store.createPlanFromAgentOutput({
-      date,
-      availableWindowsJson: JSON.stringify(availableWindows),
-      output
-    });
+        windows: availableWindows,
+        tasks: unresolvedTasks,
+        profile,
+        settings: runtimeSettings
+      });
+      await this.store.saveAiReview({
+        kind: 'plan',
+        date,
+        provider: 'deepseek',
+        model: runtimeSettings.deepseekModel,
+        promptProfileId: profile.id,
+        promptVersionId: profile.activeVersionId,
+        inputSnapshot: {
+          date,
+          availableWindows,
+          tasks: unresolvedTasks
+        },
+        output,
+        outputSchemaVersion: 'daily-plan.v1',
+        status: 'success'
+      });
+      return this.store.createPlanFromAgentOutput({
+        date,
+        availableWindowsJson: JSON.stringify(availableWindows),
+        output
+      });
+    } catch (error) {
+      await this.store.saveAiReview({
+        kind: 'plan',
+        date,
+        provider: 'deepseek',
+        model: runtimeSettings.deepseekModel,
+        promptProfileId: profile.id,
+        promptVersionId: profile.activeVersionId,
+        inputSnapshot: {
+          date,
+          availableWindows,
+          tasks: unresolvedTasks
+        },
+        output: {},
+        outputSchemaVersion: 'daily-plan.v1',
+        status: 'failed',
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+      if (error instanceof Error && error.message.includes('缺少 DeepSeek API Key')) {
+        throw error;
+      }
+      throw new Error('生成计划失败：AI 返回内容没有通过本地校验，已记录失败。请重试一次，或在设置里调低提示词复杂度。');
+    }
   }
 
   confirmPlan(planId: Id) {
