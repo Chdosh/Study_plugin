@@ -31,7 +31,7 @@ export class AppService {
 
   createImport(rawText: string, source: RawImport['source']) {
     if (!rawText.trim()) {
-      throw new Error('Import text is required.');
+      throw new Error('导入文本不能为空。');
     }
     return this.store.createRawImport(rawText, source);
   }
@@ -102,7 +102,7 @@ export class AppService {
     ]);
     const unresolvedTasks = tasks.filter((task) => !['done', 'skipped'].includes(task.status));
     if (unresolvedTasks.length === 0) {
-      throw new Error('No unresolved tasks are available for planning.');
+      throw new Error('没有可用于规划的未完成任务。');
     }
     const output = await this.plannerAgent.run({
       date,
@@ -157,7 +157,7 @@ export class AppService {
 
   async skipBlock(blockId: Id, reason: string) {
     if (!reason.trim()) {
-      throw new Error('Skip reason is required.');
+      throw new Error('跳过学习块时必须填写原因。');
     }
     return this.store.skipBlock(blockId, reason);
   }

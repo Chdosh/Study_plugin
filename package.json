@@ -41,7 +41,7 @@
   },
   "build": {
     "appId": "local.study.supervisor",
-    "productName": "Study Supervisor",
+    "productName": "学习管家",
     "directories": {
       "output": "release"
     },

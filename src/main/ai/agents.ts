@@ -20,7 +20,7 @@ export class ImportAgent {
       baseUrl: settings.deepseekBaseUrl,
       model: settings.deepseekModel,
       schema: importAgentOutputSchema,
-      system: 'You are import-agent for a local-first AI study supervisor.',
+      system: '你是本地优先 AI 学习管家的 import-agent。只返回合法 JSON。',
       user: buildImportPrompt(rawText, profile)
     });
   }
@@ -41,7 +41,7 @@ export class PlannerAgent {
       baseUrl: params.settings.deepseekBaseUrl,
       model: params.settings.deepseekModel,
       schema: dailyPlanAgentOutputSchema,
-      system: 'You are planner-agent for a local-first AI study supervisor.',
+      system: '你是本地优先 AI 学习管家的 planner-agent。只返回合法 JSON。',
       user: buildPlanPrompt({
         date: params.date,
         windows: params.windows,
@@ -62,7 +62,7 @@ export class ReflectionAgent {
       baseUrl: params.settings.deepseekBaseUrl,
       model: params.settings.deepseekModel,
       schema: reviewAgentOutputSchema,
-      system: 'You are reflection-agent for a local-first AI study supervisor.',
+      system: '你是本地优先 AI 学习管家的 reflection-agent。只返回合法 JSON。',
       user: buildReviewPrompt({
         date: params.date,
         snapshot: params.snapshot,

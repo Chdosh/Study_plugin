@@ -1,45 +1,75 @@
-# Project Memory
+# 项目记忆
 
-## Current State
-- Repository initialized and scaffolded as an Electron + React + TypeScript desktop app.
-- `AGENTS.md` is the architecture contract; this file is the cross-chat continuity record.
-- Core v1 vertical slice exists: local database schema/bootstrap, prompt profiles, DeepSeek-compatible AI client, import/planner/reflection agents, IPC bridge, tray/window shell, foreground app monitor, React workbench UI, and tests.
-- Verification completed: `npm run typecheck`, `npm test`, `npm run build`, `npm audit --omit=dev`, and a short `npm run preview` smoke launch.
-- Blank startup was fixed by pointing Electron preload at `out/preload/index.mjs`; automated smoke confirmed `window.studyApp` is injected and the main UI renders.
+## 当前状态
+- 仓库已经初始化，主系统已搭建为 `Electron + React + TypeScript` 桌面应用。
+- `AGENTS.md` 是架构契约；本文件是跨对话迁移的主记录文件。
+- 第一版核心纵向切片已存在：本地数据库 schema/bootstrap、默认提示词档位、DeepSeek 兼容 AI 客户端、导入/规划/复盘 agent、IPC bridge、托盘和窗口壳、前台应用监控、React 工作台 UI、基础测试。
+- 已修复启动空白问题：Electron preload 路径必须指向 `out/preload/index.mjs`，自动 smoke 已确认 `window.studyApp` 成功注入且主界面可以渲染。
+- 用户可见软件文案已切换为中文：主界面、托盘菜单、通知、启动错误、默认提示词、AI prompt 都已改为中文；内部类型名和数据库字段名仍保持英文。
+- 已完成验证：`npm run typecheck`、`npm test`、`npm run build`、`npm audit --omit=dev`、短时 Electron smoke 启动。
 
-## Active Decisions
-- Build a Windows-first desktop app with Electron, React, TypeScript, SQLite, and Drizzle.
-- Store project continuity in this file first; Git history is auxiliary.
-- Keep AI suggestions human-confirmed before they modify formal plans.
-- Avoid screenshots, keystroke logging, browser history collection, and forced lockout in v1.
-- Use a local Windows API PowerShell probe for foreground app monitoring instead of the vulnerable `active-win` dependency chain.
+## 设计思路
+- 产品不是普通待办清单，而是“本地优先的 AI 学习管家”：导入计划、拆解任务、生成十分钟计划、记录执行、监控专注、复盘评分、建议重排。
+- SQLite 是唯一事实源；AI 输出只是建议，必须经过用户确认才变成正式计划。
+- Prompt profile 是可编辑、可版本化的数据，不写死在 UI 里。
+- v1 监管只做低侵入行为记录：前台应用、窗口标题、学习 session、跳过/推迟原因；不做截图、键盘记录、浏览器历史读取、强制锁屏。
+- RAG、知识库、向量索引留作后续阶段，未来索引必须能从 SQLite 和源文件重建。
 
-## Recent Work Log
-- 2026-06-18T18:22:56.348Z [STEP] Fixed blank startup by correcting Electron preload path to index.mjs and adding visible boot error handling; smoke test confirmed main UI renders.
-- 2026-06-18T18:15:15.318Z [STEP] Removed active-win, replaced foreground monitoring with Windows API PowerShell probe, upgraded drizzle-orm, and verified production audit is clean.
-- 2026-06-18T18:11:59.417Z [STEP] Typecheck, tests, build, and short Electron preview smoke test completed.
-- 2026-06-18T18:09:07.827Z [STEP] Implemented the React workbench UI and fixed typecheck by adding React runtime/types.
-- 2026-06-18T18:04:44.056Z [STEP] Added DeepSeek-compatible AI client, agent prompts, app service, focus monitor, IPC registration, and Electron main process.
-- 2026-06-18T18:01:48.340Z [STEP] Added SQLite-compatible Drizzle schema, bootstrap SQL, default prompt profiles, and StudyStore service.
-- 2026-06-18T17:58:46.708Z [STEP] Scaffolded Electron/Vite/React/TypeScript configuration and installed dependencies.
-- 2026-06-18T17:53:51.641Z [STEP] Created project memory, dev-log script, and AGENTS reading requirement.
-- 2026-06-19 01:19: Created `AGENTS.md` with product, data, AI, RAG, and monitoring boundaries.
-- 2026-06-19: Initialized Git repository.
+## 迭代过程
+- 第一步：创建 `AGENTS.md`，明确产品目标、非目标、技术栈、数据边界、AI 上下文策略和 RAG 预留方向。
+- 第二步：初始化 Git，建立 `docs/PROJECT_MEMORY.md` 和 `scripts/dev-log.mjs`，把跨对话迁移能力作为工程约束。
+- 第三步：搭建 Electron/Vite/React/TypeScript 基础工程，区分 main、preload、renderer、shared。
+- 第四步：建立 SQLite-compatible libSQL + Drizzle 数据层，覆盖导入原文、目标、任务、依赖、日计划、计划块、学习 session、专注事件、跳过记录、AI 记录、prompt profile、计划版本、设置。
+- 第五步：实现 DeepSeek 兼容 AI 客户端和导入/规划/复盘 agent，所有输出通过 Zod schema 校验。
+- 第六步：实现主进程窗口、托盘、通知、开机自启设置入口、IPC 注册和 Windows 前台应用监控。
+- 第七步：实现 React 工作台 UI，包括今日计划、导入计划、任务列表、复盘、设置、prompt profile 编辑。
+- 第八步：移除 `active-win` 依赖链，改用 Windows API PowerShell 探测前台应用，生产依赖审计归零。
+- 第九步：修复 preload 文件扩展名错误导致的启动空白，并增加启动失败可见错误提示。
 
-## Open Questions
-- Exact DeepSeek model name should remain configurable because provider model names change over time.
-- Packaging icon and installer branding can be decided after the core app works.
+## 主计划
+- 当前阶段目标：让本地应用可以稳定打开，用中文完成导入、规划、执行、复盘的最小闭环。
+- 下一阶段目标：使用真实 DeepSeek API Key 进行端到端测试，修复 AI JSON、计划生成、复盘生成里的实际失败路径。
+- 后续增强：提醒调度、独立置顶提醒窗口、重排 diff 审核、Playwright/Electron UI 测试、知识库/RAG 原型。
 
-## Next Steps
-- Manually run `npm run dev` and exercise the UI with a real DeepSeek API key.
-- Add reminder scheduling and a dedicated always-on-top reminder window.
-- Improve plan confirmation and replan diff review.
-- Add Playwright/Electron UI tests once the first manual workflow is stable.
+## 活跃决策
+- 先支持 Windows。
+- 技术栈保持 `Electron + React + TypeScript + SQLite/Drizzle`。
+- 开发过程、设计思路、迭代记录、计划和迁移提示都用中文写入本文件。
+- 软件用户界面也使用中文；技术内部类型名和数据库字段名可以保持英文，保证工程可维护。
+- 开发记录以本文件为主，Git commit 为辅助。
+- 每完成一个小开发步骤，都要运行 `npm run devlog -- step "中文说明"` 或手动更新本文件。
+- 使用本地 Windows API PowerShell 探测前台应用，不引入有漏洞的 `active-win` 依赖链。
 
-## Known Risks
-- Native SQLite bindings can complicate Electron packaging; prefer a local SQLite-compatible client that is easy to bundle.
-- AI JSON output can be malformed; all agent outputs need schema validation and safe failure paths.
-- Foreground app monitoring can fail on some Windows permissions or package versions; keep it optional and non-blocking.
+## 近期开发记录
+- 2026-06-18T18:30:23.430Z [步骤] 将 React 工作台文案切换为中文，并增加默认提示词中文迁移逻辑。
+- 2026-06-18T18:28:58.967Z [步骤] 将应用标题、托盘菜单、通知、默认提示词和 AI 提示词改为中文。
+- 2026-06-18T18:28:09.563Z [步骤] 将项目记忆文件改为中文，加入设计思路、迭代过程、主计划和中文记录规范。
+- 2026-06-18T18:23:39.000Z [步骤] 修复 Electron preload 路径为 `index.mjs`，增加启动失败显示，smoke 测试确认主界面渲染。
+- 2026-06-18T18:15:15.318Z [步骤] 移除 active-win，改为 Windows API PowerShell 前台窗口探测，升级 drizzle-orm，生产依赖审计清零。
+- 2026-06-18T18:11:59.417Z [步骤] 完成类型检查、单元测试、构建和短时 Electron preview smoke。
+- 2026-06-18T18:09:07.827Z [步骤] 实现 React 工作台 UI，并补齐 React runtime/type 依赖。
+- 2026-06-18T18:04:44.056Z [步骤] 添加 DeepSeek 兼容 AI 客户端、agent prompt、应用服务、专注监控、IPC 注册和 Electron 主进程。
+- 2026-06-18T18:01:48.340Z [步骤] 添加 SQLite-compatible Drizzle schema、bootstrap SQL、默认 prompt profiles 和 StudyStore 服务。
+- 2026-06-18T17:58:46.708Z [步骤] 搭建 Electron/Vite/React/TypeScript 配置并安装依赖。
+- 2026-06-18T17:53:51.641Z [步骤] 创建项目记忆、开发日志脚本和 AGENTS 阅读要求。
+- 2026-06-19 01:19 [步骤] 创建 `AGENTS.md`，记录产品、数据、AI、RAG 和监控边界。
+- 2026-06-19 [步骤] 初始化 Git 仓库。
 
-## Migration Prompt
-Continue development of `D:\work\study_plugin`. First read `AGENTS.md` and `docs/PROJECT_MEMORY.md`. Preserve the local-first architecture, maintain this project memory after each small development step, and keep AI plan changes human-confirmed.
+## 未决问题
+- DeepSeek 模型名需要保持可配置，因为供应商模型名会变化。
+- 打包图标、安装器品牌、应用正式名称可以在核心闭环稳定后决定。
+- 需要用真实 DeepSeek API Key 跑一次完整导入/规划/复盘流程。
+
+## 下一步
+- 运行 `npm run dev`，填写 DeepSeek API Key，手动验证导入计划到生成日计划的完整流程。
+- 添加提醒调度和独立置顶提醒窗口。
+- 增强重排建议的 diff 审核视图。
+- 在手动流程稳定后补 Playwright/Electron UI 测试。
+
+## 已知风险
+- AI 返回 JSON 可能不稳定，所有 agent 输出必须继续做 schema 校验和失败恢复。
+- Windows 前台应用探测可能受权限、系统语言、PowerShell 策略影响；该能力必须保持可选、非阻塞。
+- 现有数据库里已经写入过英文默认 prompt 的用户，需要后续迁移或覆盖为中文版本。
+
+## 迁移提示
+继续开发 `D:\work\study_plugin`。新对话开始后先读 `AGENTS.md` 和 `docs/PROJECT_MEMORY.md`。保持本地优先架构；每完成一个小开发步骤都更新本文件；开发记录和用户可见软件文案使用中文；AI 对正式计划的修改必须经过用户确认。

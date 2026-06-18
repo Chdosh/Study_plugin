@@ -6,6 +6,11 @@ Build a local-first Windows desktop AI learning supervisor. The app imports stud
 ## Required Agent Reading
 Before implementing or reviewing code, read this file and `docs/PROJECT_MEMORY.md`. Treat `docs/PROJECT_MEMORY.md` as the cross-chat continuity record and update it after each small development step.
 
+## Language Requirements
+- Write development process records, design rationale, iteration notes, plans, and migration context in Chinese.
+- The user-facing application UI should use Chinese text.
+- Keep technical identifiers, database columns, and TypeScript types in English when that improves maintainability.
+
 ## Non-Goals
 - Do not scrape ChatGPT web sessions in v1.
 - Do not monitor phone usage.

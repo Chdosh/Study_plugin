@@ -43,7 +43,7 @@ export class FocusMonitor {
     } catch (error) {
       await this.store.recordFocusEvent({
         sessionId: this.activeSessionId,
-        appName: 'Focus monitor unavailable',
+        appName: '专注监控不可用',
         windowTitle: error instanceof Error ? error.message : String(error),
         eventType: 'unknown'
       });
