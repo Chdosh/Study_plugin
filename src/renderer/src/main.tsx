@@ -38,6 +38,7 @@ function App(): JSX.Element {
   const [activeSession, setActiveSession] = useState<StudySession | null>(null);
   const [review, setReview] = useState<ReviewResult | null>(null);
   const [notice, setNotice] = useState<string>('Ready');
+  const [bootError, setBootError] = useState<string | null>(null);
 
   const confirmedPlan = useMemo(
     () => plans.find((plan) => plan.status === 'confirmed') ?? plans[0] ?? null,
@@ -45,6 +46,9 @@ function App(): JSX.Element {
   );
 
   async function refresh(): Promise<void> {
+    if (!window.studyApp) {
+      throw new Error('Electron preload API is unavailable. Check the preload path in the main process.');
+    }
     const [nextSettings, nextTasks, nextPlans, nextPrompts] = await Promise.all([
       window.studyApp.settings.get(),
       window.studyApp.tasks.list(),
@@ -61,9 +65,12 @@ function App(): JSX.Element {
     setNotice(`${label}...`);
     try {
       await action();
+      setBootError(null);
       setNotice(`${label} completed`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setBootError(message);
+      setNotice(message);
     }
   }
 
@@ -76,6 +83,15 @@ function App(): JSX.Element {
       <div className="boot">
         <Timer size={24} />
         <span>Loading Study Supervisor</span>
+        {bootError && (
+          <div className="boot-error">
+            <strong>Startup failed</strong>
+            <p>{bootError}</p>
+            <button className="secondary-button" onClick={() => void runAction('Retry startup', refresh)}>
+              Retry
+            </button>
+          </div>
+        )}
       </div>
     );
   }

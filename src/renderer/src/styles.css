@@ -51,6 +51,22 @@ button {
   color: var(--muted);
 }
 
+.boot-error {
+  width: min(520px, calc(100vw - 48px));
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #efc7c7;
+  border-radius: 8px;
+  background: #fff7f7;
+  color: var(--danger);
+}
+
+.boot-error p {
+  color: #7d3b3b;
+  font-size: 13px;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: 236px 1fr;
