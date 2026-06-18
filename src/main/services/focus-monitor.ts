@@ -1,11 +1,5 @@
 import type { StudyStore } from './store';
-
-interface ActiveWindowResult {
-  title?: string;
-  owner?: {
-    name?: string;
-  };
-}
+import { getForegroundWindowInfo } from './windows-foreground';
 
 export class FocusMonitor {
   private activeSessionId: string | null = null;
@@ -34,10 +28,9 @@ export class FocusMonitor {
 
   private async captureForeground(): Promise<void> {
     try {
-      const activeWin = await import('active-win');
-      const activeWindow = (await activeWin.activeWindow()) as ActiveWindowResult | undefined;
-      const appName = activeWindow?.owner?.name ?? 'Unknown';
-      const windowTitle = activeWindow?.title ?? null;
+      const activeWindow = await getForegroundWindowInfo();
+      const appName = activeWindow.appName;
+      const windowTitle = activeWindow.windowTitle;
       const signature = `${appName}:${windowTitle ?? ''}`;
       if (signature === this.lastSignature) return;
       this.lastSignature = signature;
