@@ -5,6 +5,7 @@ import {
   CalendarClock,
   CheckCircle2,
   ClipboardList,
+  History,
   KeyRound,
   Play,
   RotateCcw,
@@ -25,7 +26,7 @@ import type {
 } from '../../shared/types';
 import './styles.css';
 
-type ViewKey = 'today' | 'import' | 'tasks' | 'review' | 'settings';
+type ViewKey = 'workbench' | 'tasks' | 'review' | 'settings';
 
 const todayIso = new Date().toISOString().slice(0, 10);
 
@@ -45,6 +46,12 @@ const planStatusLabels: Record<DailyPlanBlock['status'], string> = {
   deferred: '已推迟'
 };
 
+const dailyPlanStatusLabels: Record<DailyPlan['status'], string> = {
+  draft: '草稿',
+  confirmed: '已确认',
+  archived: '历史'
+};
+
 const difficultyLabels: Record<TaskItem['difficulty'], string> = {
   foundation: '基础',
   standard: '标准',
@@ -60,8 +67,12 @@ function difficultyLabel(difficulty: TaskItem['difficulty']): string {
   return difficultyLabels[difficulty] ?? difficulty;
 }
 
+function dailyPlanStatusLabel(status: DailyPlan['status']): string {
+  return dailyPlanStatusLabels[status] ?? status;
+}
+
 function App(): JSX.Element {
-  const [view, setView] = useState<ViewKey>('today');
+  const [view, setView] = useState<ViewKey>('workbench');
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [plans, setPlans] = useState<DailyPlan[]>([]);
@@ -70,13 +81,21 @@ function App(): JSX.Element {
   const [review, setReview] = useState<ReviewResult | null>(null);
   const [notice, setNotice] = useState<string>('就绪');
   const [bootError, setBootError] = useState<string | null>(null);
+  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
 
-  const confirmedPlan = useMemo(
-    () => plans.find((plan) => plan.status === 'confirmed') ?? plans[0] ?? null,
-    [plans]
+  const activePlan = useMemo(
+    () => plans.find((plan) => plan.id === selectedPlanId) ?? plans[0] ?? null,
+    [plans, selectedPlanId]
   );
 
-  async function refresh(): Promise<void> {
+  const currentViewTitle = {
+    workbench: ['学习工作台', '导入、生成、确认和执行都在这里完成。'],
+    tasks: ['任务清单', '查看和调整本地任务状态。'],
+    review: ['复盘', '根据本地执行记录生成评分和下一步动作。'],
+    settings: ['设置', '配置模型、学习节奏和提示词档位。']
+  }[view];
+
+  async function refresh(preferredPlanId?: string): Promise<void> {
     if (!window.studyApp) {
       throw new Error('Electron preload API 不可用，请检查主进程里的 preload 路径。');
     }
@@ -90,6 +109,11 @@ function App(): JSX.Element {
     setTasks(nextTasks);
     setPlans(nextPlans);
     setPrompts(nextPrompts);
+    setSelectedPlanId((current) => {
+      if (preferredPlanId && nextPlans.some((plan) => plan.id === preferredPlanId)) return preferredPlanId;
+      if (current && nextPlans.some((plan) => plan.id === current)) return current;
+      return nextPlans[0]?.id ?? null;
+    });
   }
 
   async function runAction(label: string, action: () => Promise<void>): Promise<void> {
@@ -131,22 +155,34 @@ function App(): JSX.Element {
     <div className="app-shell">
       <Sidebar current={view} onSelect={setView} />
       <main className="workspace">
-        <TopBar settings={settings} notice={notice} onRefresh={() => void runAction('刷新', refresh)} />
-        {view === 'today' && (
-          <TodayView
+        <TopBar
+          title={currentViewTitle[0]}
+          subtitle={currentViewTitle[1]}
+          settings={settings}
+          notice={notice}
+          onRefresh={() => void runAction('刷新', refresh)}
+        />
+        {view === 'workbench' && (
+          <WorkbenchView
             settings={settings}
             tasks={tasks}
-            plan={confirmedPlan}
-            onGeneratePlan={(date, windows) =>
+            plans={plans}
+            activePlan={activePlan}
+            selectedPlanId={selectedPlanId}
+            prompts={prompts}
+            runAction={runAction}
+            onSelectPlan={setSelectedPlanId}
+            onDataChanged={refresh}
+            onGeneratePlan={(date, windows, promptProfileId) =>
               runAction('生成计划', async () => {
-                await window.studyApp.plans.generate(date, windows);
-                await refresh();
+                const plan = await window.studyApp.plans.generate(date, windows, promptProfileId);
+                await refresh(plan.id);
               })
             }
             onConfirmPlan={(planId) =>
               runAction('确认计划', async () => {
                 await window.studyApp.plans.confirm(planId);
-                await refresh();
+                await refresh(planId);
               })
             }
             onStart={(blockId) =>
@@ -172,13 +208,6 @@ function App(): JSX.Element {
                   })
                 : Promise.resolve()
             }
-          />
-        )}
-        {view === 'import' && (
-          <ImportView
-            prompts={prompts}
-            onImported={() => runAction('刷新导入结果', refresh)}
-            runAction={runAction}
           />
         )}
         {view === 'tasks' && <TasksView tasks={tasks} runAction={runAction} onChanged={refresh} />}
@@ -207,8 +236,7 @@ function App(): JSX.Element {
 
 function Sidebar({ current, onSelect }: { current: ViewKey; onSelect: (view: ViewKey) => void }): JSX.Element {
   const items: Array<{ key: ViewKey; label: string; icon: JSX.Element }> = [
-    { key: 'today', label: '今日计划', icon: <CalendarClock size={18} /> },
-    { key: 'import', label: '导入计划', icon: <ClipboardList size={18} /> },
+    { key: 'workbench', label: '学习工作台', icon: <CalendarClock size={18} /> },
     { key: 'tasks', label: '任务清单', icon: <BookOpen size={18} /> },
     { key: 'review', label: '复盘', icon: <RotateCcw size={18} /> },
     { key: 'settings', label: '设置', icon: <Settings size={18} /> }
@@ -239,10 +267,14 @@ function Sidebar({ current, onSelect }: { current: ViewKey; onSelect: (view: Vie
 }
 
 function TopBar({
+  title,
+  subtitle,
   settings,
   notice,
   onRefresh
 }: {
+  title: string;
+  subtitle: string;
   settings: AppSettings;
   notice: string;
   onRefresh: () => void;
@@ -250,8 +282,8 @@ function TopBar({
   return (
     <header className="topbar">
       <div>
-        <h1>今日计划</h1>
-        <p>{notice}</p>
+        <h1>{title}</h1>
+        <p>{subtitle} 当前状态：{notice}</p>
       </div>
       <div className="top-actions">
         <span className={settings.hasDeepseekApiKey ? 'status ok' : 'status warn'}>
@@ -266,10 +298,16 @@ function TopBar({
   );
 }
 
-function TodayView({
+function WorkbenchView({
   settings,
   tasks,
-  plan,
+  plans,
+  activePlan,
+  selectedPlanId,
+  prompts,
+  runAction,
+  onSelectPlan,
+  onDataChanged,
   activeSession,
   onGeneratePlan,
   onConfirmPlan,
@@ -279,41 +317,82 @@ function TodayView({
 }: {
   settings: AppSettings;
   tasks: TaskItem[];
-  plan: DailyPlan | null;
+  plans: DailyPlan[];
+  activePlan: DailyPlan | null;
+  selectedPlanId: string | null;
+  prompts: PromptProfile[];
+  runAction: (label: string, action: () => Promise<void>) => Promise<void>;
+  onSelectPlan: (planId: string) => void;
+  onDataChanged: () => Promise<void>;
   activeSession: StudySession | null;
-  onGeneratePlan: (date: string, windows: StudyWindow[]) => Promise<void>;
+  onGeneratePlan: (date: string, windows: StudyWindow[], promptProfileId?: string) => Promise<void>;
   onConfirmPlan: (planId: string) => Promise<void>;
   onStart: (blockId: string) => Promise<void>;
   onSkip: (blockId: string, reason: string) => Promise<void>;
   onCompleteSession: (notes: string) => Promise<void>;
 }): JSX.Element {
   const unresolved = tasks.filter((task) => !['done', 'skipped'].includes(task.status));
-  const completedBlocks = plan?.blocks.filter((block) => block.status === 'done').length ?? 0;
-  const totalBlocks = plan?.blocks.length ?? 0;
+  const completedBlocks = activePlan?.blocks.filter((block) => block.status === 'done').length ?? 0;
+  const totalBlocks = activePlan?.blocks.length ?? 0;
+  const [promptProfileId, setPromptProfileId] = useState<string>('');
 
   return (
-    <section className="work-grid">
-      <div className="primary-surface">
+    <section className="workbench-grid">
+      <aside className="primary-surface flow-panel">
         <div className="section-header">
           <div>
-            <h2>十分钟计划</h2>
-            <p>{unresolved.length} 个未完成任务</p>
-          </div>
-          <div className="button-row">
-            <button className="secondary-button" onClick={() => void onGeneratePlan(todayIso, settings.dailyStudyWindows)}>
-              <Wand2 size={16} />
-              生成
-            </button>
-            {plan?.status === 'draft' && (
-              <button className="primary-button" onClick={() => void onConfirmPlan(plan.id)}>
-                <CheckCircle2 size={16} />
-                确认
-              </button>
-            )}
+            <h2>导入与生成</h2>
+            <p>今天的任务上下文集中在这里维护。</p>
           </div>
         </div>
-        {plan ? (
-          <Timeline blocks={plan.blocks} onStart={onStart} onSkip={onSkip} />
+        <QuickImportPanel
+          prompts={prompts}
+          promptProfileId={promptProfileId}
+          onPromptProfileChange={setPromptProfileId}
+          runAction={runAction}
+          onImported={onDataChanged}
+        />
+        <div className="compact-divider" />
+        <div className="side-section">
+          <div className="context-row">
+            <span>未完成任务</span>
+            <strong>{unresolved.length}</strong>
+          </div>
+          <div className="context-row">
+            <span>学习块长度</span>
+            <strong>{settings.defaultBlockMinutes} 分钟</strong>
+          </div>
+          <button
+            className="primary-button full"
+            disabled={unresolved.length === 0}
+            onClick={() => void onGeneratePlan(todayIso, settings.dailyStudyWindows, promptProfileId || undefined)}
+          >
+            <Wand2 size={16} />
+            生成今日草稿
+          </button>
+          <p className="muted">每次生成都会保存为今天的一条草稿历史，确认后才进入正式执行。</p>
+        </div>
+      </aside>
+
+      <div className="primary-surface plan-surface">
+        <div className="section-header compact-header">
+          <div>
+            <h2>{activePlan ? `${todayIso} 计划` : '今日计划'}</h2>
+            <p>
+              {activePlan
+                ? `${dailyPlanStatusLabel(activePlan.status)} · ${activePlan.blocks.length} 个时间块`
+                : '先导入任务，再生成今日草稿。'}
+            </p>
+          </div>
+          {activePlan?.status === 'draft' && (
+            <button className="primary-button" onClick={() => void onConfirmPlan(activePlan.id)}>
+              <CheckCircle2 size={16} />
+              确认草稿
+            </button>
+          )}
+        </div>
+        {activePlan ? (
+          <Timeline blocks={activePlan.blocks} onStart={onStart} onSkip={onSkip} />
         ) : (
           <EmptyState title="今天还没有计划" text="先导入任务，再生成 AI 草稿计划。" />
         )}
@@ -327,10 +406,15 @@ function TodayView({
             </strong>
           </div>
           <div>
-            <span>块长度</span>
-            <strong>{settings.defaultBlockMinutes}m</strong>
+            <span>历史</span>
+            <strong>{plans.length}</strong>
           </div>
         </div>
+        <PlanHistory
+          plans={plans}
+          selectedPlanId={selectedPlanId}
+          onSelectPlan={onSelectPlan}
+        />
         <FocusBlock activeSession={activeSession} onComplete={onCompleteSession} />
       </aside>
     </section>
@@ -415,75 +499,110 @@ function FocusBlock({
   );
 }
 
-function ImportView({
+function QuickImportPanel({
   prompts,
+  promptProfileId,
+  onPromptProfileChange,
   onImported,
   runAction
 }: {
   prompts: PromptProfile[];
+  promptProfileId: string;
+  onPromptProfileChange: (profileId: string) => void;
   onImported: () => Promise<void>;
   runAction: (label: string, action: () => Promise<void>) => Promise<void>;
 }): JSX.Element {
   const [source, setSource] = useState<RawImport['source']>('chatgpt');
   const [rawText, setRawText] = useState('');
-  const [promptProfileId, setPromptProfileId] = useState<string>('');
 
   return (
-    <section className="two-column">
-      <div className="primary-surface">
-        <div className="section-header">
-          <div>
-            <h2>导入计划</h2>
-            <p>粘贴来自 ChatGPT、Codex 或手动整理的完整学习计划。</p>
-          </div>
-        </div>
-        <textarea
-          className="large-input"
-          value={rawText}
-          onChange={(event) => setRawText(event.target.value)}
-          placeholder="把你的学习计划粘贴到这里..."
-        />
-        <div className="form-grid">
-          <label>
-            来源
-            <select value={source} onChange={(event) => setSource(event.target.value as RawImport['source'])}>
-              <option value="chatgpt">ChatGPT</option>
-              <option value="codex">Codex</option>
-              <option value="manual">手动</option>
-            </select>
-          </label>
-          <label>
-            提示词档位
-            <select value={promptProfileId} onChange={(event) => setPromptProfileId(event.target.value)}>
-              <option value="">默认基础模式</option>
-              {prompts.map((prompt) => (
-                <option value={prompt.id} key={prompt.id}>
-                  {prompt.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <button
-          className="primary-button"
-          onClick={() =>
-            void runAction('导入并解析', async () => {
-              const created = await window.studyApp.imports.create(rawText, source);
-              await window.studyApp.imports.parse(created.id, promptProfileId || undefined);
-              setRawText('');
-              await onImported();
-            })
-          }
-        >
-          <Wand2 size={16} />
-          导入并解析
-        </button>
+    <div className="quick-import">
+      <div className="compact-title">
+        <ClipboardList size={16} />
+        <strong>粘贴计划</strong>
       </div>
-      <aside className="inspector">
-        <h3>解析约束</h3>
-        <p className="muted">AI 输出必须先变成目标、任务、依赖、时间估算和验收标准，才能进入正式任务清单。</p>
-      </aside>
-    </section>
+      <textarea
+        className="compact-input"
+        value={rawText}
+        onChange={(event) => setRawText(event.target.value)}
+        placeholder="粘贴 ChatGPT/Codex 给出的学习计划..."
+      />
+      <div className="form-grid compact-form">
+        <label>
+          来源
+          <select value={source} onChange={(event) => setSource(event.target.value as RawImport['source'])}>
+            <option value="chatgpt">ChatGPT</option>
+            <option value="codex">Codex</option>
+            <option value="manual">手动</option>
+          </select>
+        </label>
+        <label>
+          提示词
+          <select value={promptProfileId} onChange={(event) => onPromptProfileChange(event.target.value)}>
+            <option value="">默认基础模式</option>
+            {prompts.map((prompt) => (
+              <option value={prompt.id} key={prompt.id}>
+                {prompt.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <button
+        className="secondary-button full"
+        disabled={!rawText.trim()}
+        onClick={() =>
+          void runAction('导入并解析', async () => {
+            const created = await window.studyApp.imports.create(rawText, source);
+            await window.studyApp.imports.parse(created.id, promptProfileId || undefined);
+            setRawText('');
+            await onImported();
+          })
+        }
+      >
+        <Wand2 size={16} />
+        导入到今日上下文
+      </button>
+    </div>
+  );
+}
+
+function PlanHistory({
+  plans,
+  selectedPlanId,
+  onSelectPlan
+}: {
+  plans: DailyPlan[];
+  selectedPlanId: string | null;
+  onSelectPlan: (planId: string) => void;
+}): JSX.Element {
+  return (
+    <div className="side-section">
+      <div className="compact-title">
+        <History size={16} />
+        <strong>今日历史</strong>
+      </div>
+      {plans.length > 0 ? (
+        <div className="history-list">
+          {plans.map((plan, index) => (
+            <button
+              className={plan.id === selectedPlanId ? 'history-item active' : 'history-item'}
+              key={plan.id}
+              onClick={() => onSelectPlan(plan.id)}
+            >
+              <span>
+                <strong>版本 {plans.length - index}</strong>
+                <small>{new Date(plan.createdAt).toLocaleTimeString()}</small>
+              </span>
+              <span className={`pill ${plan.status}`}>{dailyPlanStatusLabel(plan.status)}</span>
+              <small>{plan.blocks.length} 块</small>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="muted">生成今日草稿后，这里会保留每次计划版本。</p>
+      )}
+    </div>
   );
 }
 

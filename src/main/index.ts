@@ -15,10 +15,10 @@ let isQuitting = false;
 
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
-    width: 1280,
-    height: 820,
-    minWidth: 1040,
-    minHeight: 680,
+    width: 1180,
+    height: 760,
+    minWidth: 960,
+    minHeight: 640,
     title: '学习管家',
     show: false,
     autoHideMenuBar: true,
