@@ -1,0 +1,9 @@
+.agent/evidence/TASK-000-R1/commands.md
+.agent/evidence/TASK-000-R1/post-status.txt
+.agent/evidence/TASK-000-R1/post-untracked.txt
+.agent/evidence/TASK-000-R1/pre-status.txt
+.agent/evidence/TASK-000-R1/pre-untracked.txt
+.agent/evidence/TASK-000-R1/test.exitcode
+.agent/evidence/TASK-000-R1/test.log
+.agent/evidence/TASK-000-R1/typecheck.exitcode
+.agent/evidence/TASK-000-R1/typecheck.log
