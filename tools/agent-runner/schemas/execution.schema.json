@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenCodeExecution",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "summary",
+    "changedAreas",
+    "commandsRun",
+    "knownIssues",
+    "suggestedEvidenceStates"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["completed", "partial", "blocked", "failed"]
+    },
+    "summary": { "type": "string" },
+    "changedAreas": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "commandsRun": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "exitCode", "summary"],
+        "properties": {
+          "command": { "type": "string" },
+          "exitCode": { "type": ["number", "null"] },
+          "summary": { "type": "string" }
+        }
+      }
+    },
+    "knownIssues": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "suggestedEvidenceStates": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

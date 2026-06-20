@@ -87,3 +87,36 @@
 
 ## 迁移提示
 继续开发 `D:\work\study_plugin`。新对话开始后先读 `AGENTS.md` 和 `docs/PROJECT_MEMORY.md`。保持本地优先架构；每完成一个小开发步骤都更新本文件；开发记录和用户可见软件文案使用中文；AI 对正式计划的修改必须经过用户确认。
+## 2026-06-20 Agent Runner 真实运行前加固
+
+* 日期
+  2026-06-20
+* 本次完成
+  为 `tools/agent-runner/` 增加 `agent:doctor` 诊断命令和真实模式 preflight；新增 Codex CLI Windows 解析器，支持 `CODEX_CLI_PATH`、npm 全局 `codex.cmd`、PATH 搜索，并拒绝 WindowsApps 内置 Codex 路径；修正 OpenCode SDK 本地服务/provider 检查；新增 `.agent/state.example.json`，将 `.agent/state.json` 与具体 `.agent/runs/*` 运行产物改为 Git 忽略。
+* 关键决策
+  普通 doctor 只做本地检查，不发模型请求；`--online` 才允许最小 Codex 和 MiMo JSON 请求。真实 `agent:runner -- --request` 在模型调用和 OpenCode 开发任务发送前必须通过 Codex、OpenCode、MiMo 和命令配置检查，否则直接进入 BLOCKED。
+* 修改范围
+  修改 `tools/agent-runner/codex.mjs`、`codex-cli.mjs`、`doctor.mjs`、`index.mjs`、`opencode.mjs`、`.gitignore`、`package.json`、`package-lock.json`；新增 `.agent/state.example.json`。
+* 验证结果
+  已运行 `npm run agent:doctor`，本地检查完成：Node/npm、Git、写权限、workflow、命令配置、OpenCode 服务、MiMo 配置、Electron capture 通过；Codex CLI 检查失败且明确识别为 WindowsApps 内置路径。已运行 `npm run agent:runner:mock -- --request "验证调度器回归，不修改业务代码"`、`npm run typecheck`、`npm test`、`npm run build`，均通过。
+* 尚未解决
+  真实 Codex CLI 仍需安装 npm 版 `@openai/codex` 并设置 `CODEX_CLI_PATH`，避开 WindowsApps 内置可执行文件。未运行 `agent:doctor -- --online`，避免本轮自动发起真实模型请求。
+* 推荐下一步
+  用户安装并配置 npm 版 Codex CLI 后，先运行 `npm run agent:doctor -- --online` 验证真实 Codex 和 MiMo 最小 JSON 链路，再运行真实 `agent:runner`。
+
+## 2026-06-20 双 Agent 自动开发调度器
+
+* 日期
+  2026-06-20
+* 本次完成
+  新增 `tools/agent-runner/` 最小可运行双 Agent 调度器，包含 Codex 规划/验收封装、OpenCode SDK 执行封装、独立验证命令执行、Electron capture 截图适配、JSON Schema、workflow 配置、Windows 双击入口，以及 `.agent/PROJECT_BRIEF.md`、`.agent/state.json`、`.agent/runs/` 运行目录。
+* 关键决策
+  新调度器不继续扩展 legacy 的 `.agent/TASK.md`、`.agent/REPORT.md`、`.agent/REVIEW.md` 审计协议；默认提供 `--mock` 模式以便在无真实模型凭据或 CLI 不可用时验证完整状态机；真实模式通过 Codex CLI 非交互调用和 `@opencode-ai/sdk` 接入，不在代码中硬编码 API Key。
+* 修改范围
+  新增 `tools/agent-runner/`、`.agent/PROJECT_BRIEF.md`、`.agent/state.json`、`.agent/runs/.gitkeep`；更新 `package.json` 和 `package-lock.json` 加入 `@opencode-ai/sdk` 与 runner 脚本；更新 `.gitignore` 忽略具体 run 产物但保留 `.agent/runs/.gitkeep`。
+* 验证结果
+  已运行 `npm run agent:runner:mock -- --request ...`，mock 流程完成 PLANNING -> EXECUTING -> VERIFYING -> EVALUATING -> REWORK -> EXECUTING -> VERIFYING -> EVALUATING -> PASS；调度器独立执行 `typecheck`、`test`、`build` 并保存日志；Electron capture 通过 CDP 生成主窗口截图。已运行 `npm run typecheck`、`npm test`、`npm run build`，均通过。
+* 尚未解决
+  当前本机直接执行 `codex exec --help` 返回 Access denied，因此真实 Codex CLI 调用路径未完成端到端验证；真实 OpenCode SDK 会话需要本机已有 OpenCode/MiMo 配置和可用凭据后再验证。`npm install @opencode-ai/sdk` 后 `npm audit` 报告 16 个漏洞，未自动修复。
+* 推荐下一步
+  在确认 Codex CLI 权限和 OpenCode MiMo 配置可用后，用非 mock 模式跑一个小型真实任务；根据真实 SDK 返回结构再收紧 `execution.json` 提取逻辑；为 capture 增加更细的交互脚本配置。

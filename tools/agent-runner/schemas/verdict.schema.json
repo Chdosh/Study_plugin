@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CodexAcceptanceVerdict",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "verdict",
+    "summary",
+    "completed",
+    "userExpectationFit",
+    "visualComparison",
+    "interactionResult",
+    "likelyProblemModules",
+    "reworkInstructions",
+    "blockingReason"
+  ],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "REWORK", "BLOCKED"]
+    },
+    "summary": { "type": "string" },
+    "completed": { "type": "boolean" },
+    "userExpectationFit": { "type": "string" },
+    "visualComparison": { "type": "string" },
+    "interactionResult": { "type": "string" },
+    "likelyProblemModules": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "reworkInstructions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "blockingReason": { "type": ["string", "null"] }
+  }
+}
