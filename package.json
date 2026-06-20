@@ -13,7 +13,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "devlog": "node scripts/dev-log.mjs",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "agent:runner": "node tools/agent-runner/index.mjs",
+    "agent:runner:mock": "node tools/agent-runner/index.mjs --mock",
+    "agent:doctor": "node tools/agent-runner/doctor.mjs"
   },
   "dependencies": {
     "@libsql/client": "^0.15.15",
@@ -27,6 +30,7 @@
   "devDependencies": {
     "@electron-toolkit/preload": "^3.0.1",
     "@electron-toolkit/utils": "^3.0.0",
+    "@opencode-ai/sdk": "^1.17.8",
     "@types/node": "^22.15.32",
     "@types/react": "^18.3.23",
     "@types/react-dom": "^18.3.7",

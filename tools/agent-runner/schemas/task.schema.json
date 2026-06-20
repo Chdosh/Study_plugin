@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentRunnerTask",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "taskId",
+    "title",
+    "userRequest",
+    "summary",
+    "requirements",
+    "acceptanceCriteria",
+    "implementationHints",
+    "verificationPlan",
+    "constraints"
+  ],
+  "properties": {
+    "taskId": { "type": "string" },
+    "title": { "type": "string" },
+    "userRequest": { "type": "string" },
+    "summary": { "type": "string" },
+    "requirements": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "acceptanceCriteria": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "implementationHints": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "verificationPlan": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "constraints": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}
