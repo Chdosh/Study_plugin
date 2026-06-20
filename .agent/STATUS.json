@@ -1,0 +1,8 @@
+{
+  "taskId": "TASK-000-R1",
+  "phase": "protocol_revision",
+  "revision": 1,
+  "maxRevisions": 2,
+  "updatedBy": "opencode",
+  "needsHumanDecision": false
+}

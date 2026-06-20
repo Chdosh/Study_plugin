@@ -134,6 +134,41 @@ During implementation:
 
 When a task requires a large architectural change, first produce a design note or migration proposal before editing production code.
 
+### 7.1 Git Baseline and Evidence Rules
+
+The working tree does NOT need to be absolutely clean before starting a task. Instead:
+
+**Before execution:**
+- Record a complete baseline of the working tree: modified, deleted, added, and untracked files.
+- Save `git status --short --untracked-files=all` and `git ls-files --others --exclude-standard` to `.agent/evidence/<Task-ID>/pre-status.txt` and `pre-untracked.txt`.
+- Identify which changes pre-exist the current task. These must not be overwritten, rolled back, or mixed into the current task's output.
+
+**During execution:**
+- The executor may only produce new changes within Allowed Scope and protocol output files (`.agent/REPORT.md`, `.agent/STATUS.json`, `.agent/evidence/`).
+- If unknown modifications exist that may conflict with the task, STOP and set `needsHumanDecision=true`.
+
+**After execution:**
+- Save post-execution git status to `.agent/evidence/<Task-ID>/post-status.txt` and `post-untracked.txt`.
+- Save `git diff --name-status` and `git diff --stat` to evidence directory.
+- Compare pre and post status to show exactly what changed during this task.
+
+**Forbidden git operations:**
+- `git reset --hard`, `git clean`, `git checkout --`, `git restore`, `git stash`, `git push` — all forbidden.
+- Auto-committing is forbidden.
+
+**Protocol files and Git:**
+- The following files MUST be tracked by Git and must NOT be added to `.gitignore`:
+  - `AGENTS.md`
+  - `.agent/TASK.md`, `.agent/REPORT.md`, `.agent/REVIEW.md`, `.agent/STATUS.json`
+  - `.agent/history/`, `.agent/evidence/`
+  - `.opencode/agents/`, `.opencode/commands/`
+
+**Evidence requirements:**
+- Every verification command must save full stdout and stderr to a `.log` file in `.agent/evidence/<Task-ID>/`.
+- Every verification command must save its exit code to a `.exitcode` file.
+- An `evidence-manifest.json` must record: taskId, startedAt, finishedAt, workingDirectory, commands (with exit codes), evidenceFiles, executor.
+- A command that fails must NOT be reported as "passed".
+
 ## 8. Recommended Stack
 
 Preferred stack for new modules when compatible with the existing project:
