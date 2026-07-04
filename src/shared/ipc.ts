@@ -27,6 +27,7 @@ export const ipcChannels = {
   sessionsGetAccumulated: 'sessions:getAccumulated',
   learningGetState: 'learning:getState',
   learningTeachCurrentStep: 'learning:teachCurrentStep',
+  learningCompleteCurrentAction: 'learning:completeCurrentAction',
   learningAskQuestion: 'learning:askQuestion',
   learningResolveQuestion: 'learning:resolveQuestion',
   learningSubmitResult: 'learning:submitResult',
@@ -41,5 +42,7 @@ export const ipcChannels = {
   floatOpenMain: 'float:openMain',
   floatResize: 'float:resize',
   floatMove: 'float:move',
-  navigateToPage: 'navigate:toPage'
+  navigateToPage: 'navigate:toPage',
+  historyListAll: 'history:listAll',
+  historyGetById: 'history:getById'
 } as const;

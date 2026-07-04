@@ -188,6 +188,7 @@ export class DailyGuideAgent {
       baseUrl: params.settings.deepseekBaseUrl,
       model: params.settings.deepseekModel,
       schema: dailyGuideAgentOutputSchema,
+      timeoutMs: 120_000,
       system: '你是本地优先 AI 学习管家的 generate-daily-guide-agent。只返回合法 JSON。',
       user: buildDailyGuidePrompt({
         date: params.date,

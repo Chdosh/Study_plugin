@@ -1,4 +1,4 @@
-import { asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import type {
   DailyPlan,
   DailyPlanBlock,
@@ -10,6 +10,7 @@ import type {
   GoalIntake,
   GoalIntakeMessage,
   GoalIntakeState,
+  HistoryIntakeSummary,
   LearningEvaluation,
   LearningGoal,
   LearningRuntimeSnapshot,
@@ -320,9 +321,66 @@ export class StudyStore {
     return rows[0] ? mapGoal(rows[0]) : null;
   }
 
+  async listGoalIntakes(): Promise<HistoryIntakeSummary[]> {
+    const rows = await this.db.select().from(goalIntakes).orderBy(desc(goalIntakes.createdAt));
+    const goalIds = [...new Set(rows.map((r) => r.goalId).filter(Boolean))] as string[];
+    const goalRows = goalIds.length ? await this.db.select().from(goals).where(inArray(goals.id, goalIds)) : [];
+    const goalMap = new Map(goalRows.map((g) => [g.id, g.title]));
+    const counts = await Promise.all(
+      rows.map((row) =>
+        this.db.select({ count: sql<number>`count(*)` }).from(goalIntakeMessages)
+          .where(eq(goalIntakeMessages.intakeId, row.id))
+          .then((r) => Number(r[0]?.count ?? 0))
+      )
+    );
+    return rows.map((row, i) => ({
+      intake: mapGoalIntake(row),
+      goalTitle: row.goalId ? (goalMap.get(row.goalId) ?? '') : '',
+      messageCount: counts[i]
+    }));
+  }
+
+  async getGoalIntakeById(intakeId: string): Promise<GoalIntakeState> {
+    return this.getGoalIntakeState(intakeId);
+  }
+
   async getCurrentGoalIntake(): Promise<GoalIntakeState> {
     const existing = await this.db.select().from(goalIntakes).orderBy(desc(goalIntakes.createdAt));
     let intake = existing.find((item) => item.status !== 'confirmed') ?? null;
+
+    // If latest non-confirmed intake is empty (only greeting) and a confirmed
+    // intake with a goal exists that has no guide for today, prefer the
+    // confirmed one to preserve session history.
+    if (intake && !intake.goalId) {
+      const messages = await this.db.select().from(goalIntakeMessages)
+        .where(eq(goalIntakeMessages.intakeId, intake.id));
+      const isEffectivelyEmpty = messages.length <= 1;
+      if (isEffectivelyEmpty) {
+        const confirmedWithGoal = existing.find((item): item is typeof item & { goalId: string } => item.status === 'confirmed' && !!item.goalId);
+        if (confirmedWithGoal) {
+          const guideRows = await this.db.select().from(dailyGuides)
+            .where(and(eq(dailyGuides.goalId, confirmedWithGoal.goalId), eq(dailyGuides.date, nowIso().slice(0, 10))))
+            .limit(1);
+          const hasGuide = guideRows.length > 0 && guideRows[0].status !== 'archived';
+          if (!hasGuide) {
+            intake = confirmedWithGoal;
+          }
+        }
+      }
+    }
+
+    if (!intake) {
+      const latest = existing[0];
+      if (latest && latest.status === 'confirmed' && latest.goalId) {
+        const guideRows = await this.db.select().from(dailyGuides)
+          .where(and(eq(dailyGuides.goalId, latest.goalId), eq(dailyGuides.date, nowIso().slice(0, 10))))
+          .limit(1);
+        const hasGuide = guideRows.length > 0 && guideRows[0].status !== 'archived';
+        if (!hasGuide) {
+          intake = latest;
+        }
+      }
+    }
     if (!intake) {
       const now = nowIso();
       const intakeId = createId('goal_intake');
@@ -339,7 +397,7 @@ export class StudyStore {
         id: createId('goal_intake_message'),
         intakeId,
         role: 'assistant',
-        content: '我们先把目标说清楚。你可以直接告诉我想学什么、想达到什么结果；如果赶时间，也可以说“直接开始”。',
+        content: '我们先把目标说清楚。你可以直接告诉我想学什么、想达到什么结果；如果赶时间，也可以说"直接开始"。',
         createdAt: now
       });
       const rows = await this.db.select().from(goalIntakes).where(eq(goalIntakes.id, intakeId)).limit(1);
@@ -387,7 +445,26 @@ export class StudyStore {
       brief.constraints.length ? `现实限制：${brief.constraints.join('；')}` : '',
       brief.successCriteria.length ? `成功标准：${brief.successCriteria.join('；')}` : ''
     ].filter(Boolean).join('\n');
-    const goal = await this.createGoal(brief.title, description);
+
+    // Reuse existing goal on retry to avoid orphaned goals
+    let goal: LearningGoal;
+    if (current.intake.goalId) {
+      const existingGoal = await this.getGoal(current.intake.goalId);
+      if (existingGoal) {
+        const now = nowIso();
+        await this.db.update(goals).set({
+          title: brief.title,
+          description: description || null,
+          updatedAt: now
+        }).where(eq(goals.id, existingGoal.id));
+        goal = { ...existingGoal, title: brief.title, description: description || null, updatedAt: now };
+      } else {
+        goal = await this.createGoal(brief.title, description);
+      }
+    } else {
+      goal = await this.createGoal(brief.title, description);
+    }
+
     const now = nowIso();
     await this.db
       .update(goalIntakes)
@@ -1118,6 +1195,96 @@ export class StudyStore {
     return step;
   }
 
+  async completeCurrentAction(): Promise<LearningRuntimeSnapshot> {
+    const snapshot = await this.getLearningRuntimeSnapshot();
+    const blockId = snapshot.step?.blockId ?? snapshot.state.activeDailyTaskId;
+    if (!blockId) {
+      throw new Error('当前没有可完成的主任务步骤。请先开始学习。');
+    }
+
+    const taskRows = await this.db
+      .select()
+      .from(dailyGuideTasks)
+      .where(eq(dailyGuideTasks.legacyPlanBlockId, blockId))
+      .limit(1);
+    const task = taskRows[0];
+    if (!task) {
+      throw new Error('当前主任务没有可记录的行动步骤。');
+    }
+
+    const actions = await this.db
+      .select()
+      .from(dailyGuideActions)
+      .where(eq(dailyGuideActions.taskId, task.id))
+      .orderBy(asc(dailyGuideActions.position));
+    if (actions.length === 0) {
+      throw new Error('当前主任务没有行动步骤。');
+    }
+
+    const currentAction = actions.find((action) => action.id === task.currentActionId)
+      ?? actions.find((action) => action.status !== 'done')
+      ?? null;
+    if (!currentAction) {
+      return snapshot;
+    }
+
+    const now = nowIso();
+    await this.db
+      .update(dailyGuideActions)
+      .set({
+        status: 'done',
+        completedAt: currentAction.completedAt ?? now
+      })
+      .where(eq(dailyGuideActions.id, currentAction.id));
+
+    const completedPosition = currentAction.position;
+    const nextAction = actions.find((action) => action.position > completedPosition && action.status !== 'done') ?? null;
+    const completedCount = actions.filter((action) => action.status === 'done').length + (currentAction.status === 'done' ? 0 : 1);
+    const progressPercent = Math.round((completedCount / actions.length) * 100);
+    await this.db
+      .update(dailyGuideTasks)
+      .set({
+        status: 'active',
+        progressPercent,
+        currentActionId: nextAction?.id ?? null,
+        nextStartPoint: nextAction?.title ?? '行动步骤已完成，可以提交主任务成果。',
+        updatedAt: now
+      })
+      .where(eq(dailyGuideTasks.id, task.id));
+
+    let activeStepId = snapshot.step?.id ?? null;
+    if (snapshot.step?.id && snapshot.step.blockId === blockId) {
+      await this.markStepCompleted(snapshot.step.id, currentAction.checkpoint);
+    }
+
+    if (nextAction) {
+      const nextStep = await this.createLearningStep({
+        goalId: snapshot.goal?.id ?? null,
+        stageId: snapshot.stage?.id ?? null,
+        taskId: snapshot.task?.id ?? null,
+        blockId,
+        title: nextAction.title,
+        objective: task.objective,
+        instruction: nextAction.instruction,
+        expectedOutput: task.deliverable,
+        successCriteria: nextAction.checkpoint,
+        status: 'active',
+        attempt: 1,
+        position: nextAction.position
+      });
+      activeStepId = nextStep.id;
+    }
+
+    await this.upsertRuntimeState({
+      activeDailyTaskId: blockId,
+      activeStepId,
+      activeQuestionThreadId: null,
+      sessionStatus: snapshot.state.sessionStatus === 'idle' ? 'active' : snapshot.state.sessionStatus
+    });
+
+    return this.getLearningRuntimeSnapshot();
+  }
+
   async openQuestion(stepId: string, question: string): Promise<QuestionThread> {
     const step = await this.getLearningStep(stepId);
     if (!step) throw new Error(`Step not found: ${stepId}`);
@@ -1281,7 +1448,6 @@ export class StudyStore {
 
     if (params.decisionOutput.decision === 'complete_task' || params.decisionOutput.taskCompleted) {
       await this.markStepCompleted(currentStep.id, params.decisionOutput.carryForward);
-      await this.upsertRuntimeState({ sessionStatus: 'completed' });
       if (currentStep.blockId) {
         await this.db.update(dailyPlanBlocks).set({ status: 'done' }).where(eq(dailyPlanBlocks.id, currentStep.blockId));
         await this.updateDailyGuideTaskProgress(currentStep.blockId, {
@@ -1289,6 +1455,9 @@ export class StudyStore {
           progressPercent: 100,
           nextStartPoint: null
         });
+        nextStep = await this.activateNextDailyGuideTask(currentStep.blockId, currentStep);
+      } else {
+        await this.upsertRuntimeState({ sessionStatus: 'completed' });
       }
       if (currentStep.taskId) {
         await this.db
@@ -1336,11 +1505,25 @@ export class StudyStore {
       });
     } else {
       if (currentStep.blockId) {
-        await this.updateDailyGuideTaskProgress(currentStep.blockId, {
-          status: 'active',
-          progressPercent: params.evaluationOutput.result === 'partial' ? Math.max(50, params.evaluationOutput.mastery) : params.evaluationOutput.mastery,
-          nextStartPoint: params.decisionOutput.carryForward || params.evaluationOutput.missingRequirements[0] || params.evaluationOutput.misconceptions[0] || null
-        });
+        const guideTaskDoneWithActions = await this.isDailyGuideTaskActionListComplete(currentStep.blockId);
+        if (guideTaskDoneWithActions) {
+          await this.db
+            .update(dailyGuideTasks)
+            .set({
+              status: 'active',
+              progressPercent: 100,
+              currentActionId: null,
+              nextStartPoint: params.decisionOutput.carryForward || params.evaluationOutput.missingRequirements[0] || params.evaluationOutput.misconceptions[0] || null,
+              updatedAt: nowIso()
+            })
+            .where(eq(dailyGuideTasks.legacyPlanBlockId, currentStep.blockId));
+        } else {
+          await this.updateDailyGuideTaskProgress(currentStep.blockId, {
+            status: 'active',
+            progressPercent: params.evaluationOutput.result === 'partial' ? Math.max(50, params.evaluationOutput.mastery) : params.evaluationOutput.mastery,
+            nextStartPoint: params.decisionOutput.carryForward || params.evaluationOutput.missingRequirements[0] || params.evaluationOutput.misconceptions[0] || null
+          });
+        }
       }
       await this.db
         .update(learningSteps)
@@ -1561,6 +1744,110 @@ export class StudyStore {
       })
       .where(eq(dailyGuideTasks.id, task.id));
     await this.updateDailyGuideTaskElapsed(blockId);
+  }
+
+  private async isDailyGuideTaskActionListComplete(blockId: string): Promise<boolean> {
+    const taskRows = await this.db
+      .select()
+      .from(dailyGuideTasks)
+      .where(eq(dailyGuideTasks.legacyPlanBlockId, blockId))
+      .limit(1);
+    const task = taskRows[0];
+    if (!task) return false;
+    const actions = await this.db
+      .select()
+      .from(dailyGuideActions)
+      .where(eq(dailyGuideActions.taskId, task.id));
+    return actions.length > 0 && actions.every((action) => action.status === 'done');
+  }
+
+  private async activateNextDailyGuideTask(currentBlockId: string, currentStep: LearningStep): Promise<LearningStep | null> {
+    const currentTaskRows = await this.db
+      .select()
+      .from(dailyGuideTasks)
+      .where(eq(dailyGuideTasks.legacyPlanBlockId, currentBlockId))
+      .limit(1);
+    const currentTask = currentTaskRows[0];
+    if (!currentTask) {
+      await this.upsertRuntimeState({ sessionStatus: 'completed' });
+      return null;
+    }
+
+    const guideTasks = await this.db
+      .select()
+      .from(dailyGuideTasks)
+      .where(eq(dailyGuideTasks.guideId, currentTask.guideId))
+      .orderBy(asc(dailyGuideTasks.position));
+    const nextTask = guideTasks.find((task) =>
+      task.position > currentTask.position
+      && task.status !== 'done'
+      && task.status !== 'skipped'
+      && Boolean(task.legacyPlanBlockId)
+    ) ?? null;
+
+    if (!nextTask?.legacyPlanBlockId) {
+      await this.upsertRuntimeState({
+        activeDailyTaskId: currentBlockId,
+        activeStepId: currentStep.id,
+        activeQuestionThreadId: null,
+        sessionStatus: 'completed'
+      });
+      return null;
+    }
+
+    const now = nowIso();
+    const nextActions = await this.db
+      .select()
+      .from(dailyGuideActions)
+      .where(eq(dailyGuideActions.taskId, nextTask.id))
+      .orderBy(asc(dailyGuideActions.position));
+    const nextAction = nextActions.find((action) => action.status !== 'done') ?? nextActions[0] ?? null;
+    const nextBlockRows = await this.db
+      .select()
+      .from(dailyPlanBlocks)
+      .where(eq(dailyPlanBlocks.id, nextTask.legacyPlanBlockId))
+      .limit(1);
+    const nextBlock = nextBlockRows[0] ?? null;
+
+    await this.db
+      .update(dailyGuideTasks)
+      .set({
+        status: 'active',
+        currentActionId: nextAction?.id ?? null,
+        nextStartPoint: nextAction?.title ?? nextTask.nextStartPoint,
+        updatedAt: now
+      })
+      .where(eq(dailyGuideTasks.id, nextTask.id));
+    await this.db
+      .update(dailyPlanBlocks)
+      .set({ status: 'active' })
+      .where(eq(dailyPlanBlocks.id, nextTask.legacyPlanBlockId));
+
+    const nextStep = nextAction
+      ? await this.createLearningStep({
+          goalId: currentStep.goalId,
+          stageId: currentStep.stageId,
+          taskId: nextBlock?.taskId ?? null,
+          blockId: nextTask.legacyPlanBlockId,
+          title: nextAction.title,
+          objective: nextTask.objective,
+          instruction: nextAction.instruction,
+          expectedOutput: nextTask.deliverable,
+          successCriteria: nextAction.checkpoint,
+          status: 'active',
+          attempt: 1,
+          position: nextAction.position
+        })
+      : null;
+
+    await this.upsertRuntimeState({
+      activeDailyTaskId: nextTask.legacyPlanBlockId,
+      activeStepId: nextStep?.id ?? null,
+      activeQuestionThreadId: null,
+      sessionStatus: 'idle'
+    });
+
+    return nextStep;
   }
 
   private async getTask(taskId: string): Promise<TaskItem | null> {
