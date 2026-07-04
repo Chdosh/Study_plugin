@@ -4,9 +4,23 @@
 
 本项目是一个本地优先的 Windows 桌面 AI 学习系统，目标是逐步成为长期个人学习教师。
 
-当前 MVP 聚焦一个可用闭环：导入或创建学习目标，解析为任务，生成约 10 分钟粒度的每日计划，经用户确认后进入学习 session，记录执行与专注事件，完成结算和复盘，并由 AI 提出需用户确认的调整建议。
+当前 MVP 聚焦一个可恢复的端到端闭环：
 
-不要把长期愿景当作当前 MVP 的硬性范围。任何功能只有参与可用端到端学习闭环，才算真正完成。
+```text
+AI 主动访谈澄清目标
+→ 用户确认目标理解
+→ AI 依次生成长期大纲、前三天短期计划、第一天主任务执行稿
+→ 用户确认今日执行稿
+→ Today 聚焦当前主任务，其他主任务折叠
+→ 用户围绕主任务开启一个或多个 Focus Session
+→ Action / Checkpoint 本地记录执行进度
+→ 主任务最终提交
+→ local 任务走本地验证器，ai 任务最多调用一次 evaluate_submission
+→ 本地状态机决定完成、继续修改、保存进度或进入下一任务
+→ 每天最多一次综合复盘，并由用户确认调整建议
+```
+
+不要把长期愿景当作当前 MVP 的硬性范围。任何功能只有参与这个可用学习闭环，才算真正完成。
 
 ## 2. 指令优先级
 
@@ -16,19 +30,13 @@
 2. 本 `AGENTS.md`。
 3. `docs/PROJECT_MEMORY.md`。
 4. 与任务直接相关的专题文档。
-5. 既有产品和架构文档。
-6. 现有实现模式。
-7. 本文件和专题文档中的一般建议。
-
-## 3. Source of Truth
-
-现有项目、`package.json`、lockfile、数据库迁移和当前实现，是已经落地技术选择的事实源。
-
-专题文档中的推荐技术栈主要适用于新模块或尚未实现的能力。未经用户明确批准，不迁移框架、样式系统、数据库、状态管理或主要依赖。
+5. 当前代码、`package.json`、lockfile、迁移和测试。
+6. 既有产品和架构文档。
+7. 现有实现模式。
 
 如果文档与当前已验证实现冲突，临时以当前实现为准，并在 `docs/PROJECT_MEMORY.md` 记录冲突和判断依据。
 
-## 4. 必读与条件读取
+## 3. 必读与条件读取
 
 每次实现或 review 前必须读取：
 
@@ -42,14 +50,61 @@
 | --- | --- |
 | 产品流程、范围、MVP、规划体验、信息架构 | `docs/PRODUCT_SPEC.md` |
 | 架构、IPC、preload、main/service、依赖、技术选型 | `docs/ARCHITECTURE.md` |
-| AI、prompt、数据模型、计划版本、RAG、知识库 | `docs/AI_AND_DATA_RULES.md` |
+| AI、prompt、数据模型、计划版本、上下文、RAG、知识库 | `docs/AI_AND_DATA_RULES.md` |
 | Electron 权限、监控、密钥、隐私、敏感数据 | `docs/SECURITY_AND_PRIVACY.md` |
 | UI、交互、视觉重构、页面状态 | `docs/UI_GUIDELINES.md` |
 | 测试、验证、数据库 schema、迁移 | `docs/TESTING_AND_MIGRATIONS.md` |
 | 参考项目调研 | `docs/REFERENCES.md` |
 | 使用 Task-ID 或 `.agent/TASK.md` 的正式任务 | `.agent/WORKFLOW.md` |
 
-## 5. 语言要求
+## 4. 当前核心业务规则
+
+### Daily Guide
+
+* `daily_guide` 输出少量主任务，不输出固定 10 分钟 Time Block。
+* 主任务通常 2～4 个，默认优先 3 个；复杂或时间少时可以只有 1 个。
+* 每个主任务包含动态估时 `estimatedMinutes.min/target/max`、Action、本地 Checkpoint、最终 deliverable、doneWhen、quickHint、evaluationMode、submissionPolicy 和 carryoverAllowed。
+* 当前实现为真实模型稳定性允许每个主任务至少 1 个 Action；prompt 应鼓励 3～6 个 Action，但 schema 不应因少量 Action 直接阻断主流程。
+* `daily_plan_blocks` / `daily_guide_blocks` 目前是 legacy session 锚点和兼容结构，不再代表固定时间块；未经设计方案不要删除。
+
+### Focus Session
+
+* 计时器绑定主任务。一个主任务可以有多个 Focus Session，也可以跨天继续。
+* 开始、暂停、恢复、结束、超过预计时间，只能写本地记录，不能触发 AI 请求。
+* Focus Session 记录实际时间、暂停/结束原因和进度说明，不判定主任务完成。
+
+### Submission / Evaluation
+
+* 主任务是唯一需要最终提交和评估的单位。
+* Action 和 Checkpoint 只用于执行引导和本地进度记录，不能分别触发 AI 评估。
+* `submissionPolicy` 默认 `once_after_task`。
+* `evaluationMode=local` 的任务走本地验证器，不调用模型。
+* `evaluationMode=ai` 的任务最多调用一次 `evaluate_submission`。
+* 当前主流程不再固定调用 `decide_next_step`；本地状态机根据评估结果决定通过、继续修改、保存进度或进入下一任务。
+* AI 不得直接标记任务完成、覆盖已确认计划或永久修改用户画像。
+
+### Reflection
+
+* 日终复盘按主任务汇总，不按 Action 或 Focus Session 分别复盘。
+* 每天只进行一次综合复盘。
+* 未完成任务可在复盘中决定明天继续、缩小范围、拆分、延后或放弃；这些调整必须由用户确认后才生效。
+
+## 5. Source of Truth
+
+现有项目、`package.json`、lockfile、数据库迁移、Drizzle schema 和当前实现，是已经落地技术选择的事实源。
+
+当前技术栈：
+
+* Electron + React + TypeScript
+* SQLite/libSQL + Drizzle ORM
+* OpenAI-compatible DeepSeek client
+* Zod runtime validation
+* typed preload API + narrow IPC
+* Vitest + Electron fake AI GUI smoke
+
+未经用户明确批准，不迁移框架、样式系统、数据库、状态管理、AI 客户端或主要依赖。
+
+## 6. 语言要求
 
 开发记录、设计理由、迭代说明、迁移上下文和项目记忆更新使用中文。
 
@@ -57,7 +112,7 @@
 
 避免中英文混杂的 UI 标签，除非英文术语必要或已被广泛使用。
 
-## 6. 通用开发规则
+## 7. 通用开发规则
 
 修改前：
 
@@ -84,7 +139,7 @@
 
 大型架构变更必须先产出设计说明或迁移方案，再修改生产代码。
 
-## 7. 最高级禁令
+## 8. 最高级禁令
 
 Git 与工作树：
 
@@ -102,8 +157,9 @@ Git 与工作树：
 AI：
 
 * 不得把完整用户历史发送给模型。
-* AI 不得直接覆盖已确认计划、删除数据、标记任务完成、永久改变目标、扩大监控范围、修改用户画像事实或执行代码/命令。
-* 结构化 AI 输出必须做运行时校验，失败时不得静默编造必填字段。
+* 不得因为真实模型单次失败就放宽业务安全边界、编造必填字段或让 AI 直接改变状态。
+* 结构化 AI 输出必须做运行时校验，失败时不得静默补造关键字段。
+* 真实 DeepSeek 合约测试是 opt-in，不作为默认自动 PASS 门槛。
 
 安全与隐私：
 
@@ -112,15 +168,15 @@ AI：
 * 不得自动执行 AI 生成的代码或 shell 命令。
 * 不得实现截图、录屏、键盘记录、剪贴板监听、麦克风/摄像头采集、完整浏览器历史收集、私信内容收集、强制锁屏或隐藏后台监控。
 
-## 8. 最低验证标准
+## 9. 最低验证标准
 
-完成任务前，至少执行与变更类型相匹配的检查。代码或行为变更通常需要检查 `package.json` 并运行相关的 typecheck、测试、构建或手工验证；纯文档任务可以用文档结构、行数字符数、diff 和内容映射检查替代。
+完成任务前，至少执行与变更类型相匹配的检查。代码或行为变更通常需要检查 `package.json` 并运行相关的 typecheck、测试、构建或手工验证；纯文档任务可以用文档结构、行数、diff、关键词扫描和内容映射检查替代。
 
 不得声称未运行的测试已经通过。命令失败时必须说明命令、失败现象、可能原因，以及是否由本次变更引入。
 
 正式 Task-ID 任务的证据记录、命令日志和交付协议见 `.agent/WORKFLOW.md`。普通小型交互任务不强制生成完整证据目录，但仍必须遵守危险 Git 操作禁令和真实验证要求。
 
-## 9. 完成标准
+## 10. 完成标准
 
 开发任务完成时必须满足：
 
@@ -142,11 +198,13 @@ AI：
 
 不要把推测或未验证工作报告为完成。
 
-## 10. 项目记忆
+## 11. 项目记忆
 
-只在完成有意义的开发任务、架构决策、schema 变化、产品流程变化或未解决技术发现后更新 `docs/PROJECT_MEMORY.md`。不要因轻微 CSS 调整或临时调试更新。
+`docs/PROJECT_MEMORY.md` 是新对话短交接入口，不是完整日志。
 
-项目记忆更新使用中文，并使用以下结构：
+只在完成有意义的开发任务、架构决策、schema 变化、产品流程变化或未解决技术发现后更新项目记忆。不要因轻微 CSS 调整或临时调试更新。
+
+项目记忆更新使用中文，并保持短小，优先记录：
 
 * 日期
 * 本次完成
@@ -156,4 +214,4 @@ AI：
 * 尚未解决
 * 推荐下一步
 
-不要把大段代码、完整日志或临时推理粘贴进项目记忆。
+不要把大段代码、完整日志或临时推理粘贴进项目记忆。长历史放入 `docs/archive/` 或具体报告。
