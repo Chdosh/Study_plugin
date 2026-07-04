@@ -185,4 +185,108 @@ describe('AI output schemas', () => {
     expect(shortPlan.days[0].dayIndex).toBe(1);
     expect(guide.tasks[0].title).toBe('完成项目主流程接管');
   });
+
+  it('accepts a daily guide with minimal actions and up to four tasks', () => {
+    const guide = dailyGuideAgentOutputSchema.parse({
+      date: '2026-07-04',
+      todayGoal: '完成最小可运行产出',
+      deliverables: ['产物'],
+      boundaries: [],
+      acceptanceCriteria: ['有可见产出'],
+      tomorrowActions: ['继续下一步'],
+      tasks: [
+        {
+          title: '任务一',
+          objective: '验证最小 action 数量',
+          scope: '只跑最小路径',
+          estimatedMinutes: { min: 10, target: 15, max: 20 },
+          actions: [
+            { title: '唯一 action', instruction: '执行并记录', checkpoint: '有记录' }
+          ],
+          deliverable: '记录',
+          doneWhen: ['完成记录'],
+          quickHint: '先做再说',
+          evaluationMode: 'local',
+          submissionPolicy: 'once_after_task',
+          carryoverAllowed: true
+        },
+        {
+          title: '任务二',
+          objective: '占位',
+          scope: '占位',
+          estimatedMinutes: { min: 10, target: 15, max: 20 },
+          actions: [
+            { title: 'a', instruction: 'b', checkpoint: 'c' }
+          ],
+          deliverable: '占位',
+          doneWhen: ['占位'],
+          quickHint: '占位',
+          evaluationMode: 'ai',
+          submissionPolicy: 'once_after_task',
+          carryoverAllowed: true
+        },
+        {
+          title: '任务三',
+          objective: '占位',
+          scope: '占位',
+          estimatedMinutes: { min: 10, target: 15, max: 20 },
+          actions: [
+            { title: 'a', instruction: 'b', checkpoint: 'c' }
+          ],
+          deliverable: '占位',
+          doneWhen: ['占位'],
+          quickHint: '占位',
+          evaluationMode: 'ai',
+          submissionPolicy: 'once_after_task',
+          carryoverAllowed: true
+        },
+        {
+          title: '任务四',
+          objective: '占位',
+          scope: '占位',
+          estimatedMinutes: { min: 10, target: 15, max: 20 },
+          actions: [
+            { title: 'a', instruction: 'b', checkpoint: 'c' }
+          ],
+          deliverable: '占位',
+          doneWhen: ['占位'],
+          quickHint: '占位',
+          evaluationMode: 'ai',
+          submissionPolicy: 'once_after_task',
+          carryoverAllowed: true
+        }
+      ]
+    });
+
+    expect(guide.tasks).toHaveLength(4);
+    expect(guide.tasks[0].actions).toHaveLength(1);
+  });
+
+  it('rejects estimatedMinutes that violate min <= target <= max', () => {
+    expect(() =>
+      dailyGuideAgentOutputSchema.parse({
+        date: '2026-07-04',
+        todayGoal: '测试',
+        deliverables: ['产物'],
+        boundaries: [],
+        acceptanceCriteria: ['有产出'],
+        tomorrowActions: [],
+        tasks: [
+          {
+            title: '任务',
+            objective: '测试时间顺序',
+            scope: '测试',
+            estimatedMinutes: { min: 30, target: 20, max: 40 },
+            actions: [{ title: 'a', instruction: 'b', checkpoint: 'c' }],
+            deliverable: '产物',
+            doneWhen: ['完成'],
+            quickHint: '提示',
+            evaluationMode: 'ai',
+            submissionPolicy: 'once_after_task',
+            carryoverAllowed: true
+          }
+        ]
+      })
+    ).toThrow();
+  });
 });

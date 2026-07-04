@@ -146,7 +146,6 @@ function buildSmokeExpression(aiConfig) {
 
       await waitFor(() => window.studyApp, 'preload api');
       await window.studyApp.settings.update(${serializedSettings});
-      clickLabel('搜索');
       await sleep(500);
 
       clickText('计划');
@@ -279,11 +278,29 @@ function buildActiveIntakeSmokeExpression(aiConfig) {
       async function getTodayGuide() {
         return window.studyApp.guides.listToday();
       }
+      async function configureSettingsFromUi() {
+        clickText('设置');
+        await waitFor(() => document.querySelector('input[type="password"]'), 'settings api key input');
+        const inputs = [...document.querySelectorAll('input')];
+        const apiInput = document.querySelector('input[type="password"]');
+        const baseInput = inputs.find((item) => item.value.includes('://') || item.placeholder.includes('Base URL')) ?? inputs.find((item) => item.type === 'text');
+        if (!apiInput || !baseInput) throw new Error('Missing settings inputs');
+        setValue('input[type="password"]', ${JSON.stringify(aiConfig.apiKey)});
+        const baseSelector = inputs.indexOf(baseInput);
+        const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+        descriptor?.set?.call(baseInput, ${JSON.stringify(aiConfig.baseUrl)});
+        baseInput.dispatchEvent(new Event('input', { bubbles: true }));
+        clickText('管理API配置');
+        await waitFor(async () => {
+          const settings = await window.studyApp.settings.get();
+          return settings.hasDeepseekApiKey && settings.deepseekBaseUrl === ${JSON.stringify(aiConfig.baseUrl)};
+        }, 'settings saved from ui');
+        clickText('今日');
+        await waitFor(() => document.querySelector('textarea[aria-label="输入学习目标"]'), 'today intake after settings');
+      }
 
       await waitFor(() => window.studyApp, 'preload api');
-      await window.studyApp.settings.update(${serializedSettings});
-      document.querySelector('button[aria-label="搜索"]')?.click();
-      await sleep(500);
+      await configureSettingsFromUi();
       await waitFor(() => document.querySelector('textarea[aria-label="输入学习目标"]'), 'active intake textarea');
 
       setValue('textarea[aria-label="输入学习目标"]', '我想三个月内达到初级前端工程师水平，每天晚上有 2 小时，优先把现有项目变成能求职展示的作品。');
@@ -312,8 +329,10 @@ function buildActiveIntakeSmokeExpression(aiConfig) {
       }, 'daily guide confirmed');
 
       await waitFor(async () => window.studyApp.sessions.getActive(), 'active session started');
-      await waitFor(() => document.body.textContent.includes('今日步骤进度'), 'study page after confirm and start');
+      await waitFor(() => document.body.textContent.includes('当前步骤'), 'study page after confirm and start');
       clickText('结束');
+      await waitFor(() => document.body.textContent.includes('保存进度并结束'), 'end study confirmation');
+      clickText('保存进度并结束');
       await waitFor(() => document.body.textContent.includes('学习结束结算'), 'settlement after ending focus session');
       const ended = await waitFor(async () => {
         const state = await getTodayGuide();

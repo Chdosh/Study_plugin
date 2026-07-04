@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Today 真实应用截图审阅</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #fbfcfb;
+      --surface: #ffffff;
+      --text: #17201d;
+      --muted: #68746f;
+      --border: #dde6e2;
+      --primary: #078f84;
+      --primary-soft: #e9f6f3;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(251, 252, 251, 0.94);
+      backdrop-filter: blur(12px);
+    }
+
+    header strong {
+      color: var(--primary);
+    }
+
+    header span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 300px;
+      gap: 18px;
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 18px;
+      align-items: start;
+    }
+
+    .shot {
+      position: relative;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+      box-shadow: 0 14px 36px rgba(23, 32, 29, 0.045);
+    }
+
+    .shot img {
+      display: block;
+      width: 100%;
+      min-width: 900px;
+      height: auto;
+    }
+
+    .side {
+      display: grid;
+      gap: 12px;
+      position: sticky;
+      top: 72px;
+    }
+
+    .panel {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+    }
+
+    h1, h2, p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: 16px;
+      line-height: 22px;
+    }
+
+    h2 {
+      font-size: 15px;
+      line-height: 22px;
+    }
+
+    p, li {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    ul {
+      display: grid;
+      gap: 6px;
+      margin: 0;
+      padding-left: 18px;
+    }
+
+    button {
+      min-height: 36px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--primary);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    .primary {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: #fff;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 92px;
+      resize: vertical;
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .quick-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    @media (max-width: 1100px) {
+      main {
+        grid-template-columns: 1fr;
+      }
+
+      .side {
+        position: static;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <strong>Today 真实应用截图审阅</strong>
+      <span>这版来自 `npm run dev:browser` 的真实 React/CSS 渲染，不再是手写仿制页。</span>
+    </div>
+    <span>截图视口：1366 × 900</span>
+  </header>
+
+  <main>
+    <section class="shot" aria-label="真实 Today 页面截图">
+      <img src="today-real.png" alt="真实应用 Today 主页面截图">
+    </section>
+
+    <aside class="side">
+      <section class="panel">
+        <h1>怎么批注</h1>
+        <p>直接点击左侧截图中的元素批注即可。你的批注会对应真实应用的视觉状态，我会再回到真实 `React/CSS` 源码修改。</p>
+      </section>
+
+      <section class="panel">
+        <h2>这版的来源</h2>
+        <ul>
+          <li>真实入口：`src/renderer/browser-index.html`</li>
+          <li>真实组件：`src/renderer/src/main.tsx`</li>
+          <li>真实样式：`src/renderer/src/styles.css`</li>
+          <li>数据：浏览器预览 mock，不是手写 HTML 文案</li>
+        </ul>
+      </section>
+
+      <form class="panel" data-lavish-question="today-real-review" onsubmit="event.preventDefault(); const note = this.querySelector('textarea').value.trim(); if (!note) return; window.lavish.queuePrompt('请按这条基于真实 Today 截图的意见修改 React/CSS 源码：' + note, { tag: 'today-real-review', text: note, element: this, queueKey: 'today-real-review-freeform' }); window.lavish.sendQueuedPrompts();">
+        <h2>快速反馈</h2>
+        <div class="quick-grid">
+          <button type="button" onclick="window.lavish.queuePrompt('基于真实 Today 截图：请继续弱化顶部今日目标，让执行动作区域更靠上、更突出。', { tag: 'today-real-review', text: '突出执行动作', element: this, queueKey: 'today-real-review-quick' }); window.lavish.sendQueuedPrompts();">突出执行动作</button>
+          <button type="button" onclick="window.lavish.queuePrompt('基于真实 Today 截图：请压缩右侧栏视觉重量，避免和执行动作抢注意力。', { tag: 'today-real-review', text: '弱化右侧栏', element: this, queueKey: 'today-real-review-quick' }); window.lavish.sendQueuedPrompts();">弱化右侧栏</button>
+          <button type="button" onclick="window.lavish.queuePrompt('基于真实 Today 截图：请减少卡片边框和容器感，让页面更像一个执行工作台。', { tag: 'today-real-review', text: '减少容器感', element: this, queueKey: 'today-real-review-quick' }); window.lavish.sendQueuedPrompts();">减少容器感</button>
+          <button type="button" onclick="window.lavish.queuePrompt('基于真实 Today 截图：请调整首屏密度，让开始按钮和执行动作在一个视线流里。', { tag: 'today-real-review', text: '调整首屏密度', element: this, queueKey: 'today-real-review-quick' }); window.lavish.sendQueuedPrompts();">调整密度</button>
+        </div>
+        <textarea placeholder="也可以写具体位置：比如当前任务卡片顶部、右侧进度、今日总目标、执行动作列表..."></textarea>
+        <button class="primary" type="submit">发送给 Agent</button>
+      </form>
+    </aside>
+  </main>
+</body>
+</html>

@@ -222,6 +222,8 @@ export const dailyGuideAgentOutputSchema = z.object({
         min: z.number().int().min(5).max(360),
         target: z.number().int().min(5).max(480),
         max: z.number().int().min(5).max(600)
+      }).refine((value) => value.min <= value.target && value.target <= value.max, {
+        message: 'estimatedMinutes 必须满足 min <= target <= max'
       }),
       actions: z.array(
         z.object({
@@ -229,7 +231,7 @@ export const dailyGuideAgentOutputSchema = z.object({
           instruction: z.string().min(1),
           checkpoint: z.string().min(1)
         })
-      ).min(3).max(6),
+      ).min(1).max(6),
       deliverable: z.string().min(1),
       doneWhen: stringArrayFromAiSchema,
       quickHint: z.string().min(1),
@@ -237,7 +239,7 @@ export const dailyGuideAgentOutputSchema = z.object({
       submissionPolicy: z.enum(['once_after_task']).default('once_after_task'),
       carryoverAllowed: booleanFromAiSchema.default(true)
     })
-  ).min(1).max(5)
+  ).min(1).max(4)
 });
 
 export const stageOutlineAgentOutputSchema = z.object({

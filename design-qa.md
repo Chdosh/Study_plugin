@@ -21,6 +21,9 @@
 * `C:\Users\cc\AppData\Local\Temp\study-ui-reference-captures-current\float-current-collapsed.png`
 * `C:\Users\cc\AppData\Local\Temp\study-ui-reference-captures-current\float-current-expanded.png`
 * `C:\Users\cc\AppData\Local\Temp\study-layout-fix-captures\intake-1418x1083.png`
+* `C:\Users\cc\AppData\Local\Temp\study-readable-ui-captures\today-1280.png`
+* `C:\Users\cc\AppData\Local\Temp\study-readable-ui-captures\study-1280.png`
+* `C:\Users\cc\AppData\Local\Temp\study-readable-ui-captures\study-markdown-1280.png`
 
 ## QA Findings
 
@@ -31,6 +34,7 @@
 * 悬浮窗：已复刻约 `420x56` 收起态和约 `420x300` 展开态；修复展开态底部按钮裁切和“去提问”按钮文字竖排问题。
 * 响应式：中窄窗口下侧栏自动收窄为图标栏，主内容和辅助栏改为单列，降低固定字号和固定列宽造成的挤压。
 * 窗口化补丁：1418px 宽度下侧栏为 82px 图标栏，品牌文字隐藏，导航文字 `font-size: 0px`，主动访谈保持主区 + 摘要双列；1180px 和 900px 下主动访谈自动单列且无横向滚动。
+* 可读性补丁：1280px 窗口下 Today/Study 无横向溢出，任务详情文本不再挤成左侧窄列；AI 展开内容保留 Markdown 标题、编号列表和代码块。
 
 ## Intentional Differences
 
@@ -41,9 +45,10 @@
 ## Verification
 
 * `npm.cmd run typecheck` - passed
-* `npm.cmd test` - passed, `29 passed`, `1 skipped`
+* `npm.cmd test` - passed, `31 passed`, `1 skipped`
 * `npm.cmd run build` - passed
 * `node scripts\electron-gui-smoke.mjs` - passed, fake AI 主闭环完成主动访谈、生成执行稿、确认并开始、进入学习、结束当前块和重启恢复
 * Electron/CDP windowed breakpoint check - passed at `1418x1083`, `1180x900`, and `900x900`
+* Electron/CDP readable UI check - passed at `1280x900` for Today, Study, and AI Markdown expanded state
 
 Final result: passed

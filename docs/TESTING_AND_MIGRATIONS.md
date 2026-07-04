@@ -8,9 +8,13 @@ Prioritize tests for:
 
 * plan parsing
 * plan validation
+* Daily Guide 主任务和 Action schema validation
 * task-status transitions
 * plan versioning
-* session start, pause, resume, and end
+* Focus Session start, pause, resume, and end
+* Action / Checkpoint local progress persistence
+* one-submit-per-main-task evaluation flow
+* local evaluation tasks not calling AI
 * monitoring-event aggregation
 * AI-output validation
 * failed AI requests
@@ -21,14 +25,15 @@ Prioritize tests for:
 Critical end-to-end flows:
 
 1. Create or import a goal.
-2. Generate a proposed plan.
-3. Confirm the plan.
-4. Start a study session.
-5. Record session events.
-6. End and review the session.
-7. Generate an adjustment proposal.
-8. Confirm or reject the adjustment.
-9. Restart the application and verify data persistence.
+2. Complete AI goal intake and confirm goal understanding.
+3. Generate roadmap, short plan, and first-day Daily Guide.
+4. Confirm the Daily Guide.
+5. Start a Focus Session for the current main task.
+6. Pause, resume, and end Focus Session without triggering AI.
+7. Record Action / Checkpoint progress locally.
+8. Submit the main task final deliverable once and evaluate it.
+9. Generate one task-level daily reflection.
+10. Restart the application and verify data persistence.
 
 Before completing a task, inspect `package.json` and run the relevant available commands, such as:
 
@@ -65,8 +70,11 @@ Do not:
 * reuse an existing migration for a different schema change
 * silently discard invalid records
 * alter confirmed plans without preserving a previous version
+* delete legacy block tables before their session-anchor responsibilities are migrated
 
 Use database migrations for every schema change. Never modify an existing production database schema only through ad hoc SQL executed at application startup.
+
+When changing the Daily Guide or timer model, verify both clean databases and representative existing data with legacy `daily_plan_blocks` / `daily_guide_blocks`. Legacy blocks should be migrated or interpreted as Focus Session anchors / historical records, not silently discarded.
 
 ## 3. 完成标准
 

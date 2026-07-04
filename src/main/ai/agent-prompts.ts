@@ -147,29 +147,55 @@ export function buildDailyGuidePrompt(params: {
   shortPlan: ShortPlanDay[];
   profile: PromptProfile;
 }): string {
+  const totalMinutes = params.windows.reduce((sum, window) => sum + clockWindowMinutes(window), 0);
+  const firstDay = params.shortPlan.find((day) => day.dayIndex === 1);
+  const relevantStages = params.roadmap.slice(0, 2);
+  const briefSummary = params.brief
+    ? {
+        title: params.brief.title,
+        targetOutcome: params.brief.targetOutcome,
+        currentLevel: params.brief.currentLevel,
+        availableTime: params.brief.availableTime,
+        deadline: params.brief.deadline,
+        constraints: params.brief.constraints,
+        successCriteria: params.brief.successCriteria
+      }
+    : null;
+
   return [
     params.profile.content,
     '',
     `为 ${params.date} 生成第一天执行稿。核心原则：任务决定时长，不要先生成固定 ${params.blockMinutes} 分钟时间块。`,
-    '风格参考 docs/Example.md：强引导、明确产物、明确不要做什么、避免用户跑偏。',
+    `今日可用学习时间约 ${totalMinutes} 分钟。`,
     '输出 JSON 字段：date、todayGoal、deliverables、boundaries、acceptanceCriteria、tomorrowActions、tasks。',
-    'tasks 是今日主任务，不是时间块。通常生成 2 到 4 个，默认优先 3 个；任务复杂或时间少时可以只有 1 个。',
-    '根据可用时间动态决定任务数量：30-60 分钟 1-2 个；60-120 分钟 2-3 个；120-180 分钟 2-4 个；180 分钟以上通常不超过 4-5 个。',
+    'tasks 是今日主任务，不是时间块。根据可用时间动态决定数量：30-60 分钟 1-2 个；60-120 分钟 2-3 个；120-180 分钟 2-4 个；180 分钟以上通常不超过 4 个。',
     '每日计划必须预留约 10%-15% 缓冲时间。如果时间不足，减少任务数量或缩小任务范围，不要压缩合理执行时间来塞入更多任务。',
     '每个 task 必须包含 title、objective、scope、estimatedMinutes、actions、deliverable、doneWhen、quickHint、evaluationMode、submissionPolicy、carryoverAllowed。',
-    'estimatedMinutes 必须包含 min、target、max，且 min <= target <= max。target 是合理完成时间，不是固定倒计时。',
-    '每个 task 内部 actions 生成 3 到 6 个，Action 只作为执行引导和本地检查点，不作为独立提交或 AI 评估单位。',
+    'estimatedMinutes 必须包含 min、target、max，且满足 min <= target <= max。target 是合理完成时间，不是固定倒计时。',
+    '每个 task 内部 actions 建议 3 到 6 个，最少 1 个；每个 action 包含 title、instruction、checkpoint。Action 只作为执行引导和本地检查点，不作为独立提交或 AI 评估单位。',
     'submissionPolicy 默认且只能是 once_after_task。主任务最终提交一次；evaluationMode 可为 local 或 ai。',
     '主任务必须覆盖完整且有意义的学习或产出结果，不能写“学习某知识”“完善项目”这种模糊任务。',
     '不要生成复杂知识图谱、账号系统、云同步等偏离目标的内容。',
     '所有自然语言内容使用中文。',
     '',
+    '输出示例：',
+    '{"date":"2026-07-04","todayGoal":"拿到今日核心产物","deliverables":["产物1"],"boundaries":["不做XXX"],"acceptanceCriteria":["能说明XXX"],"tomorrowActions":["明天先做YYY"],"tasks":[{"title":"完成核心任务","objective":"明确今天产出","scope":"只覆盖必要范围","estimatedMinutes":{"min":25,"target":35,"max":50},"actions":[{"title":"准备环境","instruction":"打开项目并确认可运行","checkpoint":"项目能启动"},{"title":"执行主路径","instruction":"按目标完成核心动作","checkpoint":"有可见产出"}],"deliverable":"可验收的产出","doneWhen":["产物可展示"],"quickHint":"卡住时先记录问题","evaluationMode":"ai","submissionPolicy":"once_after_task","carryoverAllowed":true}]}',
+    '',
     `可用学习时间段：${JSON.stringify(params.windows)}`,
     `目标：${JSON.stringify(params.goal)}`,
-    `目标理解：${JSON.stringify(params.brief)}`,
-    `长期大纲：${JSON.stringify(params.roadmap)}`,
-    `前三天计划：${JSON.stringify(params.shortPlan)}`
+    `目标理解：${JSON.stringify(briefSummary)}`,
+    `相关长期大纲（当前及下一阶段）：${JSON.stringify(relevantStages)}`,
+    `第一天计划：${JSON.stringify(firstDay ?? null)}`
   ].join('\n');
+}
+
+function clockWindowMinutes(window: StudyWindow): number {
+  const [startHour, startMinute] = window.start.split(':').map(Number);
+  const [endHour, endMinute] = window.end.split(':').map(Number);
+  if (Number.isNaN(startHour) || Number.isNaN(startMinute) || Number.isNaN(endHour) || Number.isNaN(endMinute)) {
+    return 0;
+  }
+  return (endHour * 60 + endMinute) - (startHour * 60 + startMinute);
 }
 
 export function buildStageOutlinePrompt(params: {

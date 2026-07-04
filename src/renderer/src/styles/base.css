@@ -1,0 +1,116 @@
+/* BASE */
+
+html {
+  font-family: var(--font-family-base);
+  color: var(--color-text-primary);
+  background: var(--color-bg-page);
+}
+
+body {
+  margin: 0;
+  min-width: 0;
+  min-height: 100vh;
+  background: var(--color-bg-page);
+  font-size: var(--font-size-md);
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+select {
+  font: inherit;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+}
+
+textarea {
+  font: inherit;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  width: 100%;
+  min-height: var(--textarea-min-height);
+  padding: var(--space-3);
+  resize: vertical;
+  line-height: var(--line-height-relaxed);
+}
+
+button:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-offset);
+}
+
+select:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-offset);
+}
+
+textarea:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-offset);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: var(--disabled-opacity);
+}
+
+h2 {
+  margin: 0;
+}
+
+h3 {
+  margin: 0;
+}
+
+h4 {
+  margin: 0;
+}
+
+p {
+  margin: 0;
+}
+
+label {
+  display: grid;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+}
+
+select:hover {
+  border-color: var(--color-border-strong);
+}
+
+textarea:hover {
+  border-color: var(--color-border-strong);
+}
+
+select:focus {
+  border-color: var(--color-primary);
+}
+
+textarea:focus {
+  border-color: var(--color-primary);
+}
+
+input {
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+  padding: var(--space-3);
+  color: var(--color-text-primary);
+  outline: none;
+}
+
+input:focus {
+  border-color: var(--color-primary);
+}
