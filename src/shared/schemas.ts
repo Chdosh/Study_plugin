@@ -327,7 +327,6 @@ export type ImportAgentOutput = z.infer<typeof importAgentOutputSchema>;
 export type DailyPlanAgentOutput = z.infer<typeof dailyPlanAgentOutputSchema>;
 export type LooseDailyPlanAgentOutput = z.infer<typeof looseDailyPlanAgentOutputSchema>;
 export type ReviewAgentOutput = z.infer<typeof reviewAgentOutputSchema>;
-export type GoalBrief = z.infer<typeof goalBriefSchema>;
 export type GoalIntakeAgentOutput = z.infer<typeof goalIntakeAgentOutputSchema>;
 export type RoadmapAgentOutput = z.infer<typeof roadmapAgentOutputSchema>;
 export type ShortPlanAgentOutput = z.infer<typeof shortPlanAgentOutputSchema>;

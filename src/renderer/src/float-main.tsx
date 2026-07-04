@@ -1,19 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ArrowLeft, Check, ChevronDown, ChevronRight, ChevronUp, Clock3, HelpCircle, ListChecks, Pause, Play, ShieldCheck, Target } from 'lucide-react';
-import type { DailyPlanBlock, FloatWindowApi, StudySession } from '../../shared/types';
+import type { DailyPlanBlock, StudySession } from '../../shared/types';
 import {
   getSessionElapsedSeconds,
   hasExceededDragThreshold,
   shouldSuppressActivationAfterDrag
 } from './float-behavior';
 import './float-styles.css';
-
-declare global {
-  interface Window {
-    floatApp: FloatWindowApi;
-  }
-}
 
 type FloatState = 'collapsed' | 'expanded';
 

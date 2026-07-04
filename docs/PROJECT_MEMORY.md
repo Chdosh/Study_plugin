@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-* 项目是本地优先 Windows 桌面 AI 学习系统，当前 MVP 已收敛为“主动访谈 -> 分层计划 -> 主任务制 Daily Guide -> Focus Session -> 主任务最终提交/评估 -> 日终复盘”的学习闭环。
+* 项目是本地优先 Windows 桌面 AI 学习系统，当前 MVP 已收敛为“主动访谈 -> 分层计划 -> 主任务制 Daily Guide -> Focus Session -> 主任务最终提交/评估 -> 按需复盘”的学习闭环。
 * 技术栈：Electron + React + TypeScript，SQLite/libSQL + Drizzle ORM，OpenAI-compatible DeepSeek client，Zod runtime validation，typed preload API + narrow IPC。
 * SQLite 是 durable source of truth。Drizzle schema 在 `src/main/db/schema.ts`，schema 变更必须使用迁移。
 * 默认自动回归使用 fake AI GUI smoke；真实 DeepSeek 合约测试是 opt-in，不作为默认自动 PASS 门槛。
@@ -15,14 +15,14 @@
 AI 主动访谈澄清目标
 → 用户确认目标理解
 → AI 生成长期大纲、前三天短期计划、第一天主任务执行稿
-→ 用户确认今日执行稿
+→ 用户直接开始、修改或重新生成今日主任务
 → Today 聚焦当前主任务，其他主任务折叠
 → 用户围绕主任务开启一个或多个 Focus Session
 → Action / Checkpoint 本地记录执行进度
 → 主任务最终提交
 → local 任务走本地验证器，ai 任务最多调用一次 evaluate_submission
 → 本地状态机决定完成、继续修改、保存进度或进入下一任务
-→ 每天最多一次综合复盘，并由用户确认调整建议
+→ 在主任务、阶段或用户主动结束学习时复盘，并由用户确认调整建议
 ```
 
 当前新闭环使用 `goal_intakes`、`roadmap_stages`、`short_plan_days`、`daily_guides`、`daily_guide_tasks`、`daily_guide_actions` 保存访谈、长期大纲、短期计划、今日主任务和执行动作。`daily_plan_blocks` / `daily_guide_blocks` 暂时保留为旧版兼容和 session 锚点，不再代表固定 10 分钟任务块，不能直接删除。
@@ -41,10 +41,18 @@ AI 主动访谈澄清目标
 * Focus Session 的开始、暂停、恢复、结束和超时只写本地记录，不触发 AI。
 * 主任务是唯一最终提交和评估单位。`evaluationMode=local` 不调用模型；`evaluationMode=ai` 最多调用一次 `evaluate_submission`。
 * 当前主流程不再固定调用 `decide_next_step` / `next_step_decision`；本地状态机根据评估结果决定通过、继续修改、保存进度或进入下一任务。
-* 日终复盘按主任务汇总，每天最多一次；未完成任务可在复盘中建议继续、缩小、拆分、延后或放弃，但必须由用户确认。
+* 复盘按主任务汇总，可由主任务、阶段或用户主动结束学习触发；同一天如进行综合复盘最多一次。未完成任务可在复盘中建议继续、缩小、拆分、延后或放弃，但必须由用户确认。
 * DeepSeek 真实合约测试为 opt-in：`RUN_DEEPSEEK_CONTRACT=1 npm.cmd test -- src/main/ai/deepseek-contract.test.ts`。
 
 ## 最近完成
+
+### 2026-07-05 冗余文档与重复类型清理
+
+按 `docs/recovery/PRODUCT_TRUTH.md` 收敛产品口径：普通今日主任务可直接开始、修改或重新生成；复盘由主任务、阶段或用户主动结束学习触发，同一天综合复盘最多一次。删除被 Product Truth、Product Spec、Architecture、AI/Data、Security、UI Guidelines 吸收的旧 V1 范围、信息架构、用户流程、线框、UI demo、旧审计、旧基线和展示原型。
+
+代码侧删除 `schemas.ts` 中与 shared 类型重复的 `GoalBrief` 导出，把 renderer `Window` 全局声明统一到 `vite-env.d.ts`，并让 AppService 的本地提交决策复用领域状态机的 `isPassingEvaluation`。`StudyStore.completeCurrentAction` 和主任务提交后的 Daily Guide 任务推进已改为调用 `execution-state-machine`，删除 store 内重复的 Action 进度计算、Action 全完成判断和下一主任务激活函数。
+
+验证：`npm.cmd run typecheck`、`npm.cmd test`（41 passed, 1 skipped）、`npm.cmd run build` 均通过。按用户最新要求未运行 Electron 冒烟。
 
 ### 2026-07-04 新参考图四页面 UI 复刻与 CSS 清理
 
@@ -141,7 +149,7 @@ StudyPage 只负责展示当前步骤：当前任务名称、步骤进度（如 
 
 更新 `AGENTS.md`，把旧“约 10 分钟粒度每日计划”规则替换为当前主任务制 Daily Guide、Focus Session、本地进度记录、一次提交评估和日终综合复盘口径。整理 docs 入口，压缩本文件，活跃专题文档统一当前流程；旧线框、旧审计、旧 UI demo 保留为历史参考。
 
-验证：文档关键词扫描和内容映射检查通过；本轮仅修改文档，未运行代码 typecheck/test/build。
+验证：文档关键词扫描和内容映射检查通过；本轮仅修改文档，未运行代码 typecheck/test/build。后续已删除被活跃文档吸收的旧线框、旧审计和旧 UI demo。
 
 ### 2026-07-04 修复主流程 dailyGuideAgent 持续失败
 

@@ -20,6 +20,7 @@ import { ContextBuilder } from './context-builder';
 import { FocusMonitor } from './focus-monitor';
 import type { SettingsService } from './settings-service';
 import type { StudyStore } from './store';
+import { isPassingEvaluation } from '../domain/execution-state-machine';
 
 export class AppService {
   private readonly aiClient = new AiClient();
@@ -736,8 +737,7 @@ function todayIso(): string {
 }
 
 function buildLocalDecisionFromEvaluation(evaluation: SubmissionEvaluationAgentOutput): NextStepDecisionAgentOutput {
-  const passed = evaluation.result === 'passed' || evaluation.recommendedAction === 'complete_task' || evaluation.recommendedAction === 'advance';
-  if (passed) {
+  if (isPassingEvaluation(evaluation)) {
     return {
       decision: 'complete_task',
       reason: evaluation.feedback,
