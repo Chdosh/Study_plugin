@@ -1,6 +1,6 @@
 import type { BrowserWindow } from 'electron';
 import { ipcChannels } from '../../shared/ipc';
-import type { NextStepDecisionAgentOutput, SubmissionEvaluationAgentOutput } from '../../shared/schemas';
+import type { DailyGuideAgentOutput, NextStepDecisionAgentOutput, SubmissionEvaluationAgentOutput } from '../../shared/schemas';
 import type { AppSettings, DailyGuideTask, DailyPlanBlock, GoalBrief, Id, RawImport, RoadmapStage, ShortPlanDay, StudySession, StudyWindow, TaskItem } from '../../shared/types';
 import { AiClient } from '../ai/ai-client';
 import {
@@ -96,6 +96,14 @@ export class AppService {
     return this.store.confirmGoalIntake(briefPatch);
   }
 
+  listHistory() {
+    return this.store.listGoalIntakes();
+  }
+
+  getHistoryIntake(intakeId: Id) {
+    return this.store.getGoalIntakeById(intakeId);
+  }
+
   async generateLayeredPlan(goalId: Id) {
     const goal = await this.store.getGoal(goalId);
     if (!goal) throw new Error('找不到要生成计划的学习目标。');
@@ -164,29 +172,50 @@ export class AppService {
       successCriteria: day.successCriteria,
       createdAt: ''
     }));
-    const dailyGuideOutput = await this.dailyGuideAgent.run({
-      date,
-      windows,
-      goal,
-      brief,
-      roadmap: draftRoadmap,
-      shortPlan: draftShortPlan,
-      profile,
-      settings: runtimeSettings
-    });
-    await this.store.saveAiReview({
-      kind: 'daily_guide',
-      date,
-      provider: 'deepseek',
-      model: runtimeSettings.deepseekModel,
-      promptProfileId: profile.id,
-      promptVersionId: profile.activeVersionId,
-      inputSnapshot: { goalId, brief, roadmap: roadmapOutput, shortPlan: shortPlanOutput },
-      output: dailyGuideOutput,
-      outputSchemaVersion: 'daily-guide.v2',
-      status: 'success'
-    });
-    return this.store.saveLayeredPlan({
+    let dailyGuideOutput: DailyGuideAgentOutput;
+    try {
+      dailyGuideOutput = await this.dailyGuideAgent.run({
+        date,
+        windows,
+        goal,
+        brief,
+        roadmap: draftRoadmap,
+        shortPlan: draftShortPlan,
+        profile,
+        settings: runtimeSettings
+      });
+      await this.store.saveAiReview({
+        kind: 'daily_guide',
+        date,
+        provider: 'deepseek',
+        model: runtimeSettings.deepseekModel,
+        promptProfileId: profile.id,
+        promptVersionId: profile.activeVersionId,
+        inputSnapshot: { goalId, brief, roadmap: roadmapOutput, shortPlan: shortPlanOutput },
+        output: dailyGuideOutput,
+        outputSchemaVersion: 'daily-guide.v2',
+        status: 'success'
+      });
+    } catch (error) {
+      await this.store.saveAiReview({
+        kind: 'daily_guide',
+        date,
+        provider: 'deepseek',
+        model: runtimeSettings.deepseekModel,
+        promptProfileId: profile.id,
+        promptVersionId: profile.activeVersionId,
+        inputSnapshot: { goalId, brief, roadmap: roadmapOutput, shortPlan: shortPlanOutput },
+        output: {},
+        outputSchemaVersion: 'daily-guide.v2',
+        status: 'failed',
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+      if (error instanceof Error && error.message.includes('缺少 DeepSeek API Key')) {
+        throw error;
+      }
+      throw new Error('生成今日执行稿失败：AI 返回没有通过本地校验，已记录失败。请重试一次，或在设置里调低提示词复杂度。');
+    }
+    const result = await this.store.saveLayeredPlan({
       goal,
       brief,
       date,
@@ -195,6 +224,8 @@ export class AppService {
       shortPlan: shortPlanOutput,
       dailyGuide: dailyGuideOutput
     });
+    await this.store.confirmPlan(result.guide.planId);
+    return result;
   }
 
   confirmDailyGuide(guideId: Id) {
@@ -551,6 +582,10 @@ export class AppService {
       requiresSubmission: output.requiresSubmission,
       contextSourceIds: built.contextSourceIds
     };
+  }
+
+  completeCurrentAction() {
+    return this.store.completeCurrentAction();
   }
 
   async askStepQuestion(question: string, promptProfileId?: Id) {

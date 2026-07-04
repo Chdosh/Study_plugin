@@ -59,6 +59,7 @@ export function registerIpcHandlers(appService: AppService): void {
   ipcMain.handle(ipcChannels.learningTeachCurrentStep, (_event, payload) =>
     appService.teachCurrentStep(payload?.promptProfileId)
   );
+  ipcMain.handle(ipcChannels.learningCompleteCurrentAction, () => appService.completeCurrentAction());
   ipcMain.handle(ipcChannels.learningAskQuestion, (_event, payload) =>
     appService.askStepQuestion(payload.question, payload?.promptProfileId)
   );
@@ -110,4 +111,6 @@ export function registerIpcHandlers(appService: AppService): void {
       win.setPosition(x + payload.deltaX, y + payload.deltaY);
     }
   });
+  ipcMain.handle(ipcChannels.historyListAll, () => appService.listHistory());
+  ipcMain.handle(ipcChannels.historyGetById, (_event, payload) => appService.getHistoryIntake(payload.intakeId));
 }

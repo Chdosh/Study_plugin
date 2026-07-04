@@ -86,6 +86,12 @@ export interface GoalIntakeState {
   activeGoal: LearningGoal | null;
 }
 
+export interface HistoryIntakeSummary {
+  intake: GoalIntake;
+  goalTitle: string;
+  messageCount: number;
+}
+
 export interface RoadmapStage {
   id: Id;
   goalId: Id;
@@ -509,6 +515,10 @@ export interface StudyAppApi {
     archiveTodayAndRestart: () => Promise<GoalIntakeState>;
     listToday: () => Promise<TodayGuideState>;
   };
+  history: {
+    listAll: () => Promise<HistoryIntakeSummary[]>;
+    getById: (intakeId: Id) => Promise<GoalIntakeState>;
+  };
   imports: {
     create: (rawText: string, source: RawImport['source']) => Promise<RawImport>;
     parse: (importId: Id, promptProfileId?: Id) => Promise<ImportParseResult>;
@@ -540,6 +550,7 @@ export interface StudyAppApi {
   learning: {
     getState: () => Promise<LearningRuntimeSnapshot>;
     teachCurrentStep: (promptProfileId?: Id) => Promise<TeachStepResult>;
+    completeCurrentAction: () => Promise<LearningRuntimeSnapshot>;
     askQuestion: (question: string, promptProfileId?: Id) => Promise<QuestionAnswerResult>;
     resolveQuestion: (threadId: Id, summary?: string) => Promise<LearningRuntimeSnapshot>;
     submitResult: (content: string, promptProfileId?: Id) => Promise<SubmissionEvaluationResult>;

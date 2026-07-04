@@ -5,6 +5,7 @@ import type {
   DailyPlanBlock,
   FloatWindowApi,
   GoalBrief,
+  HistoryIntakeSummary,
   Id,
   LearningRuntimeSnapshot,
   LearningGoal,
@@ -45,6 +46,10 @@ const api: StudyAppApi = {
     archiveTodayAndRestart: (): Promise<GoalIntakeState> =>
       ipcRenderer.invoke(ipcChannels.guidesArchiveTodayAndRestart),
     listToday: (): Promise<TodayGuideState> => ipcRenderer.invoke(ipcChannels.guidesListToday)
+  },
+  history: {
+    listAll: (): Promise<HistoryIntakeSummary[]> => ipcRenderer.invoke(ipcChannels.historyListAll),
+    getById: (intakeId: Id): Promise<GoalIntakeState> => ipcRenderer.invoke(ipcChannels.historyGetById, { intakeId })
   },
   imports: {
     create: (rawText: string, source: RawImport['source']) =>
@@ -88,6 +93,8 @@ const api: StudyAppApi = {
     getState: (): Promise<LearningRuntimeSnapshot> => ipcRenderer.invoke(ipcChannels.learningGetState),
     teachCurrentStep: (promptProfileId?: Id): Promise<TeachStepResult> =>
       ipcRenderer.invoke(ipcChannels.learningTeachCurrentStep, { promptProfileId }),
+    completeCurrentAction: (): Promise<LearningRuntimeSnapshot> =>
+      ipcRenderer.invoke(ipcChannels.learningCompleteCurrentAction),
     askQuestion: (question: string, promptProfileId?: Id): Promise<QuestionAnswerResult> =>
       ipcRenderer.invoke(ipcChannels.learningAskQuestion, { question, promptProfileId }),
     resolveQuestion: (threadId: Id, summary?: string): Promise<LearningRuntimeSnapshot> =>
