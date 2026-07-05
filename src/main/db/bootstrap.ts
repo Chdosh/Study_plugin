@@ -98,6 +98,7 @@ export async function bootstrapDatabase(client: Client): Promise<void> {
       date TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'draft',
       available_windows_json TEXT NOT NULL,
+      short_plan_day_id TEXT REFERENCES short_plan_days(id),
       created_at TEXT NOT NULL,
       confirmed_at TEXT,
       source_review_id TEXT,
@@ -126,6 +127,7 @@ export async function bootstrapDatabase(client: Client): Promise<void> {
       id TEXT PRIMARY KEY,
       goal_id TEXT NOT NULL REFERENCES goals(id),
       plan_id TEXT NOT NULL REFERENCES daily_plans(id),
+      short_plan_day_id TEXT REFERENCES short_plan_days(id),
       date TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'draft',
       week_focus TEXT NOT NULL DEFAULT '',
@@ -263,6 +265,11 @@ export async function bootstrapDatabase(client: Client): Promise<void> {
       value TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS short_plan_days_goal_date_not_null_idx
+      ON short_plan_days(goal_id, date) WHERE date IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS daily_guides_short_plan_day_unique
+      ON daily_guides(short_plan_day_id);
   `);
 
   await runDatabaseMigrations(client);

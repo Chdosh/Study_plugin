@@ -177,8 +177,9 @@ export interface DailyGuide {
   id: Id;
   goalId: Id;
   planId: Id;
+  shortPlanDayId: string | null;
   date: string;
-  status: 'draft' | 'confirmed' | 'archived';
+  status: 'draft' | 'confirmed' | 'completed' | 'archived';
   weekFocus: string;
   todayGoal: string;
   deliverables: string[];
@@ -198,11 +199,33 @@ export interface LayeredPlanResult {
   guide: DailyGuide;
 }
 
+export type TodayState =
+  | 'needs_goal'
+  | 'ready_to_generate'
+  | 'generating'
+  | 'generation_failed'
+  | 'active'
+  | 'completed'
+  | 'short_plan_exhausted';
+
 export interface TodayGuideState {
   goal: LearningGoal | null;
   roadmap: RoadmapStage[];
   shortPlan: ShortPlanDay[];
   guide: DailyGuide | null;
+  todayState: TodayState;
+}
+
+export interface PreviousLearningDayResult {
+  completedTasks: string[];
+  evaluationSummary: string;
+  reviewSummary?: string;
+}
+
+export interface PrepareCurrentLearningDayResult {
+  todayState: TodayState;
+  result?: LayeredPlanResult;
+  errorMessage?: string;
 }
 
 export interface PlanStage {
@@ -463,6 +486,8 @@ export interface StudyAppApi {
     generateLayeredPlan: (goalId: Id) => Promise<LayeredPlanResult>;
     confirmDailyGuide: (guideId: Id) => Promise<DailyGuide>;
     archiveTodayAndRestart: () => Promise<GoalIntakeState>;
+    prepareCurrentLearningDay: () => Promise<PrepareCurrentLearningDayResult>;
+    getTodayState: () => Promise<TodayState>;
     listToday: () => Promise<TodayGuideState>;
   };
   history: {

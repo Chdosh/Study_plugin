@@ -1,7 +1,7 @@
 import type { BrowserWindow } from 'electron';
 import { ipcChannels } from '../../shared/ipc';
 import type { DailyGuideAgentOutput, NextStepDecisionAgentOutput, SubmissionEvaluationAgentOutput } from '../../shared/schemas';
-import type { AppSettings, DailyGuideTask, DailyPlanBlock, GoalBrief, Id, RoadmapStage, ShortPlanDay, StudySession } from '../../shared/types';
+import type { AppSettings, DailyGuideTask, DailyPlanBlock, GoalBrief, Id, LayeredPlanResult, PrepareCurrentLearningDayResult, PreviousLearningDayResult, RoadmapStage, ShortPlanDay, StudySession, TodayState } from '../../shared/types';
 import { AiClient } from '../ai/ai-client';
 import {
   DailyGuideAgent,
@@ -174,7 +174,7 @@ export class AppService {
         goal,
         brief,
         roadmap: draftRoadmap,
-        shortPlan: draftShortPlan,
+        targetDay: draftShortPlan.find((d) => d.dayIndex === 1)!,
         profile,
         settings: runtimeSettings
       });
@@ -233,6 +233,147 @@ export class AppService {
       await this.pushSessionState(paused);
     }
     return this.store.archiveTodayGuides(todayIso());
+  }
+
+  private generationLocks = new Map<string, Promise<PrepareCurrentLearningDayResult>>();
+
+  async getTodayState(): Promise<TodayState> {
+    const today = await this.store.listTodayGuide(todayIso());
+    if (!today.goal) return 'needs_goal';
+
+    const guide = today.guide;
+    if (guide) {
+      if (guide.status === 'completed') return 'completed';
+      return 'active';
+    }
+
+    const date = todayIso();
+    const lockKey = `${today.goal.id}:${date}`;
+    if (this.generationLocks.has(lockKey)) return 'generating';
+
+    const activatedDay = await this.store.findActivatedButGuidelessDay(today.goal.id, date);
+    if (activatedDay) return 'generation_failed';
+
+    const unusedDay = today.shortPlan.find((d) => d.date === null);
+    if (!unusedDay) return 'short_plan_exhausted';
+
+    return 'ready_to_generate';
+  }
+
+  async prepareCurrentLearningDay(): Promise<PrepareCurrentLearningDayResult> {
+    const date = todayIso();
+    const today = await this.store.listTodayGuide(date);
+    if (!today.goal) {
+      return { todayState: 'needs_goal' };
+    }
+
+    const goalId = today.goal.id;
+    const lockKey = `${goalId}:${date}`;
+    const existingLock = this.generationLocks.get(lockKey);
+    if (existingLock) return existingLock;
+
+    const promise = this.doPrepareCurrentLearningDay(today.goal, date, today.roadmap, today.shortPlan, today.guide);
+    this.generationLocks.set(lockKey, promise);
+    try {
+      return await promise;
+    } finally {
+      this.generationLocks.delete(lockKey);
+    }
+  }
+
+  private async doPrepareCurrentLearningDay(
+    goal: import('../../shared/types').LearningGoal,
+    date: string,
+    roadmap: RoadmapStage[],
+    shortPlan: ShortPlanDay[],
+    existingGuide: import('../../shared/types').DailyGuide | null
+  ): Promise<PrepareCurrentLearningDayResult> {
+    if (existingGuide) {
+      if (existingGuide.status === 'completed') return { todayState: 'completed' };
+      return { todayState: 'active' };
+    }
+
+    let targetDay: ShortPlanDay | null = await this.store.findActivatedButGuidelessDay(goal.id, date);
+    let isRetry = targetDay !== null;
+
+    if (!targetDay) {
+      targetDay = shortPlan
+        .filter((d) => d.date === null)
+        .sort((a, b) => a.dayIndex - b.dayIndex)[0] ?? null;
+    }
+
+    if (!targetDay) {
+      return { todayState: 'short_plan_exhausted' };
+    }
+
+    if (!isRetry) {
+      const activated = await this.store.atomicallyActivateShortPlanDay(targetDay.id, date);
+      if (!activated) {
+        return await this.prepareCurrentLearningDay();
+      }
+    }
+
+    const previousDayResult: PreviousLearningDayResult | null | undefined = !isRetry
+      ? await this.store.getPreviousCompletedLearningDayContext(goal.id, date)
+      : undefined;
+
+    const [brief, profile, runtimeSettings] = await Promise.all([
+      this.store.getGoalBriefForGoal(goal.id),
+      this.store.getPromptProfile(),
+      this.settings.getRuntimeSettings()
+    ]);
+
+    let dailyGuideOutput: DailyGuideAgentOutput;
+    try {
+      dailyGuideOutput = await this.dailyGuideAgent.run({
+        date,
+        windows: runtimeSettings.dailyStudyWindows,
+        goal,
+        brief,
+        roadmap,
+        targetDay,
+        previousDayResult: previousDayResult ?? undefined,
+        profile,
+        settings: runtimeSettings
+      });
+      await this.store.saveAiReview({
+        kind: 'daily_guide',
+        date,
+        provider: 'deepseek',
+        model: runtimeSettings.deepseekModel,
+        promptProfileId: profile.id,
+        promptVersionId: profile.activeVersionId,
+        inputSnapshot: { goalId: goal.id, targetDay: targetDay.title },
+        output: dailyGuideOutput,
+        outputSchemaVersion: 'daily-guide.v2',
+        status: 'success'
+      });
+    } catch (error) {
+      await this.store.saveAiReview({
+        kind: 'daily_guide',
+        date,
+        provider: 'deepseek',
+        model: runtimeSettings.deepseekModel,
+        promptProfileId: profile.id,
+        promptVersionId: profile.activeVersionId,
+        inputSnapshot: { goalId: goal.id, targetDay: targetDay.title },
+        output: {},
+        outputSchemaVersion: 'daily-guide.v2',
+        status: 'failed',
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+      return { todayState: 'generation_failed', errorMessage: error instanceof Error ? error.message : String(error) };
+    }
+
+    const result = await this.store.saveDailyGuideWithTransaction({
+      goal,
+      date,
+      windows: runtimeSettings.dailyStudyWindows,
+      shortPlanDayId: targetDay.id,
+      dailyGuide: dailyGuideOutput
+    });
+
+    return { todayState: 'active', result };
   }
 
   listTodayGuide() {
@@ -458,6 +599,11 @@ export class AppService {
       this.focusMonitor.stop();
       const completedSession = await this.store.completeSession(active.session.id);
       await this.pushSessionState(completedSession);
+
+      const today = await this.store.listTodayGuide(todayIso());
+      if (today.guide && today.guide.tasks.length > 0 && today.guide.tasks.every((t) => t.status === 'done')) {
+        await this.store.completeLearningDay(today.guide.id);
+      }
     }
     return result;
   }

@@ -295,6 +295,17 @@ export const databaseMigrations: DatabaseMigration[] = [
       CREATE INDEX IF NOT EXISTS daily_guide_actions_task_position_idx
         ON daily_guide_actions(task_id, position);
     `
+  },
+  {
+    id: '202607050006_short_plan_day_association',
+    sql: `
+      ALTER TABLE daily_plans ADD COLUMN short_plan_day_id TEXT REFERENCES short_plan_days(id);
+      ALTER TABLE daily_guides ADD COLUMN short_plan_day_id TEXT REFERENCES short_plan_days(id);
+      CREATE UNIQUE INDEX IF NOT EXISTS short_plan_days_goal_date_not_null_idx
+        ON short_plan_days(goal_id, date) WHERE date IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS daily_guides_short_plan_day_unique
+        ON daily_guides(short_plan_day_id);
+    `
   }
 ];
 
@@ -312,7 +323,16 @@ export async function runDatabaseMigrations(client: Client): Promise<void> {
       args: [migration.id]
     });
     if (existing.rows.length > 0) continue;
-    await client.executeMultiple(migration.sql);
+    try {
+      await client.executeMultiple(migration.sql);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/duplicate column name/i.test(message) || /already exists/i.test(message)) {
+        console.log(`[migrations] ${migration.id} skipped (already applied by bootstrap): ${message}`);
+      } else {
+        throw error;
+      }
+    }
     await client.execute({
       sql: 'INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)',
       args: [migration.id, new Date().toISOString()]

@@ -2,9 +2,9 @@ import type {
   AppSettings, DailyGuide, DailyPlanBlock, GoalBrief, GoalIntake,
   GoalIntakeState, HistoryIntakeSummary, LayeredPlanResult,
   LearningGoal, LearningRuntimeSnapshot, PlanAdjustmentProposal,
-  PromptProfile, QuestionAnswerResult, ReviewResult,
-  StudySession, SubmissionEvaluationResult,
-  TeachStepResult, TodayGuideState, StudyAppApi
+  PrepareCurrentLearningDayResult, PromptProfile, QuestionAnswerResult,
+  ReviewResult, StudySession, SubmissionEvaluationResult,
+  TeachStepResult, TodayGuideState, TodayState, StudyAppApi
 } from '../../../shared/types';
 import { type PreviewConfig, getPreviewConfig, isBrowserMode, SCENARIO_DELAY_MS } from './url-state';
 import {
@@ -118,7 +118,7 @@ export class MockStudyAppApi implements StudyAppApi {
       await this.maybeDelay();
       this._guideSeq++;
       const result = createLayeredPlanResult(this.scenario);
-      this._todayGuideState = { goal: result.goal, roadmap: result.roadmap, shortPlan: result.shortPlan, guide: result.guide };
+      this._todayGuideState = { goal: result.goal, roadmap: result.roadmap, shortPlan: result.shortPlan, guide: result.guide, todayState: 'active' as const };
       return result;
     },
     confirmDailyGuide: async (guideId: string): Promise<DailyGuide> => {
@@ -130,9 +130,17 @@ export class MockStudyAppApi implements StudyAppApi {
     },
     archiveTodayAndRestart: async (): Promise<GoalIntakeState> => {
       await this.maybeDelay();
-      this._todayGuideState = { goal: null, roadmap: [], shortPlan: [], guide: null };
+      this._todayGuideState = { goal: null, roadmap: [], shortPlan: [], guide: null, todayState: 'needs_goal' };
       this._goalIntakeState = createGoalIntakeState({ ...this.scenario, isEmpty: true });
       return this._goalIntakeState;
+    },
+    prepareCurrentLearningDay: async (): Promise<PrepareCurrentLearningDayResult> => {
+      await this.maybeDelay();
+      return { todayState: 'active' as TodayState };
+    },
+    getTodayState: async (): Promise<TodayState> => {
+      await this.maybeDelay();
+      return 'active';
     },
     listToday: async (): Promise<TodayGuideState> => {
       await this.maybeDelay();
