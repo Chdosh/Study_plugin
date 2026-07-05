@@ -313,6 +313,41 @@
   font-size: var(--font-size-xs);
 }
 
+.restart-plan-card {
+  display: grid;
+  gap: 14px;
+}
+
+.restart-plan-card p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+
+.restart-confirm-modal {
+  display: grid;
+  gap: 14px;
+  max-width: 440px;
+}
+
+.restart-confirm-modal > svg {
+  color: var(--color-danger);
+}
+
+.restart-confirm-modal h3 {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xl);
+}
+
+.restart-confirm-modal p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+
 @media (max-width: 1180px) {
   .today-v2 {
     grid-template-columns: 1fr;

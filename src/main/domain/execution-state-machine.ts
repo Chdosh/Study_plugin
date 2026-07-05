@@ -4,8 +4,7 @@ import type {
   DailyGuideTask,
   Id,
   LearningEvaluation,
-  LearningRuntimeState,
-  StudySession
+  LearningRuntimeState
 } from '../../shared/types';
 
 export type ExecutionDerivedStatus =
@@ -42,11 +41,6 @@ export type ExecutionResult =
 export interface EvaluationDecisionLike {
   result?: LearningEvaluation['result'];
   recommendedAction?: LearningEvaluation['recommendedAction'];
-}
-
-export interface ExecutionSessionEvent {
-  kind: 'started' | 'paused' | 'completed' | 'ended';
-  session?: Pick<StudySession, 'id' | 'status' | 'blockId' | 'taskId'> | null;
 }
 
 type RuntimePointers = Pick<LearningRuntimeState, 'activeDailyTaskId' | 'activeStepId'>;
@@ -178,13 +172,6 @@ export function applyEvaluationResult(
   nextTask.currentAction = nextAction;
   nextTask.nextStartPoint = nextAction?.title ?? nextTask.nextStartPoint;
   return { ok: true, state: stateFromSelection(tasks, nextTask.id, nextAction?.id ?? null) };
-}
-
-export function applySessionEvent(
-  state: Pick<ExecutionState, 'tasks' | 'activeDailyTaskId' | 'activeStepId'>,
-  _event: ExecutionSessionEvent
-): ExecutionState {
-  return stateFromSelection(cloneTasks(state.tasks), state.activeDailyTaskId, state.activeStepId);
 }
 
 export function isPassingEvaluation(evaluation: EvaluationDecisionLike): boolean {

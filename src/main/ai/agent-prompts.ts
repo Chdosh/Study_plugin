@@ -1,62 +1,4 @@
-import type { GoalBrief, GoalIntakeMessage, PromptProfile, RoadmapStage, ShortPlanDay, StudyWindow, TaskItem } from '../../shared/types';
-
-export function buildImportPrompt(rawText: string, profile: PromptProfile): string {
-  return [
-    profile.content,
-    '',
-    '把下面粘贴的学习计划解析成可以长期保存的本地结构化数据。',
-    '规则：',
-    '- 保留学习者的真实意图。',
-    '- 把过大的事项拆成具体任务。',
-    '- 用分钟估算耗时。',
-    '- difficulty 只能使用 foundation、standard、advanced、exam。',
-    '- 如果一个任务明显依赖另一个任务，用标题记录依赖关系。',
-    '- 除枚举值和 JSON 字段名外，所有自然语言内容使用中文。',
-    '',
-    '输出 JSON 形状：',
-    '{ "goals": [...], "tasks": [...] }',
-    '',
-    '粘贴的计划：',
-    rawText
-  ].join('\n');
-}
-
-export function buildPlanPrompt(params: {
-  date: string;
-  windows: StudyWindow[];
-  tasks: TaskItem[];
-  goal?: unknown;
-  stage?: unknown;
-  context?: unknown;
-  profile: PromptProfile;
-  blockMinutes: number;
-}): string {
-  return [
-    params.profile.content,
-    '',
-    `为 ${params.date} 生成每块 ${params.blockMinutes} 分钟的学习计划。`,
-    '规则：',
-    '- 只使用未完成任务。',
-    '- 顶层 JSON 必须是 { "blocks": [...] }。',
-    '- 每个 blocks 元素必须使用这些英文 key：taskTitle、startTime、endTime、durationMinutes、objective、action、expectedOutput、difficulty、material、successCheck、fallback。',
-    '- startTime 和 endTime 必须是 HH:mm 字符串，例如 "20:00"。',
-    '- durationMinutes 必须是数字。',
-    '- difficulty 必须是字符串，可使用 foundation、standard、advanced、exam 或中文说明。',
-    '- 优先安排主动输出，减少被动阅读。',
-    '- 如果任务太大，只规划下一个有用切片。',
-    '- AI 输出只是草稿，必须由用户确认后才成为正式计划。',
-    '- 除枚举值和 JSON 字段名外，所有自然语言内容使用中文。',
-    '',
-    '示例：',
-    '{"blocks":[{"taskTitle":"任务标题","startTime":"20:00","endTime":"20:20","durationMinutes":20,"objective":"本块目标","action":"具体学习动作","expectedOutput":"本块产出","difficulty":"foundation","material":"使用材料","successCheck":"验收标准","fallback":"太难时的降级动作"}]}',
-    '',
-    `可用学习时间段：${JSON.stringify(params.windows)}`,
-    `当前目标：${JSON.stringify(params.goal ?? null)}`,
-    `当前阶段：${JSON.stringify(params.stage ?? null)}`,
-    `工作上下文：${JSON.stringify(params.context ?? null)}`,
-    `任务：${JSON.stringify(params.tasks)}`
-  ].join('\n');
-}
+import type { GoalBrief, GoalIntakeMessage, PromptProfile, RoadmapStage, ShortPlanDay, StudyWindow } from '../../shared/types';
 
 export function buildReviewPrompt(params: {
   date: string;
@@ -196,25 +138,6 @@ function clockWindowMinutes(window: StudyWindow): number {
     return 0;
   }
   return (endHour * 60 + endMinute) - (startHour * 60 + startMinute);
-}
-
-export function buildStageOutlinePrompt(params: {
-  goal: unknown;
-  tasks: unknown[];
-  profile: PromptProfile;
-}): string {
-  return [
-    params.profile.content,
-    '',
-    '为学习目标生成阶段性总体路线。只生成阶段大纲，不要展开所有具体学习步骤。',
-    '输出 JSON 形状：{ "goalSummary": "...", "stages": [...] }。',
-    '每个 stage 必须包含 title、objective、prerequisites、successCriteria。',
-    '阶段数量保持克制，优先 3 到 5 个阶段。',
-    '除 JSON 字段名外，所有自然语言内容使用中文。',
-    '',
-    `目标：${JSON.stringify(params.goal)}`,
-    `已有任务：${JSON.stringify(params.tasks)}`
-  ].join('\n');
 }
 
 export function buildTeachStepPrompt(params: { context: unknown; profile: PromptProfile }): string {

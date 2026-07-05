@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { DailyGuideAction, DailyGuideTask } from '../../shared/types';
 import {
   applyEvaluationResult,
-  applySessionEvent,
   completeAction,
   recoverExecutionState
 } from './execution-state-machine';
@@ -123,17 +122,6 @@ describe('execution-state-machine', () => {
     expect(result.state.status).toBe('guide_completed');
     expect(result.state.activeDailyTaskId).toBeNull();
     expect(result.state.activeStepId).toBeNull();
-  });
-
-  it('Session 结束不会改变任务与步骤状态', () => {
-    const state = stateWithTasks([
-      task('task-1', ['action-1', 'action-2'], { currentActionId: 'action-1' })
-    ], 'task-1', 'action-1');
-
-    const result = applySessionEvent(state, { kind: 'completed', session: { id: 'session-1', status: 'completed', blockId: 'task-1', taskId: null } });
-
-    expect(result).toEqual(state);
-    expect(result.status).toBe('active');
   });
 
   it('没有 active Session 时仍根据任务持久状态恢复', () => {

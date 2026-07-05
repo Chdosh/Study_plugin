@@ -12,18 +12,13 @@ import type {
   GoalIntake,
   GoalIntakeState,
   LayeredPlanResult,
-  PlanStage,
   PlanAdjustmentProposal,
   QuestionAnswerResult,
-  RawImport,
-  StageOutlineResult,
   StudyAppApi,
   StudySession,
-  StudyWindow,
   SubmissionEvaluationResult,
   TodayGuideState,
-  TeachStepResult,
-  TaskItem
+  TeachStepResult
 } from '../shared/types';
 
 const api: StudyAppApi = {
@@ -50,34 +45,6 @@ const api: StudyAppApi = {
   history: {
     listAll: (): Promise<HistoryIntakeSummary[]> => ipcRenderer.invoke(ipcChannels.historyListAll),
     getById: (intakeId: Id): Promise<GoalIntakeState> => ipcRenderer.invoke(ipcChannels.historyGetById, { intakeId })
-  },
-  imports: {
-    create: (rawText: string, source: RawImport['source']) =>
-      ipcRenderer.invoke(ipcChannels.importsCreate, { rawText, source }),
-    parse: (importId: Id, promptProfileId?: Id) =>
-      ipcRenderer.invoke(ipcChannels.importsParse, { importId, promptProfileId })
-  },
-  tasks: {
-    list: () => ipcRenderer.invoke(ipcChannels.tasksList),
-    update: (taskId: Id, patch: Partial<TaskItem>) =>
-      ipcRenderer.invoke(ipcChannels.tasksUpdate, { taskId, patch })
-  },
-  goals: {
-    create: (title: string, description?: string): Promise<LearningGoal> =>
-      ipcRenderer.invoke(ipcChannels.goalsCreate, { title, description }),
-    list: (): Promise<LearningGoal[]> => ipcRenderer.invoke(ipcChannels.goalsList),
-    listStages: (goalId?: Id): Promise<PlanStage[]> =>
-      ipcRenderer.invoke(ipcChannels.goalsListStages, { goalId }),
-    generateStages: (goalId?: Id, promptProfileId?: Id): Promise<StageOutlineResult> =>
-      ipcRenderer.invoke(ipcChannels.goalsGenerateStages, { goalId, promptProfileId }),
-    confirmStages: (goalId: Id): Promise<PlanStage[]> =>
-      ipcRenderer.invoke(ipcChannels.goalsConfirmStages, { goalId })
-  },
-  plans: {
-    list: (date?: string) => ipcRenderer.invoke(ipcChannels.plansList, { date }),
-    generate: (date: string, availableWindows: StudyWindow[], promptProfileId?: Id) =>
-      ipcRenderer.invoke(ipcChannels.plansGenerate, { date, availableWindows, promptProfileId }),
-    confirm: (planId: Id) => ipcRenderer.invoke(ipcChannels.plansConfirm, { planId })
   },
   sessions: {
     getActive: () => ipcRenderer.invoke(ipcChannels.sessionGetActive),
