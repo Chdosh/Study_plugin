@@ -154,7 +154,7 @@ export function StudyPage({
     return (
       <section className="study-layout">
         <div className="study-main">
-          <StatePanel type="empty" title="今日还没有执行稿" text="回到今日页，通过主动访谈生成第一天执行稿。" />
+          <StatePanel type="empty" title="还没有执行稿" text="回到总览页，通过主动访谈生成第一天执行稿。" />
           <button className="primary-action" onClick={() => onGoTo('today')}>
             <ClipboardList size={16} />
             回到今日
@@ -186,8 +186,22 @@ export function StudyPage({
       <div className="study-main">
         <header className="page-title-block">
           <h1>学习</h1>
-          <p>专注当下，逐步完成每一个学习动作</p>
+          <p>{guide.todayGoal}</p>
         </header>
+
+        {/* 全部任务横条 */}
+        <section className="study-task-strip" aria-label="今日任务">
+          {guide.tasks.map((task) => {
+            const isCurrent = task.id === currentTask?.id;
+            const cls = task.status === 'done' ? 'done' : task.status === 'active' ? 'active' : '';
+            return (
+              <span key={task.id} className={`study-task-chip ${isCurrent ? 'current' : ''} ${cls}`}>
+                <span className={`chip-dot ${cls}`} />
+                {task.title}
+              </span>
+            );
+          })}
+        </section>
 
         <section className="study-session-bar" aria-label="学习会话状态">
           <div className="session-task">
@@ -308,7 +322,7 @@ export function StudyPage({
       <div className="study-fixed-action-bar">
         <div className="bar-left">
           <button className="text-action back-today" type="button" onClick={() => void onGoTo('today')}>
-            返回今日
+            返回总览
           </button>
           <button
             className="text-action end-study"

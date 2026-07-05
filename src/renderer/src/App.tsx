@@ -95,6 +95,7 @@ export default function App(): JSX.Element {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [studyNotes, setStudyNotes] = useState('');
   const studyElapsedRef = useRef(0);
+  const mountedRef = useRef(false);
   const [showAiDrawer, setShowAiDrawer] = useState(false);
   const [aiDrawerInitialTab, setAiDrawerInitialTab] = useState<'question' | 'submission'>('question');
   const handleOpenDrawer = useCallback((tab: 'question' | 'submission' = 'question'): void => {
@@ -150,6 +151,17 @@ export default function App(): JSX.Element {
     });
   }, []);
 
+  // Refresh data when navigating back to today (skip initial mount)
+  useEffect(() => {
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      return;
+    }
+    if (view === 'today') {
+      void refresh();
+    }
+  }, [view]);
+
   // Listen for session state changes from main process (e.g., from float window)
   useEffect(() => {
     if (!window.studyApp?.onSessionStateChanged) return;
@@ -157,7 +169,6 @@ export default function App(): JSX.Element {
       setActiveSession(data.session);
       if (data.session?.status === 'completed' || data.session?.status === 'skipped') {
         void refresh();
-        setView((current) => (current === 'review' ? current : 'settlement'));
       }
     });
     return cleanup;
@@ -321,6 +332,7 @@ export default function App(): JSX.Element {
             onCompleteCurrentAction={() =>
               runAction('完成当前步骤', async () => {
                 setLearningState(await window.studyApp.learning.completeCurrentAction());
+                await refresh();
                 setTeaching(null);
               })
             }

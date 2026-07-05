@@ -209,7 +209,7 @@ export function ReviewPage({
         <div className="review-footer-actions">
           <button className="primary-action" type="button" onClick={() => onGoTo('today')}>
             <Play size={16} />
-            开始下一次学习
+            返回总览
           </button>
           <button className="secondary-action" type="button" onClick={() => onGoTo('review')}>
             <CalendarClock size={16} />

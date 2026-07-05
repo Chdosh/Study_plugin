@@ -114,7 +114,7 @@ export function buildDailyGuidePrompt(params: {
     '每日计划必须预留约 10%-15% 缓冲时间。如果时间不足，减少任务数量或缩小任务范围，不要压缩合理执行时间来塞入更多任务。',
     '每个 task 必须包含 title、objective、scope、estimatedMinutes、actions、deliverable、doneWhen、quickHint、evaluationMode、submissionPolicy、carryoverAllowed。',
     'estimatedMinutes 必须包含 min、target、max，且满足 min <= target <= max。target 是合理完成时间，不是固定倒计时。',
-    '每个 task 内部 actions 建议 3 到 6 个，最少 1 个；每个 action 包含 title、instruction、checkpoint。Action 只作为执行引导和本地检查点，不作为独立提交或 AI 评估单位。',
+    '每个 task 内部 actions 建议 3 到 6 个，最少 1 个；每个 action 必须包含 title、instruction、checkpoint 三个字段。Action 只作为执行引导和本地检查点，不作为独立提交或 AI 评估单位。',
     'submissionPolicy 默认且只能是 once_after_task。主任务最终提交一次；evaluationMode 可为 local 或 ai。',
     '主任务必须覆盖完整且有意义的学习或产出结果，不能写“学习某知识”“完善项目”这种模糊任务。',
     '不要生成复杂知识图谱、账号系统、云同步等偏离目标的内容。',

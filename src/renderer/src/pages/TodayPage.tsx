@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   AlertTriangle,
+  BookOpen,
   CalendarClock,
   CheckCircle2,
   ChevronRight,
+  Circle,
+  CircleDot,
   Clock3,
   FileText,
   Lightbulb,
@@ -30,24 +33,14 @@ import type {
 } from '../../../shared/types';
 import { MessageContent } from '../components/ai/MessageContent';
 import { TypingDots } from '../components/ai/TypingDots';
-import { TopBar } from '../components/layout/TopBar';
 import { HistoryPanel } from '../components/shared/HistoryPanel';
 import { GoalBriefEditor } from '../components/today/GoalBriefEditor';
 import { getCurrentGuideTaskSelection } from '../domain/guide-selection';
 import { getSessionElapsedSeconds } from '../float-behavior';
 import type { ViewKey } from '../types/navigation';
 
-const todayIso = new Date().toISOString().slice(0, 10);
-
 function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)));
-}
-
-function formatMinutes(totalMinutes: number): string {
-  if (totalMinutes < 60) return totalMinutes + '分钟';
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return minutes > 0 ? hours + '小时' + minutes + '分钟' : hours + '小时';
 }
 
 export function TodayPage({
@@ -140,6 +133,7 @@ export function TodayPage({
     }
   }
 
+  // ---- 无计划：访谈入口 ----
   if (!guide) {
     return (
       <section className="intake-workspace">
@@ -200,7 +194,7 @@ export function TodayPage({
           </section>
           <p className="micro-hint">
             <Lightbulb size={14} />
-            没有思路？点击“直接开始”，由 AI 先发起引导式提问。
+            没有思路？点击"直接开始"，由 AI 先发起引导式提问。
           </p>
         </div>
 
@@ -300,6 +294,7 @@ export function TodayPage({
     );
   }
 
+  // ---- 有计划：学习进度 + 知识库 ----
   const guideTasks = guide.tasks;
   const completedCount = guideTasks.filter((task) => task.status === 'done').length;
   const totalCount = guideTasks.length;
@@ -309,7 +304,7 @@ export function TodayPage({
   const activeSessionBelongsToCurrent = Boolean(currentPlanBlockId && activeSession?.blockId === currentPlanBlockId);
   const isCurrentActive = activeSessionBelongsToCurrent && activeSession?.status === 'active';
   const isCurrentPaused = activeSessionBelongsToCurrent && activeSession?.status === 'paused';
-  const elapsedMinutes = activeSession ? Math.max(0, Math.round(getSessionElapsedSeconds(activeSession) / 60)) : 0;
+  const totalElapsed = guide.tasks.reduce((sum, t) => sum + (t.totalElapsedMinutes || 0), 0);
   const primaryActionLabel = guide.status === 'draft'
     ? '确认并开始'
     : isCurrentActive
@@ -317,13 +312,6 @@ export function TodayPage({
       : isCurrentPaused
         ? '继续当前任务'
         : '开始当前任务';
-  const focusPathItems = [
-    goal?.title ?? '当前目标',
-    todayGuide?.roadmap[0]?.title ?? '当前阶段',
-    guide.weekFocus || '本周重点',
-    '今天',
-    currentTask?.title ?? '当前任务'
-  ].filter((item, index, items) => index === 0 || item !== items[index - 1]);
   const handleTodayPrimaryAction = async (): Promise<void> => {
     if (!currentPlanBlockId || guide.status === 'archived') return;
     if (guide.status === 'draft') {
@@ -340,74 +328,72 @@ export function TodayPage({
     await onStart(currentPlanBlockId);
   };
 
-  const totalElapsed = guide.tasks.reduce((sum, t) => sum + (t.totalElapsedMinutes || 0), 0);
-
   return (
     <section className="today-v2">
+      {/* ======== 左侧：学习进度 ======== */}
       <div className="today-v2-main">
         <header className="page-title-block">
-          <h1>今日</h1>
-          <p>按计划推进，保持稳定节奏</p>
+          <h1>{goal?.title ?? '学习进度'}</h1>
+          <p>{guide.todayGoal}</p>
         </header>
 
-        <section className="today-goal-strip">
-          <div className="goal-strip-icon">
-            <Target size={44} />
-          </div>
-          <div className="goal-strip-block">
-            <strong>今日总目标</strong>
-            <p>{guide.todayGoal}</p>
-            {currentTask && (
-              <p className="micro-hint">当前主任务：{currentTask.title} · {currentTask.objective}</p>
-            )}
-            <div className="goal-strip-meta" aria-label="今日概览">
-              <span><ListChecks size={16} />{totalCount} 个任务</span>
-              <span><Clock3 size={16} />预计 {totalMinutes} 分钟</span>
-            </div>
-          </div>
-          <button className="primary-action goal-strip-action" type="button" disabled={!currentPlanBlockId || guide.status === 'archived'} onClick={() => void handleTodayPrimaryAction()}>
-            <Play size={16} />
-            {guide.status === 'draft' ? primaryActionLabel : '开始今日学习'}
-          </button>
-        </section>
-
-        <div className="task-summary-list">
-          <h3 className="task-summary-heading">今日任务</h3>
-          {guide.tasks.map((task, index) => {
-            const taskStepCount = task.actions.length;
-            const doneStepCount = task.actions.filter((a) => a.status === 'done').length;
-            const isCurrentTask = task.id === currentTask?.id;
-            const statusLabel = task.status === 'done' ? '已完成' : task.status === 'active' ? '进行中' : '待开始';
-            return (
-              <div className={`task-summary-item ${isCurrentTask ? 'current' : ''} ${task.status === 'done' ? 'done' : ''}`} key={task.id}>
-                <span className="task-index">{String(index + 1).padStart(2, '0')}</span>
-                <div className="task-summary-info">
-                  <div className="task-summary-title-row">
-                    <strong>{task.title}</strong>
-                  </div>
-                  <span className="task-meta">
-                    {task.actions.slice(0, 4).map((action) => action.title).join('、') || task.doneWhen}
-                  </span>
-                  {taskStepCount > 0 && (
-                    <span className="task-step-progress">
-                      <ListChecks size={16} /> {taskStepCount} 个步骤
-                      <Clock3 size={16} /> {task.estimatedMinutes.target} 分钟
+        {/* 学习路径 / 阶段 */}
+        {todayGuide?.roadmap && todayGuide.roadmap.length > 0 && (
+          <section className="surface roadmap-stages-panel" aria-label="学习路径">
+            <h3>学习路径</h3>
+            <div className="roadmap-stage-list">
+              {todayGuide.roadmap.map((stage, index) => {
+                const isCurrentStage = index === 0;
+                const stageDone = completedCount === totalCount && totalCount > 0;
+                return (
+                  <div
+                    className={`roadmap-stage-item ${isCurrentStage ? 'current' : ''} ${stageDone && isCurrentStage ? 'done' : ''}`}
+                    key={stage.id ?? index}
+                  >
+                    <span className="stage-marker">
+                      {stageDone && isCurrentStage ? (
+                        <CheckCircle2 size={16} />
+                      ) : isCurrentStage ? (
+                        <CircleDot size={16} />
+                      ) : (
+                        <Circle size={16} />
+                      )}
                     </span>
-                  )}
-                </div>
-                <span className={`task-status-badge ${task.status === 'done' ? 'done' : task.status === 'active' ? 'active' : ''}`}>{statusLabel}</span>
-                <ChevronRight size={18} className="task-chevron" />
-              </div>
-            );
-          })}
-        </div>
+                    <div className="stage-info">
+                      <strong>{stage.title}</strong>
+                      <span>{stage.objective}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        <button
+          className="primary-action full"
+          type="button"
+          disabled={!currentPlanBlockId || guide.status === 'archived'}
+          onClick={() => void handleTodayPrimaryAction()}
+          style={{ marginTop: 8 }}
+        >
+          <Play size={16} />
+          {primaryActionLabel}
+        </button>
       </div>
 
-      <aside className="today-context-panel" aria-label="今日进度与历史">
+      {/* ======== 右侧：知识库 + 进度 ======== */}
+      <aside className="today-context-panel" aria-label="知识库与进度">
+        {/* 今日进度环 */}
         <div className="context-card progress-ring-card">
           <h3>今日进度</h3>
           <div className="progress-ring-widget">
-            <div className="progress-ring" style={{ background: `conic-gradient(var(--color-primary) ${progressPercent}%, var(--color-primary-surface) 0)` }}>
+            <div
+              className="progress-ring"
+              style={{
+                background: `conic-gradient(var(--color-primary) ${progressPercent}%, var(--color-primary-surface) 0)`
+              }}
+            >
               <span>{progressPercent}%</span>
             </div>
             <div className="progress-ring-stats">
@@ -423,6 +409,26 @@ export function TodayPage({
           </div>
         </div>
 
+        {/* 知识库（预留） */}
+        <div className="context-card knowledge-base-card">
+          <div className="context-card-head">
+            <h3>
+              <BookOpen size={16} />
+              知识库
+            </h3>
+          </div>
+          <p className="muted">
+            你已掌握的概念、笔记和反思会沉淀在这里。完成更多学习任务后，知识库将自动生长。
+          </p>
+          <div className="knowledge-placeholder">
+            <div className="placeholder-item">
+              <span className="placeholder-dot" />
+              <span>暂无积累，开始学习后自动记录</span>
+            </div>
+          </div>
+        </div>
+
+        {/* 最近学习 */}
         <div className="context-card">
           <div className="context-card-head">
             <h3>最近学习</h3>
@@ -436,33 +442,27 @@ export function TodayPage({
               learningState.recentStepSummaries.slice(0, 3).map((summary) => (
                 <div key={summary.id} className="recent-item">
                   <span className="recent-icon"><CheckCircle2 size={14} /></span>
-                  <span className="recent-text">{summary.kind === 'step' ? '完成步骤' : summary.kind === 'task' ? '完成任务' : '学习记录'}</span>
+                  <span className="recent-text">
+                    {summary.kind === 'step' ? '完成步骤' : summary.kind === 'task' ? '完成任务' : '学习记录'}
+                  </span>
                 </div>
               ))
             ) : (
-              <>
-                <div className="recent-item">
-                  <span className="recent-icon target"><Target size={16} /></span>
-                  <span className="recent-text"><strong>掌握 git init</strong><small>步骤 1/2</small></span>
-                  <span className="recent-time">今天 09:42</span>
-                </div>
-                <div className="recent-item">
-                  <span className="recent-icon done"><CheckCircle2 size={16} /></span>
-                  <span className="recent-text"><strong>学习计划已生成</strong><small>{totalCount} 个任务 · {totalMinutes} 分钟</small></span>
-                  <span className="recent-time">今天 09:40</span>
-                </div>
-                <div className="recent-item">
-                  <span className="recent-icon file"><FileText size={16} /></span>
-                  <span className="recent-text"><strong>项目：{goal?.title ?? '当前学习项目'}</strong><small>创建时间：今天 09:40</small></span>
-                </div>
-              </>
+              <div className="recent-item">
+                <span className="recent-icon file"><FileText size={16} /></span>
+                <span className="recent-text">
+                  <strong>计划已生成</strong>
+                  <small>{totalCount} 个任务 · {totalMinutes} 分钟</small>
+                </span>
+              </div>
             )}
           </div>
         </div>
 
+        {/* 计划管理 */}
         <div className="context-card restart-plan-card">
           <h3>计划管理</h3>
-          <p>当前计划不合适时，可以归档今天的计划，重新和 AI 确认目标并生成一版新计划。</p>
+          <p>当前计划不合适时，可以归档并重新开始。</p>
           <button className="secondary-action danger-outline full" type="button" onClick={() => setShowRestartConfirm(true)}>
             <RotateCcw size={16} />
             重新开始新计划
@@ -470,6 +470,7 @@ export function TodayPage({
         </div>
       </aside>
 
+      {/* 弹窗 */}
       {showHistory && (
         <HistoryPanel
           list={historyList}
@@ -526,5 +527,3 @@ export function TodayPage({
     </section>
   );
 }
-
-

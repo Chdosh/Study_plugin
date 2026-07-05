@@ -22,7 +22,16 @@ const stringArrayFromAiSchema = z.preprocess((value) => {
 const percentNumberFromAiSchema = z.preprocess((value) => {
   if (typeof value === 'string') {
     const match = value.match(/-?\d+(\.\d+)?/);
-    return match ? Number(match[0]) : value;
+    if (match) {
+      const n = Number(match[0]);
+      if (Number.isFinite(n)) {
+        return Math.max(0, Math.min(100, Math.round(n)));
+      }
+    }
+    return value;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.max(0, Math.min(100, Math.round(value)));
   }
   return value;
 }, z.number().int().min(0).max(100));
@@ -151,7 +160,10 @@ export const shortPlanAgentOutputSchema = z.object({
   weekFocus: z.string().min(1),
   days: z.array(
     z.object({
-      dayIndex: z.number().int().min(1).max(3),
+      dayIndex: z.preprocess(
+        (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : v),
+        z.number().int().min(1).max(3)
+      ),
       title: z.string().min(1),
       focus: z.string().min(1),
       tasks: stringArrayFromAiSchema,
@@ -174,19 +186,43 @@ export const dailyGuideAgentOutputSchema = z.object({
       objective: z.string().min(1),
       scope: z.string().min(1),
       estimatedMinutes: z.object({
-        min: z.number().int().min(5).max(360),
-        target: z.number().int().min(5).max(480),
-        max: z.number().int().min(5).max(600)
+        min: z.preprocess(
+          (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : v),
+          z.number().int().min(5).max(360)
+        ),
+        target: z.preprocess(
+          (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : v),
+          z.number().int().min(5).max(480)
+        ),
+        max: z.preprocess(
+          (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : v),
+          z.number().int().min(5).max(600)
+        )
       }).refine((value) => value.min <= value.target && value.target <= value.max, {
         message: 'estimatedMinutes 必须满足 min <= target <= max'
       }),
-      actions: z.array(
-        z.object({
-          title: z.string().min(1),
-          instruction: z.string().min(1),
-          checkpoint: z.string().min(1)
-        })
-      ).min(1).max(6),
+      actions: z.preprocess(
+        (val) => {
+          if (!Array.isArray(val)) return val;
+          return val.map((item) => {
+            if (typeof item === 'string') {
+              return { title: item };
+            }
+            return item;
+          });
+        },
+        z.array(
+          z.object({
+            title: z.string().min(1),
+            instruction: z.string().optional().default(''),
+            checkpoint: z.string().optional().default('')
+          }).transform((action) => ({
+            ...action,
+            instruction: action.instruction || `执行「${action.title}」`,
+            checkpoint: action.checkpoint || `完成「${action.title}」`
+          }))
+        ).min(1).max(6)
+      ),
       deliverable: z.string().min(1),
       doneWhen: stringArrayFromAiSchema,
       quickHint: z.string().min(1),

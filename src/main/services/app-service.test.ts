@@ -2,8 +2,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { AiClient } from '../ai/ai-client';
+import { aiReviews } from '../db/schema';
 import { createDatabase, type DatabaseClient } from '../db/client';
+import type { Database } from '../db/client';
+import type { InferSelectModel } from 'drizzle-orm';
 import { AppService } from './app-service';
 import type { SettingsService } from './settings-service';
 import { StudyStore } from './store';
@@ -17,6 +21,7 @@ vi.mock('./windows-foreground', () => ({
 
 let tmpPath: string;
 let client: DatabaseClient;
+let db: Database;
 let store: StudyStore;
 let appService: AppService;
 
@@ -24,6 +29,7 @@ beforeEach(async () => {
   tmpPath = mkdtempSync(join(tmpdir(), 'study-supervisor-app-service-test-'));
   const created = await createDatabase(tmpPath);
   client = created.client;
+  db = created.db;
   store = new StudyStore(created.db);
   await store.seedDefaults();
   appService = new AppService(
@@ -146,6 +152,126 @@ describe('AppService progressive AI flow', () => {
       'question',
       'submission_evaluation'
     ]);
+  });
+
+  it('handles need_more_info then ready in goal intake multi-round flow', async () => {
+    installDeterministicAiWithNeedMoreInfo();
+
+    const initial = await appService.getCurrentOnboarding();
+    expect(initial.messages[0].content).toContain('目标');
+
+    const firstMessage = await appService.sendOnboardingMessage('我想学前端，但不确定具体方向。');
+    expect(firstMessage.intake.status).toBe('collecting');
+    expect(firstMessage.intake.brief).toBeNull();
+
+    const secondMessage = await appService.sendOnboardingMessage('每天晚上 2 小时，三个月内达到初级水平。');
+    expect(secondMessage.intake.status).toBe('ready');
+    expect(secondMessage.intake.brief?.title).toBe('三个月达到初级前端工程师水平');
+
+    const confirmed = await appService.confirmOnboardingGoal();
+    expect(confirmed.goal.title).toBe('三个月达到初级前端工程师水平');
+
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    expect(layered.guide.tasks).toHaveLength(1);
+  });
+
+  it('generates a daily review via ReflectionAgent', async () => {
+    const date = new Date().toISOString().slice(0, 10);
+    installDeterministicAi();
+
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+
+    const review = await appService.generateReview(date);
+    expect(review.completionScore).toBe(75);
+    expect(review.focusScore).toBe(80);
+    expect(review.summary).toBeTruthy();
+    expect(review.reviewId).toBeTruthy();
+    expect(review.date).toBe(date);
+  });
+
+  it('records daily_guide failure to ai_reviews when schema validation fails', async () => {
+    const aiCalls = installDeterministicAiWithDailyGuideFailure();
+
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+
+    await expect(
+      appService.generateLayeredPlan(confirmed.goal.id)
+    ).rejects.toThrow('生成今日执行稿失败');
+
+    expect(aiCalls.map((call) => call.operation)).toEqual(['goal_intake', 'roadmap', 'short_plan', 'daily_guide']);
+
+    const reviews = await db.select().from(aiReviews);
+    const failedReview = reviews.find((r: InferSelectModel<typeof aiReviews>) => r.kind === 'daily_guide' && r.status === 'failed');
+    expect(failedReview).toBeTruthy();
+    expect(failedReview!.errorMessage).toContain('schema');
+  });
+
+  it('records daily_guide timeout to ai_reviews', async () => {
+    const aiCalls: Array<{ operation: string }> = [];
+
+    vi.spyOn(AiClient.prototype, 'generateJson').mockImplementation(async (request) => {
+      const operation = operationFromSystem(request.system);
+      aiCalls.push({ operation });
+
+      if (operation === 'goal_intake') {
+        return request.schema.parse({
+          status: 'ready',
+          reply: '确认目标。',
+          missingInfo: [],
+          shouldForceStart: false,
+          brief: {
+            title: '测试目标',
+            targetOutcome: '完成测试',
+            currentLevel: '初级',
+            availableTime: '每天 1 小时',
+            deadline: '一个月',
+            constraints: [],
+            successCriteria: ['测试通过']
+          }
+        });
+      }
+
+      if (operation === 'roadmap') {
+        return request.schema.parse({
+          goalSummary: '测试。',
+          stages: [{ title: '阶段1', objective: '测试', direction: '测试', successCriteria: '测试' }]
+        });
+      }
+
+      if (operation === 'short_plan') {
+        return request.schema.parse({
+          weekFocus: '测试',
+          days: [{
+            dayIndex: 1, title: '测试', focus: '测试',
+            tasks: ['测试'], expectedOutput: '测试', successCriteria: '测试'
+          }]
+        });
+      }
+
+      if (operation === 'daily_guide') {
+        throw new Error('AI 请求超时');
+      }
+
+      throw new Error(`Unexpected operation: ${operation}`);
+    });
+
+    await appService.sendOnboardingMessage('测试目标。');
+    const confirmed = await appService.confirmOnboardingGoal();
+
+    await expect(
+      appService.generateLayeredPlan(confirmed.goal.id)
+    ).rejects.toThrow('生成今日执行稿失败');
+
+    expect(aiCalls.map((c) => c.operation)).toEqual(['goal_intake', 'roadmap', 'short_plan', 'daily_guide']);
+
+    const reviews = await db.select().from(aiReviews);
+    const failedReview = reviews.find((r: InferSelectModel<typeof aiReviews>) => r.kind === 'daily_guide' && r.status === 'failed');
+    expect(failedReview).toBeTruthy();
+    expect(failedReview!.errorMessage).toContain('超时');
   });
 
 });
@@ -306,6 +432,165 @@ function installDeterministicAi(): Array<{ operation: string; user: string }> {
       });
     }
 
+    if (operation === 'reflection') {
+      return request.schema.parse({
+        completionScore: 75,
+        focusScore: 80,
+        summary: '今天完成了两个主任务，专注度良好，明天继续推进代码地图整理。',
+        nextActions: ['明天优先整理入口和 AI 链路', '补全代码地图并提交评估']
+      });
+    }
+
+    throw new Error(`Unexpected AI operation: ${operation}`);
+  });
+
+  return calls;
+}
+
+function installDeterministicAiWithNeedMoreInfo(): Array<{ operation: string }> {
+  const calls: Array<{ operation: string }> = [];
+  let intakeCalls = 0;
+
+  vi.spyOn(AiClient.prototype, 'generateJson').mockImplementation(async (request) => {
+    const operation = operationFromSystem(request.system);
+    calls.push({ operation });
+
+    if (operation === 'goal_intake') {
+      intakeCalls++;
+      if (intakeCalls === 1) {
+        return request.schema.parse({
+          status: 'need_more_info',
+          reply: '你提到想学前端，能否告诉我你的基础和时间安排？你希望达到什么具体水平？',
+          missingInfo: ['当前基础', '可用时间', '具体目标水平'],
+          shouldForceStart: false
+        });
+      }
+      return request.schema.parse({
+        status: 'ready',
+        reply: '我理解了，你的目标是三个月内达到初级前端工程师水平，每天晚上 2 小时。请确认。',
+        missingInfo: [],
+        shouldForceStart: false,
+        brief: {
+          title: '三个月达到初级前端工程师水平',
+          targetOutcome: '能完成一个可展示项目并准备求职面试',
+          currentLevel: '有基础网页经验，需要系统补齐工程能力',
+          availableTime: '每天晚上 2 小时',
+          deadline: '三个月',
+          constraints: ['不能一次学太多方向', '先以可演示项目为核心'],
+          successCriteria: ['能讲清项目主流程', '完成 README 初稿', '准备面试问答']
+        }
+      });
+    }
+
+    if (operation === 'roadmap') {
+      return request.schema.parse({
+        goalSummary: '围绕求职演示项目补齐工程能力。',
+        stages: [
+          {
+            title: '项目接管基础',
+            objective: '能跑通项目并讲清主流程',
+            direction: '先理解已有项目，再补关键技术点',
+            successCriteria: '能用 2 分钟讲清项目为什么做、怎么做'
+          }
+        ]
+      });
+    }
+
+    if (operation === 'short_plan') {
+      return request.schema.parse({
+        weekFocus: '把项目变成可讲、可演示的资产',
+        days: [
+          {
+            dayIndex: 1, title: '跑通并梳理项目', focus: '建立项目所有权',
+            tasks: ['跑一遍主流程', '写代码地图'],
+            expectedOutput: '项目接管文档初稿',
+            successCriteria: '能说清入口、主流程和关键模块'
+          }
+        ]
+      });
+    }
+
+    if (operation === 'daily_guide') {
+      return request.schema.parse({
+        date: '2026-07-03',
+        todayGoal: '今天把项目推进到可讲可演示。',
+        deliverables: ['主流程说明'],
+        boundaries: ['不做复杂知识图谱'],
+        acceptanceCriteria: ['能讲清项目主流程'],
+        tomorrowActions: ['修最高优先级 bug'],
+        tasks: [
+          {
+            title: '锁定今天边界',
+            objective: '明确今天只做接管和文档',
+            scope: '跑通主流程并记录边界',
+            estimatedMinutes: { min: 25, target: 35, max: 50 },
+            actions: [
+              { title: '打开项目', instruction: '启动应用', checkpoint: '看到主界面' },
+              { title: '跑主流程', instruction: '按路径操作', checkpoint: '记录关键入口' }
+            ],
+            deliverable: '功能清单',
+            doneWhen: ['写出已完成能力'],
+            quickHint: '跑不通就记录阻塞点',
+            evaluationMode: 'local' as const,
+            submissionPolicy: 'once_after_task' as const,
+            carryoverAllowed: true
+          }
+        ]
+      });
+    }
+
+    throw new Error(`Unexpected AI operation: ${operation}`);
+  });
+
+  return calls;
+}
+
+function installDeterministicAiWithDailyGuideFailure(): Array<{ operation: string }> {
+  const calls: Array<{ operation: string }> = [];
+
+  vi.spyOn(AiClient.prototype, 'generateJson').mockImplementation(async (request) => {
+    const operation = operationFromSystem(request.system);
+    calls.push({ operation });
+
+    if (operation === 'goal_intake') {
+      return request.schema.parse({
+        status: 'ready',
+        reply: '确认目标。',
+        missingInfo: [],
+        shouldForceStart: false,
+        brief: {
+          title: '三个月达到初级前端工程师水平',
+          targetOutcome: '完成可展示项目',
+          currentLevel: '有基础经验',
+          availableTime: '每天晚上 2 小时',
+          deadline: '三个月',
+          constraints: [],
+          successCriteria: ['能讲清项目']
+        }
+      });
+    }
+
+    if (operation === 'roadmap') {
+      return request.schema.parse({
+        goalSummary: '测试。',
+        stages: [{ title: '阶段1', objective: '测试', direction: '测试', successCriteria: '测试' }]
+      });
+    }
+
+    if (operation === 'short_plan') {
+      return request.schema.parse({
+        weekFocus: '测试',
+        days: [{
+          dayIndex: 1, title: '测试', focus: '测试',
+          tasks: ['测试'], expectedOutput: '测试', successCriteria: '测试'
+        }]
+      });
+    }
+
+    if (operation === 'daily_guide') {
+      throw new Error('Daily Guide schema validation failed: ZodError');
+    }
+
     throw new Error(`Unexpected AI operation: ${operation}`);
   });
 
@@ -320,6 +605,7 @@ function operationFromSystem(system: string): string {
   if (system.includes('tutoring-service')) return 'teach_step';
   if (system.includes('question-branch')) return 'question';
   if (system.includes('evaluation-service')) return 'submission_evaluation';
+  if (system.includes('reflection-agent')) return 'reflection';
   return 'unknown';
 }
 
