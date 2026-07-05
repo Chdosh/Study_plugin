@@ -1,65 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AiDrawer } from './components/ai/AiDrawer';
 import { AppShell } from './components/layout/AppShell';
-import { SettlementView } from './components/study/SettlementView';
 import { StudyPage } from './pages/StudyPage';
 import { ReviewPage } from './pages/ReviewPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { TodayPage } from './pages/TodayPage';
 import type { ViewKey } from './types/navigation';
-import type { LocalSettlement } from './types/settlement';
-import {
-  ArrowRight,
-  AlertTriangle,
-  Bell,
-  BookOpen,
-  Brain,
-  CalendarClock,
-  CheckCircle2,
-  Circle,
-  CircleCheck,
-  CircleDot,
-  ChevronRight,
-  ClipboardCheck,
-  ClipboardList,
-  Clock3,
-  FileText,
-  Folder,
-  HelpCircle,
-  Home,
-  Lightbulb,
-  ListChecks,
-  Loader2,
-  Pause,
-  PencilLine,
-  Play,
-  RotateCcw,
-  Search,
-  SendHorizontal,
-  Settings,
-  ShieldCheck,
-  Sparkles,
-  Square,
-  Target,
-  Timer,
-  TrendingUp,
-  Trophy,
-  Upload,
-  UserRound,
-  Wand2,
-  X,
-  XCircle,
-  ChevronsLeft,
-  ChevronsRight
-} from 'lucide-react';
+import { Timer } from 'lucide-react';
 import type {
   AppSettings,
-  DailyGuideTask,
   GoalBrief,
   GoalIntakeState,
-  HistoryIntakeSummary,
   LearningRuntimeSnapshot,
-  PlanAdjustmentProposal,
   QuestionAnswerResult,
   ReviewResult,
   SubmissionEvaluationResult,
@@ -67,7 +19,6 @@ import type {
   TodayGuideState,
   TeachStepResult
 } from '../../shared/types';
-import { getSessionElapsedSeconds } from './float-behavior';
 import { getPreviewConfig } from './bridge/url-state';
 import './styles.css';
 
@@ -77,7 +28,7 @@ const todayIso = new Date().toISOString().slice(0, 10);
 export default function App(): JSX.Element {
   const [view, setView] = useState<ViewKey>(() => {
     const previewView = getPreviewConfig().view;
-    return previewView === 'settlement' ? 'settlement' : previewView ?? 'today';
+    return previewView ?? 'today';
   });
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [onboarding, setOnboarding] = useState<GoalIntakeState | null>(null);
@@ -88,13 +39,9 @@ export default function App(): JSX.Element {
   const [questionAnswer, setQuestionAnswer] = useState<QuestionAnswerResult | null>(null);
   const [submissionResult, setSubmissionResult] = useState<SubmissionEvaluationResult | null>(null);
   const [review, setReview] = useState<ReviewResult | null>(null);
-  const [autoGenerateReview, setAutoGenerateReview] = useState(false);
-  const [latestSettlement, setLatestSettlement] = useState<LocalSettlement | null>(null);
   const [notice, setNotice] = useState<string>('就绪');
   const [bootError, setBootError] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [studyNotes, setStudyNotes] = useState('');
-  const studyElapsedRef = useRef(0);
   const mountedRef = useRef(false);
   const [showAiDrawer, setShowAiDrawer] = useState(false);
   const [aiDrawerInitialTab, setAiDrawerInitialTab] = useState<'question' | 'submission'>('question');
@@ -144,6 +91,16 @@ export default function App(): JSX.Element {
     }
   }
 
+  async function submitResultAndSyncSession(content: string): Promise<void> {
+    const result = await window.studyApp.learning.submitResult(content);
+    setSubmissionResult(result);
+    setTeaching(null);
+    setQuestionAnswer(null);
+
+    await refresh();
+    await syncActiveSession();
+  }
+
   useEffect(() => {
     void runAction('加载工作区', async () => {
       await refresh();
@@ -162,28 +119,12 @@ export default function App(): JSX.Element {
     }
   }, [view]);
 
-  // Listen for session state changes from main process (e.g., from float window)
+  // Keep renderer state aligned with the single main-process session source.
   useEffect(() => {
     if (!window.studyApp?.onSessionStateChanged) return;
     const cleanup = window.studyApp.onSessionStateChanged((data) => {
       setActiveSession(data.session);
-      if (data.session?.status === 'completed' || data.session?.status === 'skipped') {
-        void refresh();
-      }
-    });
-    return cleanup;
-  }, []);
-
-  useEffect(() => {
-    if (!window.studyApp?.onNavigate) return;
-    const cleanup = window.studyApp.onNavigate((page) => {
-      const validPages: ViewKey[] = ['today', 'study', 'review', 'settings'];
-      if (validPages.includes(page as ViewKey)) {
-        setView(page as ViewKey);
-        if (page === 'study') {
-          void syncActiveSession();
-        }
-      }
+      void refresh();
     });
     return cleanup;
   }, []);
@@ -257,30 +198,6 @@ export default function App(): JSX.Element {
                 setActiveSession(null);
               })
             }
-            onStart={(blockId) =>
-              runAction('开始学习', async () => {
-                const session = await window.studyApp.sessions.start(blockId);
-                setActiveSession(session);
-                await refresh();
-              })
-            }
-            onPause={() =>
-              runAction('暂停学习', async () => {
-                if (!activeSession) return;
-                const session = await window.studyApp.sessions.pause(activeSession.id);
-                setActiveSession(session);
-                await refresh();
-              })
-            }
-            onEnd={() =>
-              runAction('结束本次学习', async () => {
-                if (!activeSession) return;
-                const session = await window.studyApp.sessions.pause(activeSession.id);
-                setActiveSession(session);
-                await refresh();
-              })
-            }
-            onGoTo={setView}
           />
         )}
         {view === 'study' && (
@@ -291,15 +208,22 @@ export default function App(): JSX.Element {
             teaching={teaching}
             questionAnswer={questionAnswer}
             submissionResult={submissionResult}
-            notes={studyNotes}
-            onNotesChange={setStudyNotes}
-            onElapsedChange={(seconds) => { studyElapsedRef.current = seconds; }}
+            onStartSession={(blockId) =>
+              runAction('开始学习', async () => {
+                if (todayGuide?.guide?.status === 'draft') {
+                  await window.studyApp.guides.confirmDailyGuide(todayGuide.guide.id);
+                }
+                const session = await window.studyApp.sessions.start(blockId);
+                setActiveSession(session);
+                await refresh();
+              })
+            }
             onPauseSession={() =>
               activeSession
                 ? runAction('暂停学习', async () => {
                     const session = await window.studyApp.sessions.pause(activeSession.id);
                     setActiveSession(session);
-                    setLearningState(await window.studyApp.learning.getState());
+                    await syncActiveSession();
                   })
                 : Promise.resolve()
             }
@@ -308,17 +232,7 @@ export default function App(): JSX.Element {
                 ? runAction('恢复学习', async () => {
                     const session = await window.studyApp.sessions.start(activeSession.blockId!);
                     setActiveSession(session);
-                    setLearningState(await window.studyApp.learning.getState());
-                  })
-                : Promise.resolve()
-            }
-            onCompleteSession={(notes) =>
-              activeSession
-                ? runAction('完成学习', async () => {
-                    const session = await window.studyApp.sessions.complete(activeSession.id, notes);
-                    setActiveSession(session);
-                    await refresh();
-                    setView((current) => (current === 'review' ? current : 'settlement'));
+                    await syncActiveSession();
                   })
                 : Promise.resolve()
             }
@@ -350,47 +264,17 @@ export default function App(): JSX.Element {
             }
             onSubmitResult={(content) =>
               runAction('评估学习结果', async () => {
-                const result = await window.studyApp.learning.submitResult(content);
-                setSubmissionResult(result);
-                setTeaching(null);
-                setQuestionAnswer(null);
-                await refresh();
+                await submitResultAndSyncSession(content);
               })
             }
             onOpenDrawer={handleOpenDrawer}
-            onGoTo={setView}
-          />
-        )}
-        {view === 'settlement' && (
-          <SettlementView
-            activeSession={activeSession}
-            notes={studyNotes}
-            onNotesChange={setStudyNotes}
-            onBack={() => setView('study')}
-            onSave={() => {
-              if (activeSession) {
-                setLatestSettlement({
-                  session: activeSession,
-                  elapsedSeconds: Math.round((activeSession.durationMinutes ?? 0) * 60),
-                  notes: studyNotes
-                });
-              }
-              setActiveSession(null);
-              setStudyNotes('');
-              setAutoGenerateReview(true);
-              setView('review');
-            }}
-            onGoTo={setView}
           />
         )}
         {view === 'review' && (
           <ReviewPage
             review={review}
             todayGuide={todayGuide}
-            latestSettlement={latestSettlement}
             pendingAdjustment={learningState?.pendingAdjustment ?? null}
-            autoGenerate={autoGenerateReview}
-            onAutoGenerated={() => setAutoGenerateReview(false)}
             onGenerate={() =>
               runAction('生成复盘', async () => {
                 setReview(await window.studyApp.reviews.generate(todayIso));
@@ -403,7 +287,6 @@ export default function App(): JSX.Element {
                 await refresh();
               })
             }
-            onGoTo={setView}
           />
         )}
         {view === 'settings' && (
@@ -442,11 +325,7 @@ export default function App(): JSX.Element {
           }
           onSubmitResult={(content) =>
             runAction('评估学习结果', async () => {
-              const result = await window.studyApp.learning.submitResult(content);
-              setSubmissionResult(result);
-              setTeaching(null);
-              setQuestionAnswer(null);
-              await refresh();
+              await submitResultAndSyncSession(content);
             })
           }
         />

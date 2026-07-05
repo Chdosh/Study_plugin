@@ -35,7 +35,6 @@ beforeEach(async () => {
   appService = new AppService(
     store,
     createFakeSettingsService(),
-    () => null,
     () => null
   );
 });
@@ -138,6 +137,7 @@ describe('AppService progressive AI flow', () => {
     const submitted = await appService.submitLearningResult('已完成当前版本功能清单，并记录今天做和不做的边界。');
     expect(submitted.evaluation.result).toBe('passed');
     expect(submitted.nextStep?.title).toBe('找入口');
+    expect(await appService.getActiveSession()).toBeNull();
 
     const afterSubmit = await appService.getLearningState();
     expect(afterSubmit.state.activeDailyTaskId).toBe(secondBlockId);
@@ -152,6 +152,25 @@ describe('AppService progressive AI flow', () => {
       'question',
       'submission_evaluation'
     ]);
+  });
+
+  it('treats a paused Focus Session as the current recoverable session', async () => {
+    installDeterministicAi();
+
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+
+    const blockId = layered.guide.blocks[0].planBlockId;
+    const started = await appService.startSession(blockId);
+    const paused = await appService.pauseSession(started.id);
+    const current = await appService.getActiveSession();
+
+    expect(paused.status).toBe('paused');
+    expect(current?.session.id).toBe(started.id);
+    expect(current?.session.status).toBe('paused');
+    expect(current?.block.id).toBe(blockId);
   });
 
   it('handles need_more_info then ready in goal intake multi-round flow', async () => {

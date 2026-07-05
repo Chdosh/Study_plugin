@@ -1,16 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   CheckCircle2,
   ChevronRight,
   Circle,
   CircleCheck,
   CircleDot,
-  ClipboardList,
   Clock3,
   HelpCircle,
   Pause,
-  Play,
-  Square
+  Play
 } from 'lucide-react';
 import type {
   LearningRuntimeSnapshot,
@@ -23,8 +21,7 @@ import type {
 import { MessageContent } from '../components/ai/MessageContent';
 import { StatePanel } from '../components/shared/StatePanel';
 import { getCurrentGuideTaskSelection } from '../domain/guide-selection';
-import { getSessionElapsedSeconds } from '../float-behavior';
-import type { ViewKey } from '../types/navigation';
+import { getSessionElapsedSeconds } from '../session-time';
 
 function formatElapsedTime(totalSeconds: number): string {
   const hours = Math.floor(totalSeconds / 3600);
@@ -49,19 +46,15 @@ export function StudyPage({
   teaching,
   questionAnswer,
   submissionResult,
-  notes,
-  onNotesChange,
-  onElapsedChange,
+  onStartSession,
   onPauseSession,
   onResumeSession,
-  onCompleteSession,
   onTeachStep,
   onCompleteCurrentAction,
   onAskQuestion,
   onResolveQuestion,
   onSubmitResult,
-  onOpenDrawer,
-  onGoTo
+  onOpenDrawer
 }: {
   todayGuide: TodayGuideState | null;
   activeSession: StudySession | null;
@@ -69,19 +62,15 @@ export function StudyPage({
   teaching: TeachStepResult | null;
   questionAnswer: QuestionAnswerResult | null;
   submissionResult: SubmissionEvaluationResult | null;
-  notes: string;
-  onNotesChange: (notes: string) => void;
-  onElapsedChange: (seconds: number) => void;
+  onStartSession: (blockId: string) => Promise<void>;
   onPauseSession: () => Promise<void>;
   onResumeSession: () => Promise<void>;
-  onCompleteSession: (notes: string) => Promise<void>;
   onTeachStep: () => Promise<void>;
   onCompleteCurrentAction: () => Promise<void>;
   onAskQuestion: (question: string) => Promise<void>;
   onResolveQuestion: (threadId: string) => Promise<void>;
   onSubmitResult: (content: string) => Promise<void>;
   onOpenDrawer: (tab?: 'question' | 'submission') => void;
-  onGoTo: (view: ViewKey) => void;
 }): JSX.Element {
   const guide = todayGuide?.guide ?? null;
   const currentSelection = guide ? getCurrentGuideTaskSelection(guide.tasks, activeSession, learningState) : null;
@@ -134,18 +123,15 @@ export function StudyPage({
       const computeElapsed = (): number => getSessionElapsedSeconds(activeSession);
       const initial = computeElapsed();
       setElapsedSeconds(initial);
-      onElapsedChange(initial);
       timerRef.current = setInterval(() => {
         const s = computeElapsed();
         setElapsedSeconds(s);
-        onElapsedChange(s);
       }, 1000);
       return () => { if (timerRef.current) clearInterval(timerRef.current); };
     }
     if (isPaused && activeSession?.durationMinutes != null) {
       const total = getSessionElapsedSeconds(activeSession);
       setElapsedSeconds(total);
-      onElapsedChange(total);
     }
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [isActive, isPaused, activeSession?.startedAt, activeSession?.durationMinutes]);
@@ -154,30 +140,11 @@ export function StudyPage({
     return (
       <section className="study-layout">
         <div className="study-main">
-          <StatePanel type="empty" title="还没有执行稿" text="回到总览页，通过主动访谈生成第一天执行稿。" />
-          <button className="primary-action" onClick={() => onGoTo('today')}>
-            <ClipboardList size={16} />
-            回到今日
-          </button>
+          <StatePanel type="empty" title="还没有执行稿" text="请先在总览页完成目标确认和今日执行稿生成。" />
         </div>
       </section>
     );
   }
-
-  const [showEndConfirm, setShowEndConfirm] = useState(false);
-
-  const handleEndStudy = useCallback((): void => {
-    setShowEndConfirm(true);
-  }, []);
-
-  const confirmEndStudy = useCallback((): void => {
-    setShowEndConfirm(false);
-    void onCompleteSession(notes);
-  }, [notes, onCompleteSession]);
-
-  const cancelEndStudy = useCallback((): void => {
-    setShowEndConfirm(false);
-  }, []);
 
   const progressPercent = totalSteps > 0 ? Math.round((stepPosition / totalSteps) * 100) : 0;
 
@@ -320,21 +287,14 @@ export function StudyPage({
       </aside>
 
       <div className="study-fixed-action-bar">
-        <div className="bar-left">
-          <button className="text-action back-today" type="button" onClick={() => void onGoTo('today')}>
-            返回总览
-          </button>
-          <button
-            className="text-action end-study"
-            type="button"
-            onClick={() => void handleEndStudy()}
-          >
-            <Square size={16} />
-            结束学习
-          </button>
-        </div>
+        <div className="bar-left" />
         <div className="bar-right">
-          {isPaused ? (
+          {isNotStarted && currentPlanBlockId ? (
+            <button className="primary-action" type="button" onClick={() => void onStartSession(currentPlanBlockId)}>
+              <Play size={16} />
+              开始学习
+            </button>
+          ) : isPaused ? (
             <button className="secondary-action" type="button" onClick={() => void onResumeSession()}>
               <Play size={16} />
               继续学习
@@ -364,23 +324,6 @@ export function StudyPage({
           </button>
         </div>
       </div>
-
-      {showEndConfirm && (
-        <div className="modal-overlay" onClick={cancelEndStudy}>
-          <div className="modal-box" onClick={(e) => e.stopPropagation()}>
-            <h3>结束学习</h3>
-            <p>当前进度将被保留，你可以稍后继续。</p>
-            <div className="modal-actions">
-              <button className="secondary-action" type="button" onClick={cancelEndStudy}>
-                继续学习
-              </button>
-              <button className="primary-action" type="button" onClick={confirmEndStudy}>
-                保存进度并结束
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </section>
   );
 }

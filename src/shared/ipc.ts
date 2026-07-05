@@ -10,7 +10,6 @@ export const ipcChannels = {
   guidesListToday: 'guides:listToday',
   sessionsStart: 'sessions:start',
   sessionsPause: 'sessions:pause',
-  sessionsComplete: 'sessions:complete',
   sessionsSkip: 'sessions:skip',
   sessionsGetAccumulated: 'sessions:getAccumulated',
   learningGetState: 'learning:getState',
@@ -25,12 +24,6 @@ export const ipcChannels = {
   promptsUpdate: 'prompts:update',
   sessionGetActive: 'session:getActive',
   sessionStateChanged: 'session:stateChanged',
-  floatGetPosition: 'float:getPosition',
-  floatSavePosition: 'float:savePosition',
-  floatOpenMain: 'float:openMain',
-  floatResize: 'float:resize',
-  floatMove: 'float:move',
-  navigateToPage: 'navigate:toPage',
   historyListAll: 'history:listAll',
   historyGetById: 'history:getById'
 } as const;

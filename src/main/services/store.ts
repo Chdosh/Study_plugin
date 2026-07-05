@@ -687,7 +687,10 @@ export class StudyStore {
     const session = await this.finishSession(sessionId, 'completed', notes);
     if (session.blockId) {
       await this.updateDailyGuideTaskElapsed(session.blockId);
-      await this.initializeLearningForBlock(session.blockId, 'completed');
+      const runtime = await this.getOrCreateRuntimeState();
+      if (runtime.activeDailyTaskId === session.blockId) {
+        await this.upsertRuntimeState({ sessionStatus: 'completed' });
+      }
     }
     return session;
   }

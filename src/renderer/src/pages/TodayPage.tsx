@@ -12,10 +12,8 @@ import {
   Lightbulb,
   ListChecks,
   Loader2,
-  Play,
   RotateCcw,
   SendHorizontal,
-  Settings,
   Sparkles,
   Target,
   Trophy,
@@ -36,8 +34,6 @@ import { TypingDots } from '../components/ai/TypingDots';
 import { HistoryPanel } from '../components/shared/HistoryPanel';
 import { GoalBriefEditor } from '../components/today/GoalBriefEditor';
 import { getCurrentGuideTaskSelection } from '../domain/guide-selection';
-import { getSessionElapsedSeconds } from '../float-behavior';
-import type { ViewKey } from '../types/navigation';
 
 function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)));
@@ -54,11 +50,7 @@ export function TodayPage({
   onConfirmGoal,
   onGenerateLayeredPlan,
   onConfirmGuide,
-  onArchiveTodayAndRestart,
-  onStart,
-  onPause,
-  onEnd,
-  onGoTo
+  onArchiveTodayAndRestart
 }: {
   settings: AppSettings;
   onboarding: GoalIntakeState | null;
@@ -71,10 +63,6 @@ export function TodayPage({
   onGenerateLayeredPlan: (goalId: string) => Promise<void>;
   onConfirmGuide: (guideId: string) => Promise<void>;
   onArchiveTodayAndRestart: () => Promise<void>;
-  onStart: (blockId: string) => Promise<void>;
-  onPause: () => Promise<void>;
-  onEnd: () => Promise<void>;
-  onGoTo: (view: ViewKey) => void;
 }): JSX.Element {
   const [message, setMessage] = useState('');
   const [briefDraft, setBriefDraft] = useState<GoalBrief | null>(null);
@@ -248,12 +236,8 @@ export function TodayPage({
               <>
                 <p className="micro-hint" style={{ margin: '0 0 8px', textAlign: 'center' }}>
                   <AlertTriangle size={14} />
-                  请先配置 DeepSeek API Key
+                  请先在设置页配置 DeepSeek API Key
                 </p>
-                <button className="primary-action full" type="button" onClick={() => onGoTo('settings')}>
-                  <Settings size={16} />
-                  配置模型
-                </button>
               </>
             )
           )}
@@ -300,33 +284,7 @@ export function TodayPage({
   const totalCount = guideTasks.length;
   const totalMinutes = guideTasks.reduce((sum, task) => sum + task.estimatedMinutes.target, 0);
   const progressPercent = totalCount > 0 ? clampPercent((completedCount / totalCount) * 100) : 0;
-  const currentPlanBlockId = currentSelection?.planBlockId ?? null;
-  const activeSessionBelongsToCurrent = Boolean(currentPlanBlockId && activeSession?.blockId === currentPlanBlockId);
-  const isCurrentActive = activeSessionBelongsToCurrent && activeSession?.status === 'active';
-  const isCurrentPaused = activeSessionBelongsToCurrent && activeSession?.status === 'paused';
   const totalElapsed = guide.tasks.reduce((sum, t) => sum + (t.totalElapsedMinutes || 0), 0);
-  const primaryActionLabel = guide.status === 'draft'
-    ? '确认并开始'
-    : isCurrentActive
-      ? '进入学习'
-      : isCurrentPaused
-        ? '继续当前任务'
-        : '开始当前任务';
-  const handleTodayPrimaryAction = async (): Promise<void> => {
-    if (!currentPlanBlockId || guide.status === 'archived') return;
-    if (guide.status === 'draft') {
-      await onConfirmGuide(guide.id);
-      onGoTo('study');
-      await onStart(currentPlanBlockId);
-      return;
-    }
-    if (isCurrentActive) {
-      onGoTo('study');
-      return;
-    }
-    onGoTo('study');
-    await onStart(currentPlanBlockId);
-  };
 
   return (
     <section className="today-v2">
@@ -370,16 +328,22 @@ export function TodayPage({
           </section>
         )}
 
-        <button
-          className="primary-action full"
-          type="button"
-          disabled={!currentPlanBlockId || guide.status === 'archived'}
-          onClick={() => void handleTodayPrimaryAction()}
-          style={{ marginTop: 8 }}
-        >
-          <Play size={16} />
-          {primaryActionLabel}
-        </button>
+        {guide.status === 'draft' ? (
+          <button
+            className="primary-action full"
+            type="button"
+            onClick={() => void onConfirmGuide(guide.id)}
+            style={{ marginTop: 8 }}
+          >
+            <CheckCircle2 size={16} />
+            确认今日执行稿
+          </button>
+        ) : (
+          <div className="micro-hint" style={{ marginTop: 8 }}>
+            <CheckCircle2 size={14} />
+            今日执行稿已确认。开始、暂停、提交都在“学习”页完成。
+          </div>
+        )}
       </div>
 
       {/* ======== 右侧：知识库 + 进度 ======== */}
@@ -432,10 +396,6 @@ export function TodayPage({
         <div className="context-card">
           <div className="context-card-head">
             <h3>最近学习</h3>
-            <button className="text-action" type="button" onClick={() => void onGoTo('review')}>
-              查看全部
-              <ChevronRight size={14} />
-            </button>
           </div>
           <div className="recent-list">
             {learningState?.recentStepSummaries && learningState.recentStepSummaries.length > 0 ? (

@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from 'electron';
+import { ipcMain } from 'electron';
 import { ipcChannels } from '../shared/ipc';
 import type { AppService } from './services/app-service';
 
@@ -22,9 +22,6 @@ export function registerIpcHandlers(appService: AppService): void {
   ipcMain.handle(ipcChannels.guidesListToday, () => appService.listTodayGuide());
   ipcMain.handle(ipcChannels.sessionsStart, (_event, payload) => appService.startSession(payload.blockId));
   ipcMain.handle(ipcChannels.sessionsPause, (_event, payload) => appService.pauseSession(payload.sessionId));
-  ipcMain.handle(ipcChannels.sessionsComplete, (_event, payload) =>
-    appService.completeSession(payload.sessionId, payload.notes)
-  );
   ipcMain.handle(ipcChannels.sessionsSkip, (_event, payload) =>
     appService.skipBlock(payload.blockId, payload.reason)
   );
@@ -54,39 +51,6 @@ export function registerIpcHandlers(appService: AppService): void {
     appService.updatePrompt(payload.profileId, payload.content)
   );
   ipcMain.handle(ipcChannels.sessionGetActive, () => appService.getActiveSession());
-  ipcMain.handle(ipcChannels.floatGetPosition, () => appService.getFloatPosition());
-  ipcMain.handle(ipcChannels.floatSavePosition, (_event, payload) =>
-    appService.saveFloatPosition(payload.x, payload.y)
-  );
-  ipcMain.handle(ipcChannels.floatOpenMain, async () => {
-    const wins = BrowserWindow.getAllWindows();
-    for (const win of wins) {
-      if (!win.isDestroyed() && !win.getTitle().includes('浮窗')) {
-        if (win.isMinimized()) win.restore();
-        win.show();
-        win.focus();
-        win.webContents.send(ipcChannels.navigateToPage, 'study');
-        const active = await appService.getActiveSession();
-        if (active) {
-          await appService.pushSessionState(active.session);
-        }
-        break;
-      }
-    }
-  });
-  ipcMain.handle(ipcChannels.floatResize, (_event, payload: { width: number; height: number }) => {
-    const win = BrowserWindow.fromWebContents(_event.sender);
-    if (win && !win.isDestroyed()) {
-      win.setSize(payload.width, payload.height);
-    }
-  });
-  ipcMain.handle(ipcChannels.floatMove, (_event, payload: { deltaX: number; deltaY: number }) => {
-    const win = BrowserWindow.fromWebContents(_event.sender);
-    if (win && !win.isDestroyed()) {
-      const [x, y] = win.getPosition();
-      win.setPosition(x + payload.deltaX, y + payload.deltaY);
-    }
-  });
   ipcMain.handle(ipcChannels.historyListAll, () => appService.listHistory());
   ipcMain.handle(ipcChannels.historyGetById, (_event, payload) => appService.getHistoryIntake(payload.intakeId));
 }

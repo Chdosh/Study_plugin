@@ -32,7 +32,6 @@ export class MockStudyAppApi implements StudyAppApi {
   private _guideSeq = 0;
   private _intakeSeq = 0;
   private _sessionSeq = 0;
-  private _navCallbacks: Array<(page: string) => void> = [];
   private _sessionCallbacks: Array<(data: { session: StudySession | null; block: DailyPlanBlock | null }) => void> = [];
   private _goalIntakeState: GoalIntakeState;
   private _todayGuideState: TodayGuideState;
@@ -200,13 +199,6 @@ export class MockStudyAppApi implements StudyAppApi {
       }
       return this._currentSession ?? createStudySession('paused');
     },
-    complete: async (sessionId: string, notes?: string): Promise<StudySession> => {
-      await this.maybeDelay();
-      this._currentSession = createStudySession('completed', this._currentSession?.blockId ?? undefined);
-      if (notes) this._currentSession.notes = notes;
-      this._notifySessionChange();
-      return this._currentSession;
-    },
     skip: async (blockId: string, reason: string): Promise<void> => {
       await this.maybeDelay();
       // no-op
@@ -344,13 +336,6 @@ export class MockStudyAppApi implements StudyAppApi {
   };
 
   // ── event listeners ───────────────────────────────────────────────
-  onNavigate = (callback: (page: string) => void): (() => void) => {
-    this._navCallbacks.push(callback);
-    return () => {
-      this._navCallbacks = this._navCallbacks.filter((cb) => cb !== callback);
-    };
-  };
-
   onSessionStateChanged = (callback: (data: { session: StudySession | null; block: DailyPlanBlock | null }) => void): (() => void) => {
     this._sessionCallbacks.push(callback);
     return () => {

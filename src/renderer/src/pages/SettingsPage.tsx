@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Bell, Brain, ChevronRight, Folder, Target, UserRound } from 'lucide-react';
+import { Brain, ChevronRight, Folder, Target, UserRound } from 'lucide-react';
 import type { AppSettings } from '../../../shared/types';
 
 export function SettingsPage({
@@ -15,12 +15,6 @@ export function SettingsPage({
   const [model, setModel] = useState(settings.deepseekModel);
   const [apiKey, setApiKey] = useState('');
   const [blockMinutes, setBlockMinutes] = useState(settings.defaultBlockMinutes);
-  const [restReminder, setRestReminder] = useState(true);
-  const [autoNextStep, setAutoNextStep] = useState(false);
-  const [autoReviewAfterDone, setAutoReviewAfterDone] = useState(true);
-  const [showFloat, setShowFloat] = useState(true);
-  const [timerAlert, setTimerAlert] = useState(true);
-  const [soundAlert, setSoundAlert] = useState(false);
 
   async function handleSave(): Promise<void> {
     await runAction('保存设置', async () => {
@@ -99,18 +93,6 @@ export function SettingsPage({
               <span>分钟</span>
             </div>
           </label>
-          <label className="toggle-row">
-            <input type="checkbox" checked={restReminder} onChange={(event) => setRestReminder(event.target.checked)} />
-            <span>休息提醒</span>
-          </label>
-          <label className="toggle-row">
-            <input type="checkbox" checked={autoNextStep} onChange={(event) => setAutoNextStep(event.target.checked)} />
-            <span>自动进入下一步骤</span>
-          </label>
-          <label className="toggle-row">
-            <input type="checkbox" checked={autoReviewAfterDone} onChange={(event) => setAutoReviewAfterDone(event.target.checked)} />
-            <span>完成后自动进入复盘</span>
-          </label>
         </section>
 
         <section className="settings-card">
@@ -131,26 +113,6 @@ export function SettingsPage({
             <span className="settings-value">今天 {new Date().toTimeString().slice(0, 5)}</span>
           </div>
           <button className="secondary-action full" type="button">检查更新</button>
-        </section>
-
-        <section className="settings-card">
-          <div className="settings-card-title">
-            <span className="settings-card-icon"><Bell size={22} /></span>
-            <h3>通知与浮窗</h3>
-          </div>
-          <label className="toggle-row">
-            <input type="checkbox" checked={showFloat} onChange={(event) => setShowFloat(event.target.checked)} />
-            <span>学习中显示浮窗</span>
-          </label>
-          <label className="toggle-row">
-            <input type="checkbox" checked={timerAlert} onChange={(event) => setTimerAlert(event.target.checked)} />
-            <span>计时提醒</span>
-          </label>
-          <label className="toggle-row">
-            <input type="checkbox" checked={soundAlert} onChange={(event) => setSoundAlert(event.target.checked)} />
-            <span>声音提示</span>
-          </label>
-          <button className="text-action" type="button">预览浮窗样式</button>
         </section>
 
         <section className="settings-card">
@@ -180,4 +142,3 @@ export function SettingsPage({
     </section>
   );
 }
-

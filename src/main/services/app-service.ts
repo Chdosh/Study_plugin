@@ -35,8 +35,7 @@ export class AppService {
   constructor(
     private readonly store: StudyStore,
     private readonly settings: SettingsService,
-    private readonly getMainWindow: () => BrowserWindow | null,
-    private readonly getFloatWindow: () => BrowserWindow | null
+    private readonly getMainWindow: () => BrowserWindow | null
   ) {
     this.focusMonitor = new FocusMonitor(store);
     this.contextBuilder = new ContextBuilder(store);
@@ -255,13 +254,6 @@ export class AppService {
     return session;
   }
 
-  async completeSession(sessionId: Id, notes?: string) {
-    this.focusMonitor.stop();
-    const session = await this.store.completeSession(sessionId, notes);
-    await this.pushSessionState(session);
-    return session;
-  }
-
   async skipBlock(blockId: Id, reason: string) {
     if (!reason.trim()) {
       throw new Error('跳过学习块时必须填写原因。');
@@ -302,8 +294,9 @@ export class AppService {
 
   async getActiveSession(): Promise<{ session: StudySession; block: DailyPlanBlock } | null> {
     const sessions = await this.store.listSessions();
-    // Only show float for truly active sessions (not paused — those can resume from main window)
-    const active = sessions.find((s) => s.status === 'active');
+    // "Current session" for UI recovery: active and paused sessions both belong to
+    // the same resumable Focus Session. Completed/skipped sessions are historical.
+    const active = sessions.find((s) => s.status === 'active' || s.status === 'paused');
     if (!active || !active.blockId) return null;
     const block = await this.store.getBlock(active.blockId);
     if (!block) return null;
@@ -455,12 +448,18 @@ export class AppService {
       });
     }
     const decisionOutput = buildLocalDecisionFromEvaluation(evaluationOutput);
-    return this.store.saveEvaluationAndDecision({
+    const result = await this.store.saveEvaluationAndDecision({
       submission,
       evaluationOutput,
       decisionOutput,
       evaluationAiReviewId
     });
+    if (result.decision.taskCompleted && active?.session) {
+      this.focusMonitor.stop();
+      const completedSession = await this.store.completeSession(active.session.id);
+      await this.pushSessionState(completedSession);
+    }
+    return result;
   }
 
   decidePlanAdjustment(proposalId: Id, status: 'accepted' | 'rejected') {
@@ -472,27 +471,10 @@ export class AppService {
     if (session.blockId) {
       block = await this.store.getBlock(session.blockId);
     }
-    const payload = { session, block };
-    const allWindows = [this.getMainWindow(), this.getFloatWindow()].filter(Boolean) as BrowserWindow[];
-    for (const win of allWindows) {
-      if (!win.isDestroyed()) {
-        win.webContents.send(ipcChannels.sessionStateChanged, payload);
-      }
+    const win = this.getMainWindow();
+    if (win && !win.isDestroyed()) {
+      win.webContents.send(ipcChannels.sessionStateChanged, { session, block });
     }
-  }
-
-  async getFloatPosition(): Promise<{ x: number; y: number } | null> {
-    const raw = await this.store.getSetting('floatWindowPosition');
-    if (!raw) return null;
-    try {
-      return JSON.parse(raw) as { x: number; y: number };
-    } catch {
-      return null;
-    }
-  }
-
-  async saveFloatPosition(x: number, y: number): Promise<void> {
-    await this.store.putSetting('floatWindowPosition', JSON.stringify({ x, y }));
   }
 
   listPrompts() {

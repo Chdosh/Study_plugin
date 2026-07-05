@@ -3,7 +3,6 @@ import { ipcChannels } from '../shared/ipc';
 import type {
   AppSettings,
   DailyPlanBlock,
-  FloatWindowApi,
   GoalBrief,
   HistoryIntakeSummary,
   Id,
@@ -50,8 +49,6 @@ const api: StudyAppApi = {
     getActive: () => ipcRenderer.invoke(ipcChannels.sessionGetActive),
     start: (blockId: Id) => ipcRenderer.invoke(ipcChannels.sessionsStart, { blockId }),
     pause: (sessionId: Id) => ipcRenderer.invoke(ipcChannels.sessionsPause, { sessionId }),
-    complete: (sessionId: Id, notes?: string) =>
-      ipcRenderer.invoke(ipcChannels.sessionsComplete, { sessionId, notes }),
     skip: (blockId: Id, reason: string) => ipcRenderer.invoke(ipcChannels.sessionsSkip, { blockId, reason }),
     getAccumulated: (blockId: Id, excludeSessionId?: Id) =>
       ipcRenderer.invoke(ipcChannels.sessionsGetAccumulated, { blockId, excludeSessionId })
@@ -79,15 +76,6 @@ const api: StudyAppApi = {
     update: (profileId: Id, content: string) =>
       ipcRenderer.invoke(ipcChannels.promptsUpdate, { profileId, content })
   },
-  onNavigate: (callback: (page: string) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, page: string) => {
-      callback(page);
-    };
-    ipcRenderer.on(ipcChannels.navigateToPage, handler);
-    return () => {
-      ipcRenderer.removeListener(ipcChannels.navigateToPage, handler);
-    };
-  },
   onSessionStateChanged: (callback: (data: { session: StudySession | null; block: DailyPlanBlock | null }) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, data: { session: StudySession | null; block: DailyPlanBlock | null }) => {
       callback(data);
@@ -99,33 +87,4 @@ const api: StudyAppApi = {
   }
 };
 
-const floatApi: FloatWindowApi = {
-  session: {
-    getActive: () => ipcRenderer.invoke(ipcChannels.sessionGetActive),
-    pause: (sessionId: Id) => ipcRenderer.invoke(ipcChannels.sessionsPause, { sessionId }),
-    resume: (blockId: Id) => ipcRenderer.invoke(ipcChannels.sessionsStart, { blockId }),
-    complete: (sessionId: Id, notes?: string) =>
-      ipcRenderer.invoke(ipcChannels.sessionsComplete, { sessionId, notes }),
-    getAccumulated: (blockId: Id, excludeSessionId?: Id) =>
-      ipcRenderer.invoke(ipcChannels.sessionsGetAccumulated, { blockId, excludeSessionId }),
-    onStateChanged: (callback: (data: { session: StudySession; block: DailyPlanBlock | null }) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, data: { session: StudySession; block: DailyPlanBlock | null }) => {
-        callback(data);
-      };
-      ipcRenderer.on(ipcChannels.sessionStateChanged, handler);
-      return () => {
-        ipcRenderer.removeListener(ipcChannels.sessionStateChanged, handler);
-      };
-    }
-  },
-  float: {
-    getPosition: () => ipcRenderer.invoke(ipcChannels.floatGetPosition),
-    savePosition: (x: number, y: number) => ipcRenderer.invoke(ipcChannels.floatSavePosition, { x, y }),
-    openMain: () => ipcRenderer.invoke(ipcChannels.floatOpenMain),
-    resize: (width: number, height: number) => ipcRenderer.invoke(ipcChannels.floatResize, { width, height }),
-    move: (deltaX: number, deltaY: number) => ipcRenderer.invoke(ipcChannels.floatMove, { deltaX, deltaY })
-  }
-};
-
 contextBridge.exposeInMainWorld('studyApp', api);
-contextBridge.exposeInMainWorld('floatApp', floatApi);

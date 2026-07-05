@@ -449,24 +449,6 @@ export interface SubmissionEvaluationResult {
   nextStep: LearningStep | null;
 }
 
-export interface FloatWindowApi {
-  session: {
-    getActive: () => Promise<{ session: StudySession; block: DailyPlanBlock } | null>;
-    pause: (sessionId: Id) => Promise<StudySession>;
-    resume: (blockId: Id) => Promise<StudySession>;
-    complete: (sessionId: Id, notes?: string) => Promise<StudySession>;
-    getAccumulated: (blockId: Id, excludeSessionId?: Id) => Promise<number>;
-    onStateChanged: (callback: (data: { session: StudySession; block: DailyPlanBlock | null }) => void) => () => void;
-  };
-  float: {
-    getPosition: () => Promise<{ x: number; y: number } | null>;
-    savePosition: (x: number, y: number) => Promise<void>;
-    openMain: () => Promise<void>;
-    resize: (width: number, height: number) => Promise<void>;
-    move: (deltaX: number, deltaY: number) => Promise<void>;
-  };
-}
-
 export interface StudyAppApi {
   settings: {
     get: () => Promise<AppSettings>;
@@ -491,7 +473,6 @@ export interface StudyAppApi {
     getActive: () => Promise<{ session: StudySession; block: DailyPlanBlock } | null>;
     start: (blockId: Id) => Promise<StudySession>;
     pause: (sessionId: Id) => Promise<StudySession>;
-    complete: (sessionId: Id, notes?: string) => Promise<StudySession>;
     skip: (blockId: Id, reason: string) => Promise<void>;
     getAccumulated: (blockId: Id, excludeSessionId?: Id) => Promise<number>;
   };
@@ -511,6 +492,5 @@ export interface StudyAppApi {
     list: () => Promise<PromptProfile[]>;
     update: (profileId: Id, content: string) => Promise<PromptProfile>;
   };
-  onNavigate: (callback: (page: string) => void) => () => void;
   onSessionStateChanged: (callback: (data: { session: StudySession | null; block: DailyPlanBlock | null }) => void) => () => void;
 }
