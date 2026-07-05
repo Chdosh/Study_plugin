@@ -41,7 +41,7 @@ import type {
   SubmissionEvaluationAgentOutput,
   TeachStepAgentOutput
 } from '../../shared/schemas';
-import { applyEvaluationResult, completeAction, type ExecutionState } from '../domain/execution-state-machine';
+import { applyEvaluationResult, completeAction, isPassingEvaluation, type ExecutionState } from '../domain/execution-state-machine';
 import { defaultPromptProfiles } from '../db/default-prompts';
 import type { Database } from '../db/client';
 import {
@@ -883,20 +883,16 @@ export class StudyStore {
     return rows.map(mapStage);
   }
 
-  async startSession(blockId: string): Promise<StudySession> {
-    const blocks = await this.db.select().from(dailyPlanBlocks).where(eq(dailyPlanBlocks.id, blockId)).limit(1);
-    if (!blocks[0]) throw new Error(`Block not found: ${blockId}`);
-    if (blocks[0].status === 'done' || blocks[0].status === 'skipped' || blocks[0].status === 'deferred') {
-      throw new Error(`当前任务已${blocks[0].status === 'done' ? '完成' : blocks[0].status === 'skipped' ? '跳过' : '推迟'}，不能重新开始学习。`);
-    }
-    const guideTask = await this.getDailyGuideTaskByBlockId(blockId);
-    if (guideTask && guideTask.status === 'done') {
+  async startSession(taskId: string): Promise<StudySession> {
+    const guideTask = await this.getDailyGuideTaskById(taskId);
+    if (!guideTask) throw new Error(`找不到主任务：${taskId}`);
+    if (guideTask.status === 'done') {
       throw new Error('当前主任务已完成，不能重新开始学习。');
     }
-    const existingSessions = await this.db.select().from(studySessions).where(eq(studySessions.blockId, blockId));
+
+    const existingSessions = await this.db.select().from(studySessions).where(eq(studySessions.taskId, taskId));
     const existingActive = existingSessions.find((session) => session.status === 'active');
     if (existingActive) {
-      await this.initializeLearningForBlock(blockId, 'active');
       return mapSession(existingActive);
     }
     const existingPaused = existingSessions
@@ -912,16 +908,13 @@ export class StudyStore {
           status: 'active'
         })
         .where(eq(studySessions.id, existingPaused.id));
-      await this.db.update(dailyPlanBlocks).set({ status: 'active' }).where(eq(dailyPlanBlocks.id, blockId));
-      await this.initializeLearningForBlock(blockId, 'active');
       const rows = await this.db.select().from(studySessions).where(eq(studySessions.id, existingPaused.id)).limit(1);
       return mapSession(rows[0]);
     }
-    await this.db.update(dailyPlanBlocks).set({ status: 'active' }).where(eq(dailyPlanBlocks.id, blockId));
     const row = {
       id: createId('session'),
-      blockId,
-      taskId: blocks[0].taskId,
+      taskId,
+      taskItemsId: null,
       startedAt: nowIso(),
       endedAt: null,
       durationMinutes: null,
@@ -930,25 +923,24 @@ export class StudyStore {
       notes: null
     };
     await this.db.insert(studySessions).values(row);
-    await this.initializeLearningForBlock(blockId, 'active');
+    await this.initializeLearningForTask(taskId);
     return row;
   }
 
   async pauseSession(sessionId: string): Promise<StudySession> {
     const session = await this.finishSession(sessionId, 'paused');
-    if (session.blockId) {
-      await this.updateDailyGuideTaskElapsed(session.blockId);
-      await this.initializeLearningForBlock(session.blockId, 'paused');
+    if (session.taskId) {
+      await this.updateDailyGuideTaskElapsed(session.taskId);
     }
     return session;
   }
 
   async completeSession(sessionId: string, notes?: string): Promise<StudySession> {
     const session = await this.finishSession(sessionId, 'completed', notes);
-    if (session.blockId) {
-      await this.updateDailyGuideTaskElapsed(session.blockId);
+    if (session.taskId) {
+      await this.updateDailyGuideTaskElapsed(session.taskId);
       const runtime = await this.getOrCreateRuntimeState();
-      if (runtime.activeDailyTaskId === session.blockId) {
+      if (runtime.activeDailyTaskId === session.taskId) {
         await this.upsertRuntimeState({ sessionStatus: 'completed' });
       }
     }
@@ -1021,7 +1013,7 @@ export class StudyStore {
   }
 
   async getAccumulatedSeconds(blockId: string, excludeSessionId?: string): Promise<number> {
-    const rows = await this.db.select().from(studySessions).where(eq(studySessions.blockId, blockId));
+    const rows = await this.db.select().from(studySessions).where(eq(studySessions.taskId, blockId));
     let total = 0;
     for (const row of rows) {
       if (excludeSessionId && row.id === excludeSessionId) continue;
@@ -1037,68 +1029,26 @@ export class StudyStore {
     return rows[0] ? mapPlanBlock(rows[0]) : null;
   }
 
-  async initializeLearningForBlock(blockId: string, sessionStatus: LearningRuntimeState['sessionStatus']): Promise<LearningRuntimeSnapshot> {
-    const blockRows = await this.db.select().from(dailyPlanBlocks).where(eq(dailyPlanBlocks.id, blockId)).limit(1);
-    const block = blockRows[0];
-    if (!block) throw new Error(`Block not found: ${blockId}`);
+  private async initializeLearningForTask(taskId: string, sessionStatus?: LearningRuntimeState['sessionStatus']): Promise<LearningRuntimeSnapshot> {
+    const guideTask = await this.getDailyGuideTaskById(taskId);
+    const goal = guideTask
+      ? (await this.db.select().from(dailyGuides).where(eq(dailyGuides.id, guideTask.guideId)).limit(1))[0]
+      : null;
 
-    const task = block.taskId ? await this.getTask(block.taskId) : null;
-    const goal = task?.goalId ? await this.getGoal(task.goalId) : (await this.listGoals())[0] ?? null;
-    const stages = goal ? await this.listStages(goal.id) : [];
-    const stage = stages.find((item) => item.status === 'active') ?? stages[0] ?? null;
+    const roadmapRows = goal
+      ? await this.db.select().from(roadmapStages).where(eq(roadmapStages.goalId, goal.goalId)).orderBy(asc(roadmapStages.position)).limit(1)
+      : [];
+    const stageId = roadmapRows[0]?.id ?? null;
 
-    if (sessionStatus === 'completed') {
-      const existingSteps = await this.db
-        .select()
-        .from(learningSteps)
-        .where(eq(learningSteps.blockId, blockId))
-        .orderBy(asc(learningSteps.position));
-      const latestStep = existingSteps.length > 0 ? mapLearningStep(existingSteps[existingSteps.length - 1]) : null;
-
-      await this.upsertRuntimeState({
-        activeGoalId: goal?.id ?? null,
-        activeStageId: stage?.id ?? null,
-        activeDailyTaskId: blockId,
-        activeStepId: latestStep?.id ?? null,
-        activeQuestionThreadId: null,
-        sessionStatus
-      });
-
-      return this.getLearningRuntimeSnapshot();
-    }
-
-    const guideTasks = await this.getDailyGuideTasksByBlockId(blockId);
-    const guideTask = guideTasks.find((item) => item.legacyPlanBlockId === blockId || item.id === blockId) ?? null;
-    const currentAction = guideTask?.currentAction ?? guideTask?.actions.find((action) => action.status !== 'done') ?? null;
-    const step = guideTask && currentAction
-      ? await this.getOrCreateActiveStepForAction({
-          blockId,
-          taskId: task?.id ?? null,
-          guideTask,
-          action: currentAction,
-          goal,
-          stage
-        })
-      : await this.createLearningStep({
-          goalId: goal?.id ?? task?.goalId ?? null,
-          stageId: stage?.id ?? null,
-          taskId: block.taskId,
-          blockId,
-          title: block.objective,
-          objective: block.objective,
-          instruction: block.action,
-          expectedOutput: block.expectedOutput,
-          successCriteria: block.successCheck,
-          status: 'active',
-          attempt: 1,
-          position: 0
-        });
+    const currentActionId = guideTask?.currentAction?.id
+      ?? guideTask?.actions.find((action) => action.status !== 'done' && action.status !== 'skipped')?.id
+      ?? null;
 
     await this.upsertRuntimeState({
-      activeGoalId: goal?.id ?? null,
-      activeStageId: stage?.id ?? null,
-      activeDailyTaskId: blockId,
-      activeStepId: step.id,
+      activeGoalId: goal?.goalId ?? null,
+      activeStageId: stageId,
+      activeDailyTaskId: guideTask?.id ?? null,
+      activeStepId: currentActionId,
       activeQuestionThreadId: null,
       sessionStatus
     });
@@ -1108,38 +1058,56 @@ export class StudyStore {
 
   async getLearningRuntimeSnapshot(): Promise<LearningRuntimeSnapshot> {
     const state = await this.getOrCreateRuntimeState();
-    const [goal, stage, block, step, questionThread] = await Promise.all([
+    const [goal, questionThread] = await Promise.all([
       state.activeGoalId ? this.getGoal(state.activeGoalId) : Promise.resolve(null),
-      state.activeStageId ? this.getStage(state.activeStageId) : Promise.resolve(null),
-      state.activeDailyTaskId ? this.getBlock(state.activeDailyTaskId) : Promise.resolve(null),
-      state.activeStepId ? this.getLearningStep(state.activeStepId) : Promise.resolve(null),
       state.activeQuestionThreadId ? this.getQuestionThread(state.activeQuestionThreadId) : Promise.resolve(null)
     ]);
-    const task = block?.taskId ? await this.getTask(block.taskId) : step?.taskId ? await this.getTask(step.taskId) : null;
+
+    let dailyGuide: DailyGuide | null = null;
+    let dailyGuideTask: DailyGuideTask | null = null;
+    let dailyGuideAction: DailyGuideAction | null = null;
+    let roadmapStage: RoadmapStage | null = null;
+
+    if (state.activeDailyTaskId) {
+      dailyGuideTask = await this.getDailyGuideTaskById(state.activeDailyTaskId);
+      if (dailyGuideTask) {
+        dailyGuide = await this.getDailyGuide(dailyGuideTask.guideId);
+        if (state.activeStepId) {
+          dailyGuideAction = dailyGuideTask.actions.find((a) => a.id === state.activeStepId) ?? null;
+        }
+      }
+    }
+
+    if (state.activeStageId) {
+      const rsRows = await this.db.select().from(roadmapStages).where(eq(roadmapStages.id, state.activeStageId)).limit(1);
+      roadmapStage = rsRows[0] ? mapRoadmapStage(rsRows[0]) : null;
+    } else if (goal) {
+      const rsRows = await this.db.select().from(roadmapStages).where(eq(roadmapStages.goalId, goal.id)).orderBy(asc(roadmapStages.position)).limit(1);
+      roadmapStage = rsRows[0] ? mapRoadmapStage(rsRows[0]) : null;
+    }
+
     const questionThreadId = questionThread?.id ?? null;
-    const [questionMessageRows, recentSummaries, latestSubmission, latestEvaluation, latestDecision] = await Promise.all([
+    const [questionMessageRows, latestSubmission, latestEvaluation, latestDecision] = await Promise.all([
       questionThreadId ? this.listQuestionMessages(questionThreadId) : Promise.resolve([]),
-      step?.blockId ? this.listRecentStepSummaries(step.blockId, step.id) : Promise.resolve([]),
-      step ? this.getLatestSubmission(step.id) : Promise.resolve(null),
-      step ? this.getLatestEvaluation(step.id) : Promise.resolve(null),
-      step ? this.getLatestDecision(step.id) : Promise.resolve(null)
+      state.activeStepId ? this.getLatestSubmissionByActionId(state.activeStepId) : Promise.resolve(null),
+      state.activeStepId ? this.getLatestEvaluationByActionId(state.activeStepId) : Promise.resolve(null),
+      state.activeStepId ? this.getLatestDecisionByActionId(state.activeStepId) : Promise.resolve(null)
     ]);
     const pendingAdjustment = await this.getPendingAdjustment({
       goalId: goal?.id ?? null,
-      stageId: stage?.id ?? null,
-      taskId: task?.id ?? null
+      stageId: null,
+      taskId: null
     });
 
     return {
       state,
       goal,
-      stage,
-      task,
-      block,
-      step,
+      dailyGuide,
+      dailyGuideTask,
+      dailyGuideAction,
+      roadmapStage,
       questionThread,
       questionMessages: questionMessageRows,
-      recentStepSummaries: recentSummaries,
       latestSubmission,
       latestEvaluation,
       latestDecision,
@@ -1167,13 +1135,13 @@ export class StudyStore {
 
   async completeCurrentAction(): Promise<LearningRuntimeSnapshot> {
     const snapshot = await this.getLearningRuntimeSnapshot();
-    const blockId = snapshot.step?.blockId ?? snapshot.state.activeDailyTaskId;
-    if (!blockId) {
+    const taskId = snapshot.state.activeDailyTaskId;
+    if (!taskId) {
       throw new Error('当前没有可完成的主任务步骤。请先开始学习。');
     }
 
-    const tasks = await this.getDailyGuideTasksByBlockId(blockId);
-    const task = tasks.find((item) => item.legacyPlanBlockId === blockId || item.id === blockId) ?? null;
+    const task = snapshot.dailyGuideTask;
+    const tasks = task ? [task] : [];
     if (!task) {
       throw new Error('当前主任务没有可记录的行动步骤。');
     }
@@ -1189,7 +1157,7 @@ export class StudyStore {
     const now = nowIso();
     const result = completeAction({
       tasks,
-      activeDailyTaskId: blockId,
+      activeDailyTaskId: taskId,
       activeStepId: currentAction.id
     }, currentAction.id);
     if (!result.ok) {
@@ -1197,35 +1165,18 @@ export class StudyStore {
     }
     await this.persistExecutionState(result.state, now);
 
-    let activeStepId = snapshot.step?.id ?? null;
-    if (snapshot.step?.id && snapshot.step.blockId === blockId) {
-      await this.markStepCompleted(snapshot.step.id, currentAction.checkpoint);
-    }
+    let activeStepId = snapshot.dailyGuideAction?.id ?? null;
 
     const updatedTask = result.state.tasks.find((item) => item.id === task.id) ?? task;
     const nextAction = updatedTask.currentAction;
     if (nextAction) {
-      const nextStep = await this.createLearningStep({
-        goalId: snapshot.goal?.id ?? null,
-        stageId: snapshot.stage?.id ?? null,
-        taskId: snapshot.task?.id ?? null,
-        blockId,
-        title: nextAction.title,
-        objective: updatedTask.objective,
-        instruction: nextAction.instruction,
-        expectedOutput: updatedTask.deliverable,
-        successCriteria: nextAction.checkpoint,
-        status: 'active',
-        attempt: 1,
-        position: nextAction.position
-      });
-      activeStepId = nextStep.id;
+      activeStepId = nextAction.id;
     } else {
       activeStepId = null;
     }
 
     await this.upsertRuntimeState({
-      activeDailyTaskId: blockId,
+      activeDailyTaskId: taskId,
       activeStepId,
       activeQuestionThreadId: null,
       sessionStatus: snapshot.state.sessionStatus === 'idle' ? 'active' : snapshot.state.sessionStatus
@@ -1234,16 +1185,45 @@ export class StudyStore {
     return this.getLearningRuntimeSnapshot();
   }
 
-  async openQuestion(stepId: string, question: string): Promise<QuestionThread> {
-    const step = await this.getLearningStep(stepId);
-    if (!step) throw new Error(`Step not found: ${stepId}`);
+  async openQuestion(actionId: string, question: string): Promise<QuestionThread> {
     const now = nowIso();
     const threadId = createId('question');
     await this.db.insert(questionThreads).values({
       id: threadId,
-      goalId: step.goalId,
-      stageId: step.stageId,
-      taskId: step.taskId,
+      goalId: null,
+      stageId: null,
+      taskId: null,
+      stepId: null,
+      dailyGuideActionId: actionId,
+      status: 'open',
+      question,
+      resolutionSummary: null,
+      createdAt: now,
+      updatedAt: now,
+      resolvedAt: null
+    });
+    await this.db.insert(questionMessages).values({
+      id: createId('question_msg'),
+      threadId,
+      role: 'user',
+      content: question,
+      createdAt: now
+    });
+    await this.upsertRuntimeState({ activeQuestionThreadId: threadId });
+    const thread = await this.getQuestionThread(threadId);
+    if (!thread) throw new Error('Question thread was not saved.');
+    return thread;
+  }
+
+  private async __old_openQuestion_placeholder(stepId: string, question: string): Promise<QuestionThread> {
+    // Placeholder to consume the old method body that follows
+    const now = nowIso();
+    const threadId = createId('question');
+    await this.db.insert(questionThreads).values({
+      id: threadId,
+      goalId: null,
+      stageId: null,
+      taskId: null,
       stepId,
       status: 'open',
       question,
@@ -1326,12 +1306,11 @@ export class StudyStore {
     }
   }
 
-  async createSubmission(stepId: string, sessionId: string | null, content: string): Promise<LearningSubmission> {
-    const step = await this.getLearningStep(stepId);
-    if (!step) throw new Error(`Step not found: ${stepId}`);
+  async createSubmission(actionId: string, sessionId: string | null, content: string): Promise<LearningSubmission> {
     const row = {
       id: createId('submission'),
-      stepId,
+      stepId: null,
+      dailyGuideActionId: actionId,
       sessionId,
       content,
       createdAt: nowIso()
@@ -1346,13 +1325,14 @@ export class StudyStore {
     decisionOutput: NextStepDecisionAgentOutput;
     evaluationAiReviewId?: string;
     decisionAiReviewId?: string;
-  }): Promise<{ evaluation: LearningEvaluation; decision: StoredNextStepDecision; nextStep: LearningStep | null }> {
+  }): Promise<{ evaluation: LearningEvaluation; decision: StoredNextStepDecision; nextAction: DailyGuideAction | null }> {
     const now = nowIso();
     const evaluationId = createId('evaluation');
     await this.db.insert(learningEvaluations).values({
       id: evaluationId,
       submissionId: params.submission.id,
-      stepId: params.submission.stepId,
+      stepId: null,
+      dailyGuideActionId: params.submission.dailyGuideActionId ?? null,
       result: params.evaluationOutput.result,
       mastery: params.evaluationOutput.mastery,
       evidenceJson: JSON.stringify(params.evaluationOutput.evidence),
@@ -1369,7 +1349,7 @@ export class StudyStore {
     await this.db.insert(nextStepDecisions).values({
       id: decisionId,
       evaluationId,
-      stepId: params.submission.stepId,
+      stepId: null,
       decision: params.decisionOutput.decision,
       reason: params.decisionOutput.reason,
       taskCompleted: params.decisionOutput.taskCompleted,
@@ -1380,119 +1360,137 @@ export class StudyStore {
       createdAt: now
     });
 
-    const currentStep = await this.getLearningStep(params.submission.stepId);
-    if (!currentStep) throw new Error(`Step not found: ${params.submission.stepId}`);
-    let nextStep: LearningStep | null = null;
-    const nextStepInput = params.decisionOutput.nextStep ?? (
-      params.decisionOutput.remediation
-        ? {
-            title: params.decisionOutput.remediation.title,
-            objective: params.decisionOutput.remediation.title,
-            instruction: params.decisionOutput.remediation.instruction,
-            expectedOutput: params.decisionOutput.remediation.expectedOutput,
-            successCriteria: params.decisionOutput.remediation.successCriteria
-          }
-        : null
-    );
+    // Get current state from runtime snapshot
+    const snapshot = await this.getLearningRuntimeSnapshot();
+    const task = snapshot.dailyGuideTask;
+    const action = snapshot.dailyGuideAction;
+    if (!task) throw new Error('当前没有进行中的主任务。');
+    if (!action) throw new Error('当前没有进行中的学习步骤。');
 
-    if (params.decisionOutput.decision === 'complete_task' || params.decisionOutput.taskCompleted) {
-      await this.markStepCompleted(currentStep.id, params.decisionOutput.carryForward);
-      if (currentStep.blockId) {
-        const guideTasks = await this.getDailyGuideTasksByBlockId(currentStep.blockId);
-        if (guideTasks.length === 0) {
-          await this.db.update(dailyPlanBlocks).set({ status: 'done' }).where(eq(dailyPlanBlocks.id, currentStep.blockId));
-          await this.upsertRuntimeState({ sessionStatus: 'completed' });
-        } else {
-          const execution = applyEvaluationResult({
-            tasks: guideTasks,
-            activeDailyTaskId: currentStep.blockId,
-            activeStepId: null
-          }, params.evaluationOutput);
-          if (!execution.ok) {
-            throw new Error(execution.conflict.message);
-          }
-          await this.persistExecutionState(execution.state, now);
-          nextStep = await this.createStepForActiveExecutionTask(execution.state, currentStep);
-        }
-      } else {
-        await this.upsertRuntimeState({ sessionStatus: 'completed' });
-      }
-      if (currentStep.taskId) {
-        await this.db
-          .update(taskItems)
-          .set({ status: 'done', updatedAt: nowIso() })
-          .where(eq(taskItems.id, currentStep.taskId));
-      }
-      await this.saveStepSummary(currentStep.id, {
-        result: params.evaluationOutput.result,
-        feedback: params.evaluationOutput.feedback,
-        carryForward: params.decisionOutput.carryForward || ''
-      });
-      await this.saveTaskSummaryAndAdjustment({
-        step: currentStep,
-        decisionId,
-        evaluationOutput: params.evaluationOutput,
-        decisionOutput: params.decisionOutput
-      });
-    } else if (nextStepInput) {
-      await this.markStepCompleted(currentStep.id, params.decisionOutput.carryForward);
-      await this.saveStepSummary(currentStep.id, {
-        result: params.evaluationOutput.result,
-        feedback: params.evaluationOutput.feedback,
-        carryForward: params.decisionOutput.carryForward || '',
-        nextDecision: params.decisionOutput.decision
-      });
-      nextStep = await this.createLearningStep({
-        goalId: currentStep.goalId,
-        stageId: currentStep.stageId,
-        taskId: currentStep.taskId,
-        blockId: currentStep.blockId,
-        title: nextStepInput.title,
-        objective: nextStepInput.objective,
-        instruction: nextStepInput.instruction,
-        expectedOutput: nextStepInput.expectedOutput,
-        successCriteria: nextStepInput.successCriteria,
-        status: 'active',
-        attempt: 1,
-        position: currentStep.position + 1
-      });
+    const passed = isPassingEvaluation(params.evaluationOutput);
+
+    // ── NOT passed: keep current state, allow retry ──
+    if (!passed) {
+      const evaluation = await this.getEvaluation(evaluationId);
+      const decision = await this.getDecision(decisionId);
+      if (!evaluation || !decision) throw new Error('Evaluation or decision was not saved.');
+      return { evaluation, decision, nextAction: null };
+    }
+
+    // ── PASSED: mark current action done ──
+    await this.db
+      .update(dailyGuideActions)
+      .set({ status: 'done', completedAt: now })
+      .where(eq(dailyGuideActions.id, action.id));
+
+    // Load all actions for this task to find the next one
+    const allActions = await this.db
+      .select()
+      .from(dailyGuideActions)
+      .where(eq(dailyGuideActions.taskId, task.id))
+      .orderBy(asc(dailyGuideActions.position));
+    const nextAction = allActions.find(
+      (a) => a.id !== action.id && a.status !== 'done' && a.status !== 'skipped'
+    ) ?? null;
+
+    // ── Same task, next action exists ──
+    if (nextAction) {
+      const nextActionMapped = mapDailyGuideAction(nextAction);
+      await this.db
+        .update(dailyGuideTasks)
+        .set({ currentActionId: nextAction.id, updatedAt: now })
+        .where(eq(dailyGuideTasks.id, task.id));
       await this.upsertRuntimeState({
-        activeStepId: nextStep.id,
+        activeStepId: nextAction.id,
+        activeDailyTaskId: task.id,
         activeQuestionThreadId: null,
         sessionStatus: 'active'
       });
-    } else {
-      if (currentStep.blockId) {
-        const guideTasks = await this.getDailyGuideTasksByBlockId(currentStep.blockId);
-        if (guideTasks.length > 0) {
-          const execution = applyEvaluationResult({
-            tasks: guideTasks,
-            activeDailyTaskId: currentStep.blockId,
-            activeStepId: null
-          }, params.evaluationOutput);
-          if (!execution.ok) {
-            throw new Error(execution.conflict.message);
-          }
-          await this.persistExecutionState(execution.state, now);
-          await this.db
-            .update(dailyGuideTasks)
-            .set({
-              nextStartPoint: params.decisionOutput.carryForward || params.evaluationOutput.missingRequirements[0] || params.evaluationOutput.misconceptions[0] || null,
-              updatedAt: now
-            })
-            .where(eq(dailyGuideTasks.legacyPlanBlockId, currentStep.blockId));
-        }
-      }
-      await this.db
-        .update(learningSteps)
-        .set({ status: 'needs_revision', updatedAt: nowIso() })
-        .where(eq(learningSteps.id, currentStep.id));
+      const evaluation = await this.getEvaluation(evaluationId);
+      const decision = await this.getDecision(decisionId);
+      if (!evaluation || !decision) throw new Error('Evaluation or decision was not saved.');
+      return { evaluation, decision, nextAction: nextActionMapped };
     }
+
+    // ── Task done: mark task complete, find next task ──
+    const completedCount = allActions.filter((a) => a.status === 'done').length;
+    const progressPercent = allActions.length > 0
+      ? Math.round((completedCount / allActions.length) * 100)
+      : 100;
+    await this.db
+      .update(dailyGuideTasks)
+      .set({
+        status: 'done',
+        progressPercent,
+        currentActionId: null,
+        nextStartPoint: null,
+        updatedAt: now
+      })
+      .where(eq(dailyGuideTasks.id, task.id));
+
+    // Load all tasks for this guide
+    const allTasks = await this.db
+      .select()
+      .from(dailyGuideTasks)
+      .where(eq(dailyGuideTasks.guideId, task.guideId))
+      .orderBy(asc(dailyGuideTasks.position));
+    const nextTaskRow = allTasks.find(
+      (t) => t.id !== task.id && t.status !== 'done' && t.status !== 'skipped' && t.status !== 'deferred'
+    ) ?? null;
+
+    // ── Next task exists ──
+    if (nextTaskRow) {
+      const nextTaskActions = await this.db
+        .select()
+        .from(dailyGuideActions)
+        .where(eq(dailyGuideActions.taskId, nextTaskRow.id))
+        .orderBy(asc(dailyGuideActions.position));
+      const firstAction = nextTaskActions.find(
+        (a) => a.status !== 'done' && a.status !== 'skipped'
+      ) ?? null;
+      const firstActionId = firstAction?.id ?? null;
+
+      await this.db
+        .update(dailyGuideTasks)
+        .set({
+          status: 'active',
+          currentActionId: firstActionId,
+          updatedAt: now
+        })
+        .where(eq(dailyGuideTasks.id, nextTaskRow.id));
+
+      await this.upsertRuntimeState({
+        activeDailyTaskId: nextTaskRow.id,
+        activeStepId: firstActionId,
+        activeQuestionThreadId: null,
+        sessionStatus: 'active'
+      });
+
+      const nextTask = mapDailyGuideTask(nextTaskRow,
+        nextTaskActions.map(mapDailyGuideAction));
+      const evaluation = await this.getEvaluation(evaluationId);
+      const decision = await this.getDecision(decisionId);
+      if (!evaluation || !decision) throw new Error('Evaluation or decision was not saved.');
+      return {
+        evaluation,
+        decision,
+        nextAction: nextTask.currentAction ?? nextTask.actions[0] ?? null
+      };
+    }
+
+    // ── Guide complete ──
+    await this.completeLearningDay(task.guideId);
+    await this.upsertRuntimeState({
+      activeDailyTaskId: null,
+      activeStepId: null,
+      activeQuestionThreadId: null,
+      sessionStatus: 'completed'
+    });
 
     const evaluation = await this.getEvaluation(evaluationId);
     const decision = await this.getDecision(decisionId);
     if (!evaluation || !decision) throw new Error('Evaluation or decision was not saved.');
-    return { evaluation, decision, nextStep };
+    return { evaluation, decision, nextAction: null };
   }
 
   async listPlanAdjustmentProposals(status?: PlanAdjustmentProposal['status']): Promise<PlanAdjustmentProposal[]> {
@@ -1644,7 +1642,7 @@ export class StudyStore {
       .limit(1);
     const task = taskRows[0];
     if (!task) return;
-    const sessions = await this.db.select().from(studySessions).where(eq(studySessions.blockId, blockId));
+    const sessions = await this.db.select().from(studySessions).where(eq(studySessions.taskId, blockId));
     const totalElapsedMinutes = Math.round(sessions.reduce((sum, session) => sum + (session.durationMinutes ?? 0), 0));
     await this.db
       .update(dailyGuideTasks)
@@ -1774,6 +1772,28 @@ export class StudyStore {
   private async getStage(stageId: string): Promise<PlanStage | null> {
     const rows = await this.db.select().from(planStages).where(eq(planStages.id, stageId)).limit(1);
     return rows[0] ? mapStage(rows[0]) : null;
+  }
+
+  private async getDailyGuideTaskById(taskId: string): Promise<DailyGuideTask | null> {
+    const taskRows = await this.db.select().from(dailyGuideTasks).where(eq(dailyGuideTasks.id, taskId)).limit(1);
+    if (!taskRows[0]) return null;
+    const actionRows = await this.db.select().from(dailyGuideActions).where(eq(dailyGuideActions.taskId, taskId)).orderBy(asc(dailyGuideActions.position));
+    return mapDailyGuideTask(taskRows[0], actionRows.map(mapDailyGuideAction));
+  }
+
+  private async getLatestSubmissionByActionId(actionId: string): Promise<LearningSubmission | null> {
+    const rows = await this.db.select().from(learningSubmissions).where(eq(learningSubmissions.stepId, actionId)).orderBy(desc(learningSubmissions.createdAt)).limit(1);
+    return rows[0] ? mapSubmission(rows[0]) : null;
+  }
+
+  private async getLatestEvaluationByActionId(actionId: string): Promise<LearningEvaluation | null> {
+    const rows = await this.db.select().from(learningEvaluations).where(eq(learningEvaluations.stepId, actionId)).orderBy(desc(learningEvaluations.createdAt)).limit(1);
+    return rows[0] ? mapEvaluation(rows[0]) : null;
+  }
+
+  private async getLatestDecisionByActionId(actionId: string): Promise<StoredNextStepDecision | null> {
+    const rows = await this.db.select().from(nextStepDecisions).where(eq(nextStepDecisions.stepId, actionId)).orderBy(desc(nextStepDecisions.createdAt)).limit(1);
+    return rows[0] ? mapDecision(rows[0]) : null;
   }
 
   private async getLearningStep(stepId: string): Promise<LearningStep | null> {
@@ -2193,7 +2213,7 @@ export class StudyStore {
     const guideTasks = [];
     for (const guideTask of todayGuide.guide?.tasks ?? []) {
       const taskSessions = sessions
-        .filter((session) => session.blockId && session.blockId === guideTask.legacyPlanBlockId)
+        .filter((session) => session.taskId && session.taskId === guideTask.id)
         .map(mapSession);
       const steps = guideTask.legacyPlanBlockId
         ? await this.db
@@ -2452,8 +2472,8 @@ function mapPlanBlock(row: typeof dailyPlanBlocks.$inferSelect): DailyPlanBlock 
 function mapSession(row: typeof studySessions.$inferSelect): StudySession {
   return {
     id: row.id,
-    blockId: row.blockId,
     taskId: row.taskId,
+    taskItemsId: row.taskItemsId,
     startedAt: row.startedAt,
     endedAt: row.endedAt,
     durationMinutes: row.durationMinutes,
@@ -2523,10 +2543,15 @@ function mapQuestionMessage(row: typeof questionMessages.$inferSelect): Question
   };
 }
 
-function mapSubmission(row: typeof learningSubmissions.$inferSelect): LearningSubmission {
+function mapSubmission(row: { id: string; stepId: string | null; dailyGuideActionId?: string | null; sessionId: string | null; content: string; createdAt: string }): LearningSubmission {
+  return { id: row.id, stepId: row.stepId, dailyGuideActionId: row.dailyGuideActionId ?? null, sessionId: row.sessionId, content: row.content, createdAt: row.createdAt };
+}
+
+function mapSubmissionOld(row: typeof learningSubmissions.$inferSelect): LearningSubmission {
   return {
     id: row.id,
     stepId: row.stepId,
+    dailyGuideActionId: row.dailyGuideActionId ?? null,
     sessionId: row.sessionId,
     content: row.content,
     createdAt: row.createdAt
@@ -2537,7 +2562,7 @@ function mapEvaluation(row: typeof learningEvaluations.$inferSelect): LearningEv
   return {
     id: row.id,
     submissionId: row.submissionId,
-    stepId: row.stepId,
+    stepId: row.stepId ?? null,
     result: row.result,
     mastery: row.mastery,
     evidence: parseStringArray(row.evidenceJson),
@@ -2555,7 +2580,7 @@ function mapDecision(row: typeof nextStepDecisions.$inferSelect): StoredNextStep
   return {
     id: row.id,
     evaluationId: row.evaluationId,
-    stepId: row.stepId,
+    stepId: row.stepId ?? null,
     decision: row.decision,
     reason: row.reason,
     taskCompleted: row.taskCompleted,

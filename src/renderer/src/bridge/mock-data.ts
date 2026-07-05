@@ -365,12 +365,12 @@ export function createHistorySummaries(): HistoryIntakeSummary[] {
 /* ------------------------------------------------------------------ */
 /*  FACTORY: StudySession                                              */
 /* ------------------------------------------------------------------ */
-export function createStudySession(status: 'active' | 'paused' | 'completed' | 'skipped', blockId?: string): StudySession {
+export function createStudySession(status: 'active' | 'paused' | 'completed' | 'skipped', taskId?: string): StudySession {
   const sid = mockId('session');
   return {
     id: sid,
-    blockId: blockId ?? mockId('pblock'),
-    taskId: null,
+    taskId: taskId ?? mockId('gtask'),
+    taskItemsId: null,
     startedAt: '2026-07-04T09:05:00.000Z',
     endedAt: status === 'active' ? null : '2026-07-04T10:00:00.000Z',
     durationMinutes: status === 'active' ? 35 : status === 'paused' ? 45 : 55,
@@ -383,34 +383,32 @@ export function createStudySession(status: 'active' | 'paused' | 'completed' | '
 /* ------------------------------------------------------------------ */
 /*  FACTORY: LearningRuntimeSnapshot                                   */
 /* ------------------------------------------------------------------ */
-export function createLearningRuntimeSnapshot(hasStep: boolean): LearningRuntimeSnapshot {
+export function createLearningRuntimeSnapshot(hasAction: boolean): LearningRuntimeSnapshot {
   const state: LearningRuntimeState = {
     id: 'default',
     activeGoalId: mockId('goal'),
     activeStageId: mockId('stage'),
     activeDailyTaskId: mockId('gtask'),
-    activeStepId: hasStep ? mockId('step') : null,
+    activeStepId: hasAction ? mockId('gact') : null,
     activeQuestionThreadId: null,
     sessionStatus: 'idle',
     updatedAt: '2026-07-04T09:30:00.000Z'
   };
-  const step: LearningStep = {
-    id: mockId('step'), goalId: mockId('goal'), stageId: mockId('stage'), taskId: mockId('gtask'), blockId: null,
+  const action: DailyGuideAction = {
+    id: mockId('gact'), taskId: mockId('gtask'),
     title: '理解组件生命周期',
-    objective: '掌握 React 组件的挂载、更新和卸载阶段',
     instruction: '阅读 React 生命周期文档，重点关注 useEffect 的清理机制',
-    expectedOutput: '能解释每个生命周期的触发时机和最佳实践',
-    successCriteria: '能正确回答生命周期相关的面试题',
-    status: 'active', attempt: 1, position: 0,
-    summary: null, createdAt: '', updatedAt: ''
+    checkpoint: '能正确回答生命周期相关的面试题',
+    status: 'planned', progressNote: null, completedAt: null, position: 0
   };
   return {
     state,
     goal: createLearningGoal({ isNormal: true, isEmpty: false, hasLongTitle: false, hasManyTasks: false, isAiUnavailable: false, isLoading: false, isError: false }),
-    stage: null, task: null, block: null,
-    step: hasStep ? step : null,
+    dailyGuide: null,
+    dailyGuideTask: null,
+    dailyGuideAction: hasAction ? action : null,
+    roadmapStage: null,
     questionThread: null, questionMessages: [],
-    recentStepSummaries: [],
     latestSubmission: null, latestEvaluation: null, latestDecision: null,
     pendingAdjustment: null
   };

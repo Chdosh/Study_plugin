@@ -33,48 +33,44 @@ export class ContextBuilder {
             status: snapshot.goal.status
           }
         : null,
-      stage: snapshot.stage
+      guide: snapshot.dailyGuide
         ? {
-            id: snapshot.stage.id,
-            title: snapshot.stage.title,
-            objective: snapshot.stage.objective,
-            successCriteria: snapshot.stage.successCriteria,
-            summary: snapshot.stage.summary
+            id: snapshot.dailyGuide.id,
+            date: snapshot.dailyGuide.date,
+            todayGoal: snapshot.dailyGuide.todayGoal,
+            status: snapshot.dailyGuide.status
           }
         : null,
-      task: snapshot.task
+      guideTask: snapshot.dailyGuideTask
         ? {
-            id: snapshot.task.id,
-            title: snapshot.task.title,
-            description: snapshot.task.description,
-            acceptanceCriteria: snapshot.task.acceptanceCriteria,
-            difficulty: snapshot.task.difficulty
+            id: snapshot.dailyGuideTask.id,
+            title: snapshot.dailyGuideTask.title,
+            objective: snapshot.dailyGuideTask.objective,
+            scope: snapshot.dailyGuideTask.scope,
+            deliverable: snapshot.dailyGuideTask.deliverable,
+            doneWhen: snapshot.dailyGuideTask.doneWhen,
+            quickHint: snapshot.dailyGuideTask.quickHint,
+            evaluationMode: snapshot.dailyGuideTask.evaluationMode,
+            status: snapshot.dailyGuideTask.status
           }
         : null,
-      block: snapshot.block
+      guideAction: snapshot.dailyGuideAction
         ? {
-            id: snapshot.block.id,
-            objective: snapshot.block.objective,
-            action: snapshot.block.action,
-            expectedOutput: snapshot.block.expectedOutput,
-            successCheck: snapshot.block.successCheck,
-            fallback: snapshot.block.fallback,
-            durationMinutes: snapshot.block.durationMinutes
+            id: snapshot.dailyGuideAction.id,
+            title: snapshot.dailyGuideAction.title,
+            instruction: snapshot.dailyGuideAction.instruction,
+            checkpoint: snapshot.dailyGuideAction.checkpoint,
+            status: snapshot.dailyGuideAction.status
           }
         : null,
-      step: snapshot.step
+      roadmapStage: snapshot.roadmapStage
         ? {
-            id: snapshot.step.id,
-            title: snapshot.step.title,
-            objective: snapshot.step.objective,
-            instruction: snapshot.step.instruction,
-            expectedOutput: snapshot.step.expectedOutput,
-            successCriteria: snapshot.step.successCriteria,
-            status: snapshot.step.status,
-            attempt: snapshot.step.attempt
+            id: snapshot.roadmapStage.id,
+            title: snapshot.roadmapStage.title,
+            objective: snapshot.roadmapStage.objective,
+            successCriteria: snapshot.roadmapStage.successCriteria
           }
         : null,
-      recentStepSummaries: snapshot.recentStepSummaries.slice(0, 3),
       currentQuestionThread: snapshot.questionThread
         ? {
             id: snapshot.questionThread.id,
@@ -109,12 +105,11 @@ export class ContextBuilder {
 function collectSourceIds(snapshot: LearningRuntimeSnapshot): string[] {
   return [
     snapshot.goal?.id,
-    snapshot.stage?.id,
-    snapshot.task?.id,
-    snapshot.block?.id,
-    snapshot.step?.id,
+    snapshot.dailyGuide?.id,
+    snapshot.dailyGuideTask?.id,
+    snapshot.dailyGuideAction?.id,
+    snapshot.roadmapStage?.id,
     snapshot.questionThread?.id,
-    ...snapshot.recentStepSummaries.map((summary) => summary.id),
     snapshot.latestSubmission?.id,
     snapshot.latestEvaluation?.id,
     snapshot.latestDecision?.id,
