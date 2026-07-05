@@ -118,7 +118,12 @@ export class DailyGuideAgent {
     goal: LearningGoal;
     brief: GoalBrief | null;
     roadmap: RoadmapStage[];
-    shortPlan: ShortPlanDay[];
+    targetDay: ShortPlanDay;
+    previousDayResult?: {
+      completedTasks: string[];
+      evaluationSummary: string;
+      reviewSummary?: string;
+    };
     profile: PromptProfile;
     settings: AgentRuntimeSettings;
   }) {
@@ -136,7 +141,8 @@ export class DailyGuideAgent {
         goal: params.goal,
         brief: params.brief,
         roadmap: params.roadmap,
-        shortPlan: params.shortPlan,
+        targetDay: params.targetDay,
+        previousDayResult: params.previousDayResult,
         profile: params.profile
       })
     });

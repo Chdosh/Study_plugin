@@ -295,7 +295,54 @@ export function TodayPage({
           <p>{guide.todayGoal}</p>
         </header>
 
-        {/* 学习路径 / 阶段 */}
+        {/* 今日任务列表 */}
+        <section className="surface today-task-list-panel" aria-label="今日任务">
+          <h3>
+            <ListChecks size={18} />
+            今日任务 ({completedCount}/{totalCount})
+          </h3>
+          <div className="today-task-list">
+            {guideTasks.map((task, index) => {
+              const isCurrent = task.id === currentTask?.id;
+              const taskDone = task.status === 'done';
+              const taskActive = task.status === 'active';
+              const progressPct = task.totalElapsedMinutes > 0 && task.estimatedMinutes.target > 0
+                ? Math.round(Math.min(task.totalElapsedMinutes / task.estimatedMinutes.target, 1) * 100)
+                : 0;
+              return (
+                <div
+                  className={`today-task-item ${isCurrent ? 'current' : ''} ${taskDone ? 'done' : ''} ${taskActive ? 'active' : ''}`}
+                  key={task.id}
+                >
+                  <span className="task-index">{index + 1}</span>
+                  <div className="task-info">
+                    <div className="task-header">
+                      <strong>{task.title}</strong>
+                      <span className={`task-status-badge ${task.status}`}>
+                        {taskDone ? '已完成' : taskActive ? '进行中' : '待开始'}
+                      </span>
+                    </div>
+                    <span className="task-meta">
+                      <Clock3 size={12} />
+                      {task.estimatedMinutes.target} 分钟
+                      {task.totalElapsedMinutes > 0 && ` · 已投入 ${task.totalElapsedMinutes} 分钟`}
+                    </span>
+                    {isCurrent && !taskDone && (
+                      <div className="task-progress">
+                        <div className="task-progress-bar">
+                          <div style={{ width: `${progressPct}%` }} />
+                        </div>
+                        <span>{progressPct}%</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* 学习路径（折叠） */}
         {todayGuide?.roadmap && todayGuide.roadmap.length > 0 && (
           <section className="surface roadmap-stages-panel" aria-label="学习路径">
             <h3>学习路径</h3>
@@ -338,10 +385,15 @@ export function TodayPage({
             <CheckCircle2 size={16} />
             确认今日执行稿
           </button>
+        ) : completedCount === totalCount && totalCount > 0 ? (
+          <div className="today-completed-block" style={{ marginTop: 12, textAlign: 'center' }}>
+            <CheckCircle2 size={28} style={{ color: 'var(--color-primary)' }} />
+            <p style={{ margin: '8px 0', fontWeight: 600 }}>今日任务已全部完成</p>
+          </div>
         ) : (
           <div className="micro-hint" style={{ marginTop: 8 }}>
             <CheckCircle2 size={14} />
-            今日执行稿已确认。开始、暂停、提交都在“学习”页完成。
+            今日执行稿已确认。开始、暂停、提交都在"学习"页完成。
           </div>
         )}
       </div>
@@ -387,7 +439,7 @@ export function TodayPage({
           <div className="knowledge-placeholder">
             <div className="placeholder-item">
               <span className="placeholder-dot" />
-              <span>暂无积累，开始学习后自动记录</span>
+              <span>{completedCount > 0 ? '已有学习记录，知识卡片待整理' : '暂无积累，开始学习后自动记录'}</span>
             </div>
           </div>
         </div>
@@ -405,6 +457,13 @@ export function TodayPage({
                   <span className="recent-text">
                     {summary.kind === 'step' ? '完成步骤' : summary.kind === 'task' ? '完成任务' : '学习记录'}
                   </span>
+                </div>
+              ))
+            ) : completedCount > 0 ? (
+              guideTasks.filter((t) => t.status === 'done').slice(0, 3).map((task) => (
+                <div key={task.id} className="recent-item">
+                  <span className="recent-icon"><CheckCircle2 size={14} /></span>
+                  <span className="recent-text">完成任务：{task.title}</span>
                 </div>
               ))
             ) : (

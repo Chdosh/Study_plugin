@@ -293,6 +293,68 @@ describe('AppService progressive AI flow', () => {
     expect(failedReview!.errorMessage).toContain('超时');
   });
 
+  it('getTodayState returns needs_goal when no goal exists', async () => {
+    const state = await appService.getTodayState();
+    expect(state).toBe('needs_goal');
+  });
+
+  it('prepareCurrentLearningDay returns active when guide already exists', async () => {
+    installDeterministicAi();
+    await appService.sendOnboardingMessage('我想学 React。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    await appService.generateLayeredPlan(confirmed.goal.id);
+
+    const result = await appService.prepareCurrentLearningDay();
+    expect(result.todayState).toBe('active');
+    expect(result.result).toBeUndefined();
+  });
+
+  it('prepareCurrentLearningDay returns short_plan_exhausted when no shortPlanDays', async () => {
+    installDeterministicAi();
+    await appService.sendOnboardingMessage('我想学 React。');
+    await appService.confirmOnboardingGoal();
+
+    const result = await appService.prepareCurrentLearningDay();
+    expect(result.todayState).toBe('short_plan_exhausted');
+  });
+
+  it('completeLearningDay is triggered when all tasks are done', async () => {
+    installDeterministicAi();
+
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+
+    for (const block of layered.guide.blocks) {
+      await appService.startSession(block.planBlockId);
+      await appService.completeCurrentAction();
+      await appService.completeCurrentAction();
+      await appService.submitLearningResult('Done.');
+    }
+
+    const today = await appService.listTodayGuide();
+    expect(today.guide).toBeTruthy();
+    expect(today.guide!.status).toBe('completed');
+    expect(today.guide!.tasks.every((t) => t.status === 'done')).toBe(true);
+  });
+
+  it('startSession rejects completed block after task done', async () => {
+    installDeterministicAi();
+    await appService.sendOnboardingMessage('我想学 React。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+
+    const blockId = layered.guide.blocks[0].planBlockId;
+    await appService.startSession(blockId);
+    await appService.completeCurrentAction();
+    await appService.completeCurrentAction();
+    await appService.submitLearningResult('Done.');
+
+    await expect(appService.startSession(blockId)).rejects.toThrow('已完成');
+  });
+
 });
 
 

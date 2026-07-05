@@ -33,12 +33,13 @@ export function ReviewPage({
   const allActions = review?.nextActions ?? [];
   const guideTasks = todayGuide?.guide?.tasks ?? [];
   const recordedMinutes = guideTasks.reduce((sum, task) => sum + (task.totalElapsedMinutes || 0), 0);
-  const completionScore = review?.completionScore ?? 0;
   const focusScore = review?.focusScore ?? 0;
 
   const plannedTasksTotal = todayGuide?.guide?.tasks.length ?? 0;
   const tasksTotal = plannedTasksTotal;
-  const tasksDone = completionScore >= 80 ? tasksTotal : completionScore > 0 ? Math.max(0, tasksTotal - 1) : 0;
+  const tasksDone = guideTasks.filter((task) => task.status === 'done').length;
+  // AI review 的 completionScore 仅作复盘评分参考，不覆盖基于 task status 的事实统计
+  const completionScore = plannedTasksTotal > 0 ? Math.round((tasksDone / plannedTasksTotal) * 100) : 0;
   const last7Days = [
     { label: '05/10', value: 45 },
     { label: '05/11', value: 72 },
@@ -56,7 +57,9 @@ export function ReviewPage({
     ? allActions.slice(0, 3)
     : pendingAdjustment?.reason
       ? [pendingAdjustment.reason]
-      : ['保持当前节奏，继续完成剩余任务'];
+      : tasksDone === tasksTotal && tasksTotal > 0
+        ? ['今天任务已全部完成，可以复盘并开启下一天。']
+        : ['保持当前节奏，继续完成剩余任务'];
 
   return (
     <section className="review-layout">
@@ -99,9 +102,15 @@ export function ReviewPage({
             </div>
           </div>
           <div className="review-tag-row">
-            <span><CircleDot size={12} />已完成提交记录</span>
-            <span><CircleDot size={12} />掌握基础分支操作</span>
-            <span className="warning"><CircleDot size={12} />需继续练习冲突处理</span>
+            {guideTasks.filter((t) => t.status === 'done').map((task) => (
+              <span key={task.id}><CircleDot size={12} />已完成：{task.title}</span>
+            ))}
+            {guideTasks.filter((t) => t.status !== 'done').map((task) => (
+              <span key={task.id} className="warning"><CircleDot size={12} />待完成：{task.title}</span>
+            ))}
+            {guideTasks.length === 0 && (
+              <span><CircleDot size={12} />暂无任务记录</span>
+            )}
           </div>
         </section>
 
@@ -131,7 +140,7 @@ export function ReviewPage({
         {pendingAdjustment?.status === 'pending' && (
           <section className="surface review-adjustment-card">
             <h3>调整建议</h3>
-            <p className="muted">AI 建议只有经你确认后才会生效。</p>
+            <p className="muted">基于上次评估建议。AI 建议只有经你确认后才会生效。</p>
             <div className="review-decision-actions">
               <button
                 className="primary-action"

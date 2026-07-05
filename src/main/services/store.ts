@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import type {
   DailyPlanBlock,
   DailyGuide,
@@ -19,6 +19,7 @@ import type {
   LearningSummary,
   PlanAdjustmentProposal,
   PlanStage,
+  PreviousLearningDayResult,
   PromptProfile,
   QuestionMessage,
   QuestionThread,
@@ -416,6 +417,7 @@ export class StudyStore {
     }
 
     const shortRows: ShortPlanDay[] = [];
+    let day1ShortPlanDayId: string | null = null;
     for (const day of params.shortPlan.days) {
       const row = {
         id: createId('short_plan_day'),
@@ -430,6 +432,9 @@ export class StudyStore {
         createdAt: now
       };
       await this.db.insert(shortPlanDays).values(row);
+      if (day.dayIndex === 1) {
+        day1ShortPlanDayId = row.id;
+      }
       shortRows.push(mapShortPlanDay(row));
     }
 
@@ -439,6 +444,7 @@ export class StudyStore {
       date: params.date,
       status: 'draft',
       availableWindowsJson: JSON.stringify(params.windows),
+      shortPlanDayId: day1ShortPlanDayId,
       createdAt: now,
       confirmedAt: null,
       sourceReviewId: null,
@@ -450,6 +456,7 @@ export class StudyStore {
       id: guideId,
       goalId: params.goal.id,
       planId,
+      shortPlanDayId: day1ShortPlanDayId,
       date: params.date,
       status: 'draft',
       weekFocus: params.shortPlan.weekFocus,
@@ -608,6 +615,252 @@ export class StudyStore {
     return this.getGoalIntakeState(intakeId);
   }
 
+  async atomicallyActivateShortPlanDay(id: string, date: string): Promise<boolean> {
+    const result = await this.db
+      .update(shortPlanDays)
+      .set({ date })
+      .where(and(eq(shortPlanDays.id, id), isNull(shortPlanDays.date)));
+    return result.rowsAffected > 0;
+  }
+
+  async findActivatedButGuidelessDay(goalId: string, date: string): Promise<ShortPlanDay | null> {
+    const rows = await this.db
+      .select()
+      .from(shortPlanDays)
+      .where(and(eq(shortPlanDays.goalId, goalId), eq(shortPlanDays.date, date)))
+      .orderBy(asc(shortPlanDays.dayIndex));
+    for (const row of rows) {
+      const guideExists = await this.db
+        .select({ id: dailyGuides.id })
+        .from(dailyGuides)
+        .where(eq(dailyGuides.shortPlanDayId, row.id))
+        .limit(1);
+      if (guideExists.length === 0) {
+        return mapShortPlanDay(row);
+      }
+    }
+    return null;
+  }
+
+  async getPreviousCompletedLearningDayContext(
+    goalId: string,
+    beforeDate: string
+  ): Promise<PreviousLearningDayResult | null> {
+    const guideRows = await this.db
+      .select()
+      .from(dailyGuides)
+      .where(and(
+        eq(dailyGuides.goalId, goalId),
+        lt(dailyGuides.date, beforeDate),
+        eq(dailyGuides.status, 'completed')
+      ))
+      .orderBy(desc(dailyGuides.date))
+      .limit(1);
+    if (guideRows.length === 0) return null;
+
+    const guide = guideRows[0];
+    const tasks = await this.db
+      .select()
+      .from(dailyGuideTasks)
+      .where(eq(dailyGuideTasks.guideId, guide.id))
+      .orderBy(asc(dailyGuideTasks.position));
+
+    const completedTasks = tasks.filter((t) => t.status === 'done').map((t) => t.title);
+    if (completedTasks.length === 0) return null;
+
+    const submissionResults = await this.getLastSubmissionEvaluationForGuide(guide);
+    const evaluationSummary = submissionResults ?? '已完成';
+
+    let reviewSummary: string | undefined;
+    const reviewRows = await this.db
+      .select()
+      .from(aiReviews)
+      .where(and(eq(aiReviews.kind, 'reflection'), eq(aiReviews.date, guide.date)))
+      .orderBy(desc(aiReviews.createdAt))
+      .limit(1);
+    if (reviewRows.length > 0 && reviewRows[0].status === 'success') {
+      try {
+        const output = JSON.parse(reviewRows[0].outputJson);
+        reviewSummary = output.summary ?? undefined;
+      } catch { /* ignore parse errors */ }
+    }
+
+    return { completedTasks, evaluationSummary, reviewSummary };
+  }
+
+  async getLastSubmissionEvaluationForGuide(guide: typeof dailyGuides.$inferSelect): Promise<string | null> {
+    const blockRows = await this.db
+      .select()
+      .from(dailyGuideBlocks)
+      .where(eq(dailyGuideBlocks.guideId, guide.id));
+    if (blockRows.length === 0) return null;
+
+    const blockIds = blockRows.map((b) => b.planBlockId);
+    const stepRows = await this.db
+      .select()
+      .from(learningSteps)
+      .where(inArray(learningSteps.blockId, blockIds))
+      .orderBy(desc(learningSteps.updatedAt))
+      .limit(1);
+    if (stepRows.length === 0) return null;
+
+    const evalRows = await this.db
+      .select()
+      .from(learningEvaluations)
+      .where(eq(learningEvaluations.stepId, stepRows[0].id))
+      .orderBy(desc(learningEvaluations.createdAt))
+      .limit(1);
+    if (evalRows.length > 0) {
+      return evalRows[0].feedback;
+    }
+    return null;
+  }
+
+  async saveDailyGuideWithTransaction(params: {
+    goal: LearningGoal;
+    date: string;
+    windows: StudyWindow[];
+    shortPlanDayId: string;
+    dailyGuide: DailyGuideAgentOutput;
+  }): Promise<{ goal: LearningGoal; roadmap: RoadmapStage[]; shortPlan: ShortPlanDay[]; guide: DailyGuide }> {
+    const now = nowIso();
+
+    return await this.db.transaction(async (tx) => {
+      const planId = createId('plan');
+      await tx.insert(dailyPlans).values({
+        id: planId,
+        date: params.date,
+        status: 'draft',
+        availableWindowsJson: JSON.stringify(params.windows),
+        shortPlanDayId: params.shortPlanDayId,
+        createdAt: now,
+        confirmedAt: null,
+        sourceReviewId: null,
+        version: 1
+      });
+
+      const guideId = createId('daily_guide');
+      await tx.insert(dailyGuides).values({
+        id: guideId,
+        goalId: params.goal.id,
+        planId,
+        shortPlanDayId: params.shortPlanDayId,
+        date: params.date,
+        status: 'draft',
+        weekFocus: '',
+        todayGoal: params.dailyGuide.todayGoal,
+        deliverablesJson: JSON.stringify(params.dailyGuide.deliverables),
+        boundariesJson: JSON.stringify(params.dailyGuide.boundaries),
+        acceptanceCriteriaJson: JSON.stringify(params.dailyGuide.acceptanceCriteria),
+        tomorrowActionsJson: JSON.stringify(params.dailyGuide.tomorrowActions),
+        createdAt: now,
+        confirmedAt: null
+      });
+
+      let blockPosition = 0;
+      let cursorTime = params.windows[0]?.start ?? '20:00';
+      for (const task of params.dailyGuide.tasks) {
+        const planBlockId = createId('block');
+        const startTime = cursorTime;
+        const endTime = addMinutesToClock(startTime, task.estimatedMinutes.target);
+        cursorTime = endTime;
+
+        await tx.insert(dailyPlanBlocks).values({
+          id: planBlockId, planId, taskId: null,
+          startTime, endTime, durationMinutes: task.estimatedMinutes.target,
+          objective: task.objective,
+          action: task.actions.map((a) => `${a.title}：${a.instruction}`).join('\n'),
+          expectedOutput: task.deliverable, difficulty: 'foundation',
+          material: '今日主任务',
+          successCheck: task.doneWhen.join('；') || task.deliverable,
+          fallback: task.quickHint, status: 'planned', position: blockPosition
+        });
+
+        const guideTaskId = createId('daily_guide_task');
+        await tx.insert(dailyGuideTasks).values({
+          id: guideTaskId, guideId, legacyPlanBlockId: planBlockId,
+          title: task.title, objective: task.objective, scope: task.scope,
+          estimatedMinMinutes: task.estimatedMinutes.min,
+          estimatedTargetMinutes: task.estimatedMinutes.target,
+          estimatedMaxMinutes: task.estimatedMinutes.max,
+          deliverable: task.deliverable,
+          doneWhenJson: JSON.stringify(task.doneWhen),
+          quickHint: task.quickHint,
+          evaluationMode: task.evaluationMode,
+          submissionPolicy: task.submissionPolicy,
+          carryoverAllowed: task.carryoverAllowed,
+          status: 'planned', progressPercent: 0, currentActionId: null,
+          nextStartPoint: task.actions[0]?.title ?? null,
+          totalElapsedMinutes: 0, position: blockPosition,
+          createdAt: now, updatedAt: now
+        });
+
+        let actionPosition = 0;
+        for (const action of task.actions) {
+          await tx.insert(dailyGuideActions).values({
+            id: createId('daily_guide_action'), taskId: guideTaskId,
+            title: action.title, instruction: action.instruction,
+            checkpoint: action.checkpoint, status: 'planned',
+            progressNote: null, completedAt: null, position: actionPosition++
+          });
+        }
+
+        await tx.insert(dailyGuideBlocks).values({
+          id: createId('daily_guide_block'), guideId, planBlockId,
+          title: task.title, position: blockPosition
+        });
+        blockPosition += 1;
+      }
+
+      await tx.insert(planVersions).values({
+        id: createId('plan_version'), planId, version: 1,
+        changeSummary: `Daily guide for short plan day`,
+        snapshotJson: JSON.stringify({ guide: params.dailyGuide }),
+        createdAt: now
+      });
+
+      const roadmap = await this.listRoadmap(params.goal.id);
+      const shortPlan = await this.listShortPlan(params.goal.id);
+      const guide = await this.getDailyGuideInTx(tx, guideId);
+      if (!guide) throw new Error('Daily guide not found after save');
+      return { goal: params.goal, roadmap, shortPlan, guide };
+    });
+  }
+
+  private async getDailyGuideInTx(
+    tx: Parameters<Parameters<typeof this.db.transaction>[0]>[0],
+    guideId: string
+  ): Promise<DailyGuide | null> {
+    const guideRows = await tx.select().from(dailyGuides).where(eq(dailyGuides.id, guideId)).limit(1);
+    if (guideRows.length === 0) return null;
+    const guideRow = guideRows[0];
+
+    const guideBlockRows = await tx.select().from(dailyGuideBlocks).where(eq(dailyGuideBlocks.guideId, guideId)).orderBy(asc(dailyGuideBlocks.position));
+    const blocks: DailyGuideBlock[] = [];
+    for (const guideBlock of guideBlockRows) {
+      const planBlockRows = await tx.select().from(dailyPlanBlocks).where(eq(dailyPlanBlocks.id, guideBlock.planBlockId)).limit(1);
+      if (planBlockRows.length > 0) {
+        blocks.push(mapDailyGuideBlock(guideBlock, mapPlanBlock(planBlockRows[0])));
+      }
+    }
+
+    const taskRows = await tx.select().from(dailyGuideTasks).where(eq(dailyGuideTasks.guideId, guideId)).orderBy(asc(dailyGuideTasks.position));
+    const tasks: DailyGuideTask[] = [];
+    for (const taskRow of taskRows) {
+      const actionRows = await tx.select().from(dailyGuideActions).where(eq(dailyGuideActions.taskId, taskRow.id)).orderBy(asc(dailyGuideActions.position));
+      tasks.push(mapDailyGuideTask(taskRow, actionRows.map(mapDailyGuideAction)));
+    }
+    return mapDailyGuide(guideRow, blocks, tasks);
+  }
+
+  async completeLearningDay(guideId: string): Promise<void> {
+    const guideRows = await this.db.select().from(dailyGuides).where(eq(dailyGuides.id, guideId)).limit(1);
+    if (guideRows.length === 0) throw new Error('Guide not found');
+    const guide = guideRows[0];
+    await this.db.update(dailyGuides).set({ status: 'completed' }).where(eq(dailyGuides.id, guideId));
+    await this.db.update(dailyPlans).set({ status: 'completed' }).where(eq(dailyPlans.id, guide.planId));
+  }
+
   async listTodayGuide(date: string): Promise<{ goal: LearningGoal | null; roadmap: RoadmapStage[]; shortPlan: ShortPlanDay[]; guide: DailyGuide | null }> {
     const guideRows = (await this.db.select().from(dailyGuides).where(eq(dailyGuides.date, date)).orderBy(desc(dailyGuides.createdAt)))
       .filter((item) => item.status !== 'archived');
@@ -633,6 +886,13 @@ export class StudyStore {
   async startSession(blockId: string): Promise<StudySession> {
     const blocks = await this.db.select().from(dailyPlanBlocks).where(eq(dailyPlanBlocks.id, blockId)).limit(1);
     if (!blocks[0]) throw new Error(`Block not found: ${blockId}`);
+    if (blocks[0].status === 'done' || blocks[0].status === 'skipped' || blocks[0].status === 'deferred') {
+      throw new Error(`当前任务已${blocks[0].status === 'done' ? '完成' : blocks[0].status === 'skipped' ? '跳过' : '推迟'}，不能重新开始学习。`);
+    }
+    const guideTask = await this.getDailyGuideTaskByBlockId(blockId);
+    if (guideTask && guideTask.status === 'done') {
+      throw new Error('当前主任务已完成，不能重新开始学习。');
+    }
     const existingSessions = await this.db.select().from(studySessions).where(eq(studySessions.blockId, blockId));
     const existingActive = existingSessions.find((session) => session.status === 'active');
     if (existingActive) {
@@ -1781,27 +2041,34 @@ export class StudyStore {
       });
     }
 
-    await this.db.insert(planAdjustmentProposals).values({
-      id: createId('plan_adjustment'),
-      goalId: params.step.goalId,
-      stageId: params.step.stageId,
-      taskId: params.step.taskId,
-      sourceDecisionId: params.decisionId,
-      status: 'pending',
-      reason: params.decisionOutput.reason,
-      proposedChangesJson: JSON.stringify({
-        carryForward: params.decisionOutput.carryForward,
-        recommendedAction: params.evaluationOutput.recommendedAction,
-        missingRequirements: params.evaluationOutput.missingRequirements,
-        misconceptions: params.evaluationOutput.misconceptions,
-        nextFocus:
-          params.decisionOutput.carryForward ||
-          params.evaluationOutput.missingRequirements[0] ||
-          '根据本次完成情况调整下一次学习重点。'
-      }),
-      createdAt: now,
-      decidedAt: null
-    });
+    // 仅在需要调整时创建 pending adjustment（非纯 complete_task 或有缺失/误解）
+    const hasAdjustmentReasons =
+      params.decisionOutput.decision !== 'complete_task' ||
+      (params.evaluationOutput.missingRequirements && params.evaluationOutput.missingRequirements.length > 0) ||
+      (params.evaluationOutput.misconceptions && params.evaluationOutput.misconceptions.length > 0);
+    if (hasAdjustmentReasons) {
+      await this.db.insert(planAdjustmentProposals).values({
+        id: createId('plan_adjustment'),
+        goalId: params.step.goalId,
+        stageId: params.step.stageId,
+        taskId: params.step.taskId,
+        sourceDecisionId: params.decisionId,
+        status: 'pending',
+        reason: params.decisionOutput.reason,
+        proposedChangesJson: JSON.stringify({
+          carryForward: params.decisionOutput.carryForward,
+          recommendedAction: params.evaluationOutput.recommendedAction,
+          missingRequirements: params.evaluationOutput.missingRequirements,
+          misconceptions: params.evaluationOutput.misconceptions,
+          nextFocus:
+            params.decisionOutput.carryForward ||
+            (params.evaluationOutput.missingRequirements && params.evaluationOutput.missingRequirements[0]) ||
+            '根据本次完成情况调整下一次学习重点。'
+        }),
+        createdAt: now,
+        decidedAt: null
+      });
+    }
   }
 
   async listPromptProfiles(): Promise<PromptProfile[]> {
@@ -2077,6 +2344,7 @@ function mapDailyGuide(row: typeof dailyGuides.$inferSelect, blocks: DailyGuideB
     id: row.id,
     goalId: row.goalId,
     planId: row.planId,
+    shortPlanDayId: row.shortPlanDayId ?? null,
     date: row.date,
     status: row.status,
     weekFocus: row.weekFocus,

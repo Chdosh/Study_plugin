@@ -90,17 +90,27 @@ export function StudyPage({
 
   const isActive = activeSessionBelongsToCurrent && activeSession?.status === 'active';
   const isPaused = activeSessionBelongsToCurrent && activeSession?.status === 'paused';
-  const isNotStarted = !activeSessionBelongsToCurrent || !activeSession || (activeSession.status !== 'active' && activeSession.status !== 'paused');
-  const taskTitle = toCompactTitle(currentTask?.title ?? '当前任务');
+  const isNotStarted = !taskDone && (!activeSessionBelongsToCurrent || !activeSession || (activeSession.status !== 'active' && activeSession.status !== 'paused'));
+  const allTasksDone = guide ? guide.tasks.length > 0 && guide.tasks.every((t) => t.status === 'done') : false;
+  const nextPlannedTask = taskDone && currentTask
+    ? guide!.tasks.find((t) => t.status === 'planned' || t.status === 'active') ?? null
+    : null;
+  const taskTitle = toCompactTitle(currentTask?.title ?? (allTasksDone ? '今日学习' : '当前任务'));
   const currentAction = taskActions[stepIndex] ?? taskActions[0] ?? null;
   const taskObjective = currentTask?.objective ?? '';
-  const stepTitle = taskDone
-    ? '主任务已完成'
+  const stepTitle = allTasksDone && !currentTask
+    ? '今日任务已全部完成'
+    : taskDone
+      ? '主任务已完成'
     : allActionsDone
       ? '等待提交当前结果'
     : (currentStepBelongsToTask ? currentStep?.title : null) ?? currentAction?.title ?? '当前步骤';
-  const stepInstruction = taskDone
-    ? '当前主任务已经通过评价。若还有下一个主任务，可以从今日页继续下一项。'
+  const stepInstruction = allTasksDone && !currentTask
+    ? '今天的所有任务都已完成。可以前往复盘页查看学习总结，或开启下一天任务。'
+    : taskDone
+      ? nextPlannedTask
+        ? `当前主任务已经通过评价。下一任务：${nextPlannedTask.title}`
+        : '当前主任务已经通过评价。今天所有任务已完成。'
     : allActionsDone
       ? '当前主任务的行动步骤已经完成。下一步需要提交当前结果，由 AI 评价后决定完成或继续修改。'
     : (currentStepBelongsToTask ? currentStep?.instruction : null) ?? currentAction?.instruction ?? '按当前步骤说明推进。';
@@ -175,18 +185,24 @@ export function StudyPage({
             <span className="session-task-icon"><ChevronRight size={18} /></span>
             <strong>{taskTitle}</strong>
           </div>
-          <span className="session-step-label">步骤 {stepPosition}/{totalSteps}</span>
-          <span className="session-timer"><Clock3 size={16} />{(isActive || isPaused) ? formatElapsedTime(elapsedSeconds) : '00:00'}</span>
-          {isActive || isPaused ? (
-            <button
-              className="session-pause-button"
-              type="button"
-              onClick={() => void (isPaused ? onResumeSession() : onPauseSession())}
-            >
-              {isPaused ? <><Play size={14} />继续</> : <><Pause size={14} />暂停</>}
-            </button>
+          {!taskDone && !allTasksDone ? (
+            <>
+              <span className="session-step-label">步骤 {stepPosition}/{totalSteps}</span>
+              <span className="session-timer"><Clock3 size={16} />{(isActive || isPaused) ? formatElapsedTime(elapsedSeconds) : '00:00'}</span>
+              {isActive || isPaused ? (
+                <button
+                  className="session-pause-button"
+                  type="button"
+                  onClick={() => void (isPaused ? onResumeSession() : onPauseSession())}
+                >
+                  {isPaused ? <><Play size={14} />继续</> : <><Pause size={14} />暂停</>}
+                </button>
+              ) : (
+                <span className={`focus-state-pill ${sessionStatusClass}`}>{sessionStatusText}</span>
+              )}
+            </>
           ) : (
-            <span className={`focus-state-pill ${sessionStatusClass}`}>{sessionStatusText}</span>
+            <span className="focus-state-pill completed">已完成</span>
           )}
         </section>
 
@@ -259,7 +275,11 @@ export function StudyPage({
             {activeSession && (
               <div className="study-record-item">
                 <span className="record-icon"><Play size={12} /></span>
-                <span>开始学习 {activeSession.startedAt.slice(11, 16)}</span>
+                <span>
+                  {(activeSession.durationMinutes ?? 0) > 0
+                    ? `恢复学习 ${activeSession.startedAt.slice(11, 16)}`
+                    : `开始学习 ${activeSession.startedAt.slice(11, 16)}`}
+                </span>
               </div>
             )}
             {taskActions.filter((a) => a.status === 'done').map((action) => (
@@ -289,34 +309,38 @@ export function StudyPage({
       <div className="study-fixed-action-bar">
         <div className="bar-left" />
         <div className="bar-right">
-          {isNotStarted && currentPlanBlockId ? (
-            <button className="primary-action" type="button" onClick={() => void onStartSession(currentPlanBlockId)}>
-              <Play size={16} />
-              开始学习
-            </button>
-          ) : isPaused ? (
-            <button className="secondary-action" type="button" onClick={() => void onResumeSession()}>
-              <Play size={16} />
-              继续学习
-            </button>
-          ) : isActive ? (
-            <button className="secondary-action" type="button" onClick={() => void onPauseSession()}>
-              <Pause size={16} />
-              暂停
-            </button>
-          ) : null}
-          {isActive && !taskDone && (
-            allActionsDone ? (
-              <button className="primary-action" type="button" onClick={() => void onOpenDrawer('submission')}>
-                <CheckCircle2 size={16} />
-                提交当前结果
-              </button>
-            ) : (
-              <button className="primary-action" type="button" onClick={() => void onCompleteCurrentAction()}>
-                <CheckCircle2 size={16} />
-                完成当前步骤
-              </button>
-            )
+          {allTasksDone ? (
+            <span className="micro-hint" style={{ margin: 0 }}>
+              <CheckCircle2 size={14} />
+              今日任务已全部完成，可以复盘或开启下一天。
+            </span>
+          ) : taskDone ? (
+            <span className="micro-hint" style={{ margin: 0 }}>
+              <CheckCircle2 size={14} />
+              {nextPlannedTask ? `当前任务已完成，下一任务：${toCompactTitle(nextPlannedTask.title)}` : '当前任务已完成。'}
+            </span>
+          ) : (
+            <>
+              {isNotStarted && currentPlanBlockId ? (
+                <button className="primary-action" type="button" onClick={() => void onStartSession(currentPlanBlockId)}>
+                  <Play size={16} />
+                  开始学习
+                </button>
+              ) : null}
+              {isActive && (
+                allActionsDone ? (
+                  <button className="primary-action" type="button" onClick={() => void onOpenDrawer('submission')}>
+                    <CheckCircle2 size={16} />
+                    提交当前结果
+                  </button>
+                ) : (
+                  <button className="primary-action" type="button" onClick={() => void onCompleteCurrentAction()}>
+                    <CheckCircle2 size={16} />
+                    完成当前步骤
+                  </button>
+                )
+              )}
+            </>
           )}
           <button className="secondary-action" type="button" onClick={() => void onOpenDrawer()}>
             <HelpCircle size={16} />

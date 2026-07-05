@@ -11,13 +11,15 @@ export function getCurrentGuideTaskSelection(
   learningState: LearningRuntimeSnapshot | null
 ): CurrentGuideTaskSelection {
   const persistedBlockId = learningState?.step?.blockId ?? learningState?.state.activeDailyTaskId ?? null;
-  const findTask = (blockId: string | null): DailyGuideTask | null =>
-    blockId ? tasks.find((item) => item.legacyPlanBlockId === blockId) ?? null : null;
+
+  const findTask = (blockId: string | null): DailyGuideTask | null => {
+    if (!blockId) return null;
+    const found = tasks.find((item) => item.legacyPlanBlockId === blockId) ?? null;
+    if (found?.status === 'done') return null;
+    return found;
+  };
 
   let task = findTask(activeSession?.blockId ?? null);
-  if (task?.status === 'done') {
-    task = null;
-  }
 
   if (!task && persistedBlockId) {
     task = findTask(persistedBlockId);
@@ -26,7 +28,6 @@ export function getCurrentGuideTaskSelection(
   if (!task) {
     task = tasks.find((item) => item.status === 'active')
       ?? tasks.find((item) => item.status === 'planned' || item.status === 'deferred')
-      ?? tasks.find((item) => item.status === 'done')
       ?? null;
   }
 

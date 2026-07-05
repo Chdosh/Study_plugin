@@ -12,11 +12,13 @@ import type {
   GoalIntakeState,
   LayeredPlanResult,
   PlanAdjustmentProposal,
+  PrepareCurrentLearningDayResult,
   QuestionAnswerResult,
   StudyAppApi,
   StudySession,
   SubmissionEvaluationResult,
   TodayGuideState,
+  TodayState,
   TeachStepResult
 } from '../shared/types';
 
@@ -39,6 +41,10 @@ const api: StudyAppApi = {
     confirmDailyGuide: (guideId: Id) => ipcRenderer.invoke(ipcChannels.guidesConfirmDailyGuide, { guideId }),
     archiveTodayAndRestart: (): Promise<GoalIntakeState> =>
       ipcRenderer.invoke(ipcChannels.guidesArchiveTodayAndRestart),
+    prepareCurrentLearningDay: (): Promise<PrepareCurrentLearningDayResult> =>
+      ipcRenderer.invoke(ipcChannels.guidesPrepareCurrentLearningDay),
+    getTodayState: (): Promise<TodayState> =>
+      ipcRenderer.invoke(ipcChannels.guidesGetTodayState),
     listToday: (): Promise<TodayGuideState> => ipcRenderer.invoke(ipcChannels.guidesListToday)
   },
   history: {

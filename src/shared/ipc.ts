@@ -7,6 +7,8 @@ export const ipcChannels = {
   guidesGenerateLayeredPlan: 'guides:generateLayeredPlan',
   guidesConfirmDailyGuide: 'guides:confirmDailyGuide',
   guidesArchiveTodayAndRestart: 'guides:archiveTodayAndRestart',
+  guidesPrepareCurrentLearningDay: 'guides:prepareCurrentLearningDay',
+  guidesGetTodayState: 'guides:getTodayState',
   guidesListToday: 'guides:listToday',
   sessionsStart: 'sessions:start',
   sessionsPause: 'sessions:pause',
