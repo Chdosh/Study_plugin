@@ -450,12 +450,12 @@ export function TodayPage({
             <h3>最近学习</h3>
           </div>
           <div className="recent-list">
-            {learningState?.recentStepSummaries && learningState.recentStepSummaries.length > 0 ? (
-              learningState.recentStepSummaries.slice(0, 3).map((summary) => (
-                <div key={summary.id} className="recent-item">
+            {learningState?.latestEvaluation ? (
+              [learningState.latestEvaluation].map((_summary) => (
+                <div key="recent-eval" className="recent-item">
                   <span className="recent-icon"><CheckCircle2 size={14} /></span>
                   <span className="recent-text">
-                    {summary.kind === 'step' ? '完成步骤' : summary.kind === 'task' ? '完成任务' : '学习记录'}
+                    最近评价完成
                   </span>
                 </div>
               ))

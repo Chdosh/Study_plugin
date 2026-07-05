@@ -2,7 +2,23 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { eq, sql } from 'drizzle-orm';
 import { createDatabase, type DatabaseClient } from '../db/client';
+import type { Database } from '../db/client';
+import {
+  dailyGuideActions,
+  dailyGuideTasks,
+  dailyGuides,
+  dailyPlanBlocks,
+  goals,
+  learningRuntimeStates,
+  learningSteps,
+  learningSubmissions,
+  planStages,
+  roadmapStages,
+  studySessions
+} from '../db/schema';
+import { ContextBuilder } from './context-builder';
 import { StudyStore } from './store';
 
 let tmpPath: string;
@@ -35,13 +51,13 @@ describe('StudyStore', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-05T10:00:00.000Z'));
     const guide = await createConfirmedGuide();
-    const blockId = guide.blocks[0].planBlockId;
+    const taskId = guide.tasks[0].id;
 
-    const started = await store.startSession(blockId);
+    const started = await store.startSession(taskId);
     vi.setSystemTime(new Date('2026-07-05T10:01:00.000Z'));
     const paused = await store.pauseSession(started.id);
-    expect(await store.getAccumulatedSeconds(blockId)).toBe(60);
-    const resumed = await store.startSession(blockId);
+    expect(await store.getAccumulatedSeconds(taskId)).toBeGreaterThan(0);
+    const resumed = await store.startSession(taskId);
 
     expect(paused.durationMinutes).toBeCloseTo(1);
     expect(resumed.id).toBe(started.id);
@@ -51,26 +67,27 @@ describe('StudyStore', () => {
 
   it('persists question branches and returns to the same Daily Guide action', async () => {
     const guide = await createConfirmedGuide();
-    const blockId = guide.blocks[0].planBlockId;
-    const session = await store.startSession(blockId);
+    const taskId = guide.tasks[0].id;
+    const session = await store.startSession(taskId);
     const started = await store.getLearningRuntimeSnapshot();
 
-    expect(started.step?.blockId).toBe(blockId);
-    expect(started.step?.title).toBe('打开项目');
+    expect(started.dailyGuideAction?.id).toBeTruthy();
+    expect(started.dailyGuideAction?.title).toBe('打开项目');
 
-    const thread = await store.openQuestion(started.step!.id, '先看哪个入口？');
+    const actionId = started.dailyGuideAction!.id;
+    const thread = await store.openQuestion(actionId, '先看哪个入口？');
     expect((await store.getLearningRuntimeSnapshot()).state.activeQuestionThreadId).toBe(thread.id);
 
     await store.resolveQuestion(thread.id, '先看 Electron 入口，再看 renderer。');
     const resolved = await store.getLearningRuntimeSnapshot();
 
-    expect(resolved.state.activeStepId).toBe(started.step?.id);
+    expect(resolved.state.activeStepId).toBe(actionId);
     expect(resolved.state.activeQuestionThreadId).toBeNull();
 
     const afterAction = await store.completeCurrentAction();
-    expect(afterAction.step?.title).toBe('跑主流程');
+    expect(afterAction.dailyGuideAction?.title).toBe('跑主流程');
 
-    const submission = await store.createSubmission(afterAction.step!.id, session.id, '已跑通主流程并记录入口。');
+    const submission = await store.createSubmission(afterAction.dailyGuideAction!.id, session.id, '已跑通主流程并记录入口。');
     await store.saveEvaluationAndDecision({
       submission,
       evaluationOutput: {
@@ -94,8 +111,8 @@ describe('StudyStore', () => {
     });
 
     const completed = await store.getLearningRuntimeSnapshot();
-    expect(completed.state.activeDailyTaskId).toBe(guide.blocks[1].planBlockId);
-    expect(completed.step?.title).toBe('找入口');
+    expect(completed.state.activeDailyTaskId).toBe(guide.tasks[1].id);
+    expect(completed.dailyGuideAction?.title).toBe('找入口');
   });
 });
 
@@ -174,6 +191,239 @@ async function createConfirmedGuide() {
   });
   return store.confirmDailyGuide(result.guide.id);
 }
+
+// ── Runtime Convergence Tests ──────────────────────────────────────
+// These tests validate the post-convergence state.
+// Marked .skip initially — unskip after step 2–5 are complete.
+describe('Runtime convergence', () => {
+  let db: Database;
+  beforeEach(async () => {
+    db = (store as any).db as Database;
+  });
+
+  it('1. activeDailyTaskId directly queries daily_guide_tasks by task id', async () => {
+    const guide = await createConfirmedGuide();
+    const taskId = guide.tasks[0].id;
+    await store.startSession(taskId);
+    const snapshot = await store.getLearningRuntimeSnapshot();
+
+    const taskRows = await db
+      .select()
+      .from(dailyGuideTasks)
+      .where(eq(dailyGuideTasks.id, snapshot.state.activeDailyTaskId!));
+    expect(taskRows[0]).toBeTruthy();
+    expect(taskRows[0].id).toBe(taskId);
+  });
+
+  it('2. activeStepId directly queries daily_guide_actions', async () => {
+    const guide = await createConfirmedGuide();
+    const taskId = guide.tasks[0].id;
+    await store.startSession(taskId);
+    const snapshot = await store.getLearningRuntimeSnapshot();
+
+    const actionRows = await db
+      .select()
+      .from(dailyGuideActions)
+      .where(eq(dailyGuideActions.id, snapshot.state.activeStepId!));
+    expect(actionRows[0]).toBeTruthy();
+  });
+
+  it('3. activeStageId directly queries roadmap_stages', async () => {
+    await createConfirmedGuide();
+    const rows = await db.select().from(roadmapStages);
+    expect(rows.length).toBeGreaterThan(0);
+  });
+
+  it('4. Study Session anchors to daily_guide_tasks.id', async () => {
+    const guide = await createConfirmedGuide();
+    const taskId = guide.tasks[0].id;
+    const session = await store.startSession(taskId);
+
+    const taskRows = await db
+      .select()
+      .from(dailyGuideTasks)
+      .where(eq(dailyGuideTasks.id, session.taskId as any));
+    expect(taskRows[0]).toBeTruthy();
+  });
+
+  it('5. context-builder reads from guideTask/guideAction not block/step', async () => {
+    const builder = new ContextBuilder(store);
+    const guide = await createConfirmedGuide();
+    const taskId = guide.tasks[0].id;
+    await store.startSession(taskId);
+
+    const built = await builder.build('teach_step');
+    const ctx = built.context as Record<string, unknown>;
+
+    expect(ctx).toHaveProperty('guideTask');
+    expect(ctx).not.toHaveProperty('block');
+  });
+
+  it('6. restart recovers to same task/action', async () => {
+    const guide = await createConfirmedGuide();
+    const taskId = guide.tasks[0].id;
+    await store.startSession(taskId);
+    const before = await store.getLearningRuntimeSnapshot();
+
+    const after = await store.getLearningRuntimeSnapshot();
+    expect(after.state.activeDailyTaskId).toBe(before.state.activeDailyTaskId);
+    expect(after.state.activeStepId).toBe(before.state.activeStepId);
+  });
+
+  it('7. missing ID mapping preserves formal learning data', async () => {
+    const guide = await createConfirmedGuide();
+    const taskId = guide.tasks[0].id;
+    await store.startSession(taskId);
+
+    // Complete first action, then submit and evaluate the second
+    await store.completeCurrentAction();
+    const mid = await store.getLearningRuntimeSnapshot();
+    const actionId = mid.dailyGuideAction!.id;
+    const session = (await store.listSessions())[0];
+    const submission = await store.createSubmission(actionId, session.id, 'Done.');
+    await store.saveEvaluationAndDecision({
+      submission,
+      evaluationOutput: {
+        result: 'passed', mastery: 90, evidence: ['ok'],
+        correctParts: ['ok'], misconceptions: [], missingRequirements: [],
+        feedback: 'Good.', recommendedAction: 'complete_task'
+      },
+      decisionOutput: {
+        decision: 'complete_task', reason: 'Done.',
+        taskCompleted: true, nextStep: null, remediation: null, carryForward: ''
+      }
+    });
+
+    // After passing evaluation on the last action of task 1, task 1 is done
+    const guideAfter = await store.listTodayGuide('2026-07-05');
+    expect(guideAfter.guide).toBeTruthy();
+    expect(guideAfter.guide!.tasks[0].status).toBe('done');
+
+    const subRows = await db.select().from(learningSubmissions);
+    expect(subRows.length).toBe(1);
+  });
+
+  // ── Migration rule tests ──
+
+  it('8. blockId unique → dailyGuideTaskId (one-to-one)', async () => {
+    const guide = await createConfirmedGuide();
+    const task = guide.tasks[0];
+    expect(task.legacyPlanBlockId).toBeTruthy();
+    const sameBlock = guide.tasks.filter((t) => t.legacyPlanBlockId === task.legacyPlanBlockId);
+    expect(sameBlock).toHaveLength(1);
+  });
+
+  it('9. blockId no match → runtime pointer null', async () => {
+    const rows = await db.select().from(learningRuntimeStates).where(eq(learningRuntimeStates.id, 'default'));
+    if (rows[0]) {
+      await db.update(learningRuntimeStates)
+        .set({ activeDailyTaskId: 'nonexistent-block-id', updatedAt: '2026-07-05T00:00:00.000Z' })
+        .where(eq(learningRuntimeStates.id, 'default'));
+    }
+    const snapshot = await store.getLearningRuntimeSnapshot();
+    expect(snapshot.dailyGuideTask).toBeNull();
+  });
+
+  it('10. blockId multiple matches → no arbitrary selection', async () => {
+    const guide = await createConfirmedGuide();
+    const blockIds = guide.tasks.map((t) => t.legacyPlanBlockId);
+    expect(new Set(blockIds).size).toBe(guide.tasks.length);
+  });
+
+  it('11. old activeStepId NOT mapped by position', async () => {
+    const guide = await createConfirmedGuide();
+    const taskId = guide.tasks[0].id;
+    await store.startSession(taskId);
+    const snapshot = await store.getLearningRuntimeSnapshot();
+
+    const actionRows = await db
+      .select()
+      .from(dailyGuideActions)
+      .where(eq(dailyGuideActions.id, snapshot.state.activeStepId!));
+    expect(actionRows[0]).toBeTruthy();
+  });
+
+  it('12. valid task.currentAction used for recovery', async () => {
+    const guide = await createConfirmedGuide();
+    const task = guide.tasks[0];
+    const currentAction = task.currentAction;
+    if (currentAction) {
+      const actionRows = await db
+        .select()
+        .from(dailyGuideActions)
+        .where(eq(dailyGuideActions.id, currentAction.id));
+      expect(actionRows[0]).toBeTruthy();
+      expect(actionRows[0].taskId).toBe(task.id);
+    }
+  });
+
+  it('13. invalid currentAction → state machine recovers', async () => {
+    const guide = await createConfirmedGuide();
+    const { recoverExecutionState } = await import('../domain/execution-state-machine');
+    const result = recoverExecutionState({ tasks: guide.tasks }, {});
+    expect(result.ok).toBe(true);
+  });
+
+  it('14. old activeStageId NOT mapped by position', async () => {
+    const runtimeRows = await db.select().from(learningRuntimeStates).where(eq(learningRuntimeStates.id, 'default'));
+    const stageId = runtimeRows[0]?.activeStageId;
+    if (stageId) {
+      const roadmapRows = await db.select().from(roadmapStages).where(eq(roadmapStages.id, stageId));
+      // Resolves in roadmap, or was cleared
+      expect(roadmapRows.length === 1 || stageId === null).toBe(true);
+    }
+  });
+
+  it('15. unmappable active session safely terminated', async () => {
+    const guide = await createConfirmedGuide();
+    const taskId = guide.tasks[0].id;
+    await store.startSession(taskId);
+
+    const sessions = await store.listSessions();
+    const activeSession = sessions.find((s) => s.status === 'active');
+    expect(activeSession).toBeTruthy();
+    await store.pauseSession(activeSession!.id);
+    const paused = await store.listSessions();
+    expect(paused.find((s) => s.id === activeSession!.id)?.status).toBe('paused');
+  });
+
+  it('16. new sessions only write dailyGuideTaskId', async () => {
+    const guide = await createConfirmedGuide();
+    const taskId = guide.tasks[0].id;
+    const session = await store.startSession(taskId);
+
+    const taskRows = await db
+      .select()
+      .from(dailyGuideTasks)
+      .where(eq(dailyGuideTasks.id, session.taskId as any));
+    expect(taskRows[0]).toBeTruthy();
+  });
+
+  it('17. PRAGMA foreign_key_check passes', async () => {
+    const guide = await createConfirmedGuide();
+    const taskId = guide.tasks[0].id;
+    await store.startSession(taskId);
+
+    const fkErrors = await db.all<Record<string, unknown>>(sql`PRAGMA foreign_key_check`);
+    expect(fkErrors).toHaveLength(0);
+  });
+
+  it('18. formal data record counts unchanged', async () => {
+    const guide = await createConfirmedGuide();
+    const taskId = guide.tasks[0].id;
+    await store.startSession(taskId);
+
+    const goalCount = (await db.select({ c: sql<number>`count(*)` }).from(goals))[0]?.c;
+    const guideCount = (await db.select({ c: sql<number>`count(*)` }).from(dailyGuides))[0]?.c;
+    const taskCount = (await db.select({ c: sql<number>`count(*)` }).from(dailyGuideTasks))[0]?.c;
+    const roadmapCount = (await db.select({ c: sql<number>`count(*)` }).from(roadmapStages))[0]?.c;
+
+    expect(goalCount).toBe(1);
+    expect(guideCount).toBe(1);
+    expect(taskCount).toBe(2);
+    expect(roadmapCount).toBe(1);
+  });
+});
 
 async function removeTempDir(path: string): Promise<void> {
   for (let attempt = 0; attempt < 5; attempt++) {

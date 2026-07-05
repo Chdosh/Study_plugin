@@ -162,7 +162,7 @@ export class MockStudyAppApi implements StudyAppApi {
 
   // ── sessions ──────────────────────────────────────────────────────
   private _getActiveBlock(): DailyPlanBlock | null {
-    const block = this._todayGuideState.guide?.blocks.find((item) => item.planBlockId === this._currentSession?.blockId)
+    const block = this._todayGuideState.guide?.blocks.find((item) => item.planBlockId === this._currentSession?.taskId)
       ?? this._todayGuideState.guide?.blocks[0]
       ?? null;
     if (!block) return null;
@@ -192,17 +192,17 @@ export class MockStudyAppApi implements StudyAppApi {
       const block = this._getActiveBlock();
       return block ? { session: this._currentSession!, block } : null;
     },
-    start: async (blockId: string): Promise<StudySession> => {
+    start: async (taskId: string): Promise<StudySession> => {
       await this.maybeDelay();
       this._sessionSeq++;
-      this._currentSession = createStudySession('active', blockId);
+      this._currentSession = createStudySession('active', taskId);
       this._notifySessionChange();
       return this._currentSession;
     },
     pause: async (sessionId: string): Promise<StudySession> => {
       await this.maybeDelay();
       if (this._currentSession) {
-        this._currentSession = createStudySession('paused', this._currentSession.blockId ?? undefined);
+        this._currentSession = createStudySession('paused', this._currentSession.taskId ?? undefined);
         this._notifySessionChange();
       }
       return this._currentSession ?? createStudySession('paused');
@@ -273,7 +273,7 @@ export class MockStudyAppApi implements StudyAppApi {
       await this.maybeDelay();
       return {
         submission: {
-          id: mockId('sub'), stepId: mockId('step'), sessionId: this._currentSession?.id ?? null,
+          id: mockId('sub'), stepId: mockId('step'), dailyGuideActionId: null, sessionId: this._currentSession?.id ?? null,
           content, createdAt: new Date().toISOString()
         },
         evaluation: {

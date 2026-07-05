@@ -235,7 +235,7 @@ function conflict(state: ExecutionState, conflict: ExecutionConflict): Execution
 }
 
 function findTask(tasks: DailyGuideTask[], id: Id): DailyGuideTask | null {
-  return tasks.find((task) => task.id === id || task.legacyPlanBlockId === id) ?? null;
+  return tasks.find((task) => task.id === id) ?? null;
 }
 
 function nextOpenAction(task: DailyGuideTask): DailyGuideAction | null {

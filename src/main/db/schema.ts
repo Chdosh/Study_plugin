@@ -239,8 +239,8 @@ export const dailyGuideActions = sqliteTable('daily_guide_actions', {
 
 export const studySessions = sqliteTable('study_sessions', {
   id: text('id').primaryKey(),
-  blockId: text('block_id').references(() => dailyPlanBlocks.id),
-  taskId: text('task_id').references(() => taskItems.id),
+  taskId: text('task_id').references(() => dailyGuideTasks.id),
+  taskItemsId: text('task_items_id').references(() => taskItems.id),
   startedAt: text('started_at').notNull(),
   endedAt: text('ended_at'),
   durationMinutes: integer('duration_minutes'),
@@ -277,9 +277,9 @@ export const learningSteps = sqliteTable('learning_steps', {
 export const learningRuntimeStates = sqliteTable('learning_runtime_states', {
   id: text('id').primaryKey(),
   activeGoalId: text('active_goal_id').references(() => goals.id),
-  activeStageId: text('active_stage_id').references(() => planStages.id),
-  activeDailyTaskId: text('active_daily_task_id').references(() => dailyPlanBlocks.id),
-  activeStepId: text('active_step_id').references(() => learningSteps.id),
+  activeStageId: text('active_stage_id').references(() => roadmapStages.id),
+  activeDailyTaskId: text('active_daily_task_id').references(() => dailyGuideTasks.id),
+  activeStepId: text('active_step_id').references(() => dailyGuideActions.id),
   activeQuestionThreadId: text('active_question_thread_id'),
   sessionStatus: text('session_status', { enum: ['idle', 'active', 'paused', 'completed'] })
     .notNull()
@@ -292,9 +292,8 @@ export const questionThreads = sqliteTable('question_threads', {
   goalId: text('goal_id').references(() => goals.id),
   stageId: text('stage_id').references(() => planStages.id),
   taskId: text('task_id').references(() => taskItems.id),
-  stepId: text('step_id')
-    .notNull()
-    .references(() => learningSteps.id),
+  stepId: text('step_id').references(() => learningSteps.id),
+  dailyGuideActionId: text('daily_guide_action_id').references(() => dailyGuideActions.id),
   status: text('status', { enum: ['open', 'resolved'] }).notNull().default('open'),
   question: text('question').notNull(),
   resolutionSummary: text('resolution_summary'),
@@ -315,9 +314,8 @@ export const questionMessages = sqliteTable('question_messages', {
 
 export const learningSubmissions = sqliteTable('learning_submissions', {
   id: text('id').primaryKey(),
-  stepId: text('step_id')
-    .notNull()
-    .references(() => learningSteps.id),
+  stepId: text('step_id').references(() => learningSteps.id),
+  dailyGuideActionId: text('daily_guide_action_id').references(() => dailyGuideActions.id),
   sessionId: text('session_id').references(() => studySessions.id),
   content: text('content').notNull(),
   createdAt: text('created_at').notNull()
@@ -328,9 +326,8 @@ export const learningEvaluations = sqliteTable('learning_evaluations', {
   submissionId: text('submission_id')
     .notNull()
     .references(() => learningSubmissions.id),
-  stepId: text('step_id')
-    .notNull()
-    .references(() => learningSteps.id),
+  stepId: text('step_id').references(() => learningSteps.id),
+  dailyGuideActionId: text('daily_guide_action_id').references(() => dailyGuideActions.id),
   result: text('result', { enum: ['passed', 'partial', 'failed', 'unclear'] }).notNull(),
   mastery: integer('mastery').notNull(),
   evidenceJson: text('evidence_json').notNull(),
@@ -350,9 +347,7 @@ export const nextStepDecisions = sqliteTable('next_step_decisions', {
   evaluationId: text('evaluation_id')
     .notNull()
     .references(() => learningEvaluations.id),
-  stepId: text('step_id')
-    .notNull()
-    .references(() => learningSteps.id),
+  stepId: text('step_id').references(() => learningSteps.id),
   decision: text('decision', {
     enum: ['advance', 'explain_again', 'remediate', 'practice', 'simplify', 'complete_task', 'request_user_decision']
   }).notNull(),

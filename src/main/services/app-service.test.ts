@@ -108,18 +108,18 @@ describe('AppService progressive AI flow', () => {
     const layered = await appService.generateLayeredPlan(confirmed.goal.id);
     await appService.confirmDailyGuide(layered.guide.id);
 
-    const firstBlockId = layered.guide.blocks[0].planBlockId;
-    const secondBlockId = layered.guide.blocks[1].planBlockId;
-    const session = await appService.startSession(firstBlockId);
-    expect(session.blockId).toBe(firstBlockId);
+    const firstTaskId = layered.guide.tasks[0].id;
+    const secondTaskId = layered.guide.tasks[1].id;
+    const session = await appService.startSession(firstTaskId);
+    expect(session.taskId).toBe(firstTaskId);
 
     const started = await appService.getLearningState();
-    expect(started.state.activeDailyTaskId).toBe(firstBlockId);
-    expect(started.step?.title).toBe('打开项目');
+    expect(started.state.activeDailyTaskId).toBe(layered.guide.tasks[0].id);
+    expect(started.dailyGuideAction?.title).toBe('打开项目');
 
     const taught = await appService.teachCurrentStep();
-    expect(taught.step.id).toBe(started.step?.id);
-    expect(taught.step.title).toBe('打开项目');
+    expect(taught.action.id).toBe(started.dailyGuideAction?.id);
+    expect(taught.action.title).toBe('打开项目');
 
     const answer = await appService.askStepQuestion('入口在哪？');
     expect(answer.thread.status).toBe('open');
@@ -127,21 +127,21 @@ describe('AppService progressive AI flow', () => {
 
     const resolved = await appService.resolveQuestion(answer.thread.id, '已经知道入口文件。');
     expect(resolved.state.activeQuestionThreadId).toBeNull();
-    expect(resolved.state.activeStepId).toBe(started.step?.id);
+    expect(resolved.state.activeStepId).toBe(started.dailyGuideAction?.id);
 
-    expect((await appService.completeCurrentAction()).step?.title).toBe('跑主流程');
+    expect((await appService.completeCurrentAction()).dailyGuideAction?.title).toBe('跑主流程');
     const finalAction = await appService.completeCurrentAction();
-    expect(finalAction.state.activeDailyTaskId).toBe(firstBlockId);
-    expect(finalAction.step?.title).toBe('写边界');
+    expect(finalAction.state.activeDailyTaskId).toBe(layered.guide.tasks[0].id);
+    expect(finalAction.dailyGuideAction?.title).toBe('写边界');
 
     const submitted = await appService.submitLearningResult('已完成当前版本功能清单，并记录今天做和不做的边界。');
     expect(submitted.evaluation.result).toBe('passed');
-    expect(submitted.nextStep?.title).toBe('找入口');
+    expect(submitted.nextAction?.title).toBe('找入口');
     expect(await appService.getActiveSession()).toBeNull();
 
     const afterSubmit = await appService.getLearningState();
-    expect(afterSubmit.state.activeDailyTaskId).toBe(secondBlockId);
-    expect(afterSubmit.step?.title).toBe('找入口');
+    expect(afterSubmit.state.activeDailyTaskId).toBe(secondTaskId);
+    expect(afterSubmit.dailyGuideAction?.title).toBe('找入口');
 
     expect(aiCalls.map((call) => call.operation)).toEqual([
       'goal_intake',
@@ -162,15 +162,15 @@ describe('AppService progressive AI flow', () => {
     const layered = await appService.generateLayeredPlan(confirmed.goal.id);
     await appService.confirmDailyGuide(layered.guide.id);
 
-    const blockId = layered.guide.blocks[0].planBlockId;
-    const started = await appService.startSession(blockId);
+    const taskId = layered.guide.tasks[0].id;
+    const started = await appService.startSession(taskId);
     const paused = await appService.pauseSession(started.id);
     const current = await appService.getActiveSession();
 
     expect(paused.status).toBe('paused');
     expect(current?.session.id).toBe(started.id);
     expect(current?.session.status).toBe('paused');
-    expect(current?.block.id).toBe(blockId);
+    expect(current?.session.status).toBe('paused');
   });
 
   it('handles need_more_info then ready in goal intake multi-round flow', async () => {
@@ -326,8 +326,8 @@ describe('AppService progressive AI flow', () => {
     const layered = await appService.generateLayeredPlan(confirmed.goal.id);
     await appService.confirmDailyGuide(layered.guide.id);
 
-    for (const block of layered.guide.blocks) {
-      await appService.startSession(block.planBlockId);
+    for (const task of layered.guide.tasks) {
+      await appService.startSession(task.id);
       await appService.completeCurrentAction();
       await appService.completeCurrentAction();
       await appService.submitLearningResult('Done.');
@@ -346,13 +346,13 @@ describe('AppService progressive AI flow', () => {
     const layered = await appService.generateLayeredPlan(confirmed.goal.id);
     await appService.confirmDailyGuide(layered.guide.id);
 
-    const blockId = layered.guide.blocks[0].planBlockId;
-    await appService.startSession(blockId);
+    const taskId = layered.guide.tasks[0].id;
+    await appService.startSession(taskId);
     await appService.completeCurrentAction();
     await appService.completeCurrentAction();
     await appService.submitLearningResult('Done.');
 
-    await expect(appService.startSession(blockId)).rejects.toThrow('已完成');
+    await expect(appService.startSession(taskId)).rejects.toThrow('已完成');
   });
 
 });

@@ -62,7 +62,7 @@ export function StudyPage({
   teaching: TeachStepResult | null;
   questionAnswer: QuestionAnswerResult | null;
   submissionResult: SubmissionEvaluationResult | null;
-  onStartSession: (blockId: string) => Promise<void>;
+  onStartSession: (taskId: string) => Promise<void>;
   onPauseSession: () => Promise<void>;
   onResumeSession: () => Promise<void>;
   onTeachStep: () => Promise<void>;
@@ -74,19 +74,20 @@ export function StudyPage({
 }): JSX.Element {
   const guide = todayGuide?.guide ?? null;
   const currentSelection = guide ? getCurrentGuideTaskSelection(guide.tasks, activeSession, learningState) : null;
-  const currentPlanBlockId = currentSelection?.planBlockId ?? activeSession?.blockId ?? null;
+  const currentTaskId = currentSelection?.task?.id ?? activeSession?.taskId ?? null;
 
   const currentTask = currentSelection?.task ?? null;
   const taskActions = currentTask?.actions ?? [];
-  const currentStep = learningState?.step ?? null;
-  const currentStepBelongsToTask = Boolean(currentStep?.blockId && currentPlanBlockId && currentStep.blockId === currentPlanBlockId);
-  const rawStepIndex = currentStepBelongsToTask ? currentStep?.position ?? 0 : 0;
-  const stepIndex = taskActions.length > 0 ? Math.min(Math.max(rawStepIndex, 0), taskActions.length - 1) : 0;
-  const stepPosition = stepIndex >= 0 ? stepIndex + 1 : 1;
+  const currentStep = learningState?.dailyGuideAction ?? null;
+  const activeActionIndex = taskActions.findIndex((a) =>
+    a.status !== 'done' && a.status !== 'skipped'
+  );
+  const stepIndex = activeActionIndex >= 0 ? activeActionIndex : 0;
   const totalSteps = Math.max(taskActions.length, 1);
+  const stepPosition = totalSteps > 0 ? Math.min(stepIndex + 1, totalSteps) : 1;
   const allActionsDone = taskActions.length > 0 && taskActions.every((action) => action.status === 'done');
   const taskDone = currentTask?.status === 'done';
-  const activeSessionBelongsToCurrent = Boolean(currentPlanBlockId && activeSession?.blockId === currentPlanBlockId);
+  const activeSessionBelongsToCurrent = Boolean(currentTaskId && activeSession?.taskId === currentTaskId);
 
   const isActive = activeSessionBelongsToCurrent && activeSession?.status === 'active';
   const isPaused = activeSessionBelongsToCurrent && activeSession?.status === 'paused';
@@ -104,7 +105,7 @@ export function StudyPage({
       ? '主任务已完成'
     : allActionsDone
       ? '等待提交当前结果'
-    : (currentStepBelongsToTask ? currentStep?.title : null) ?? currentAction?.title ?? '当前步骤';
+    : currentAction?.title ?? '当前步骤';
   const stepInstruction = allTasksDone && !currentTask
     ? '今天的所有任务都已完成。可以前往复盘页查看学习总结，或开启下一天任务。'
     : taskDone
@@ -113,12 +114,12 @@ export function StudyPage({
         : '当前主任务已经通过评价。今天所有任务已完成。'
     : allActionsDone
       ? '当前主任务的行动步骤已经完成。下一步需要提交当前结果，由 AI 评价后决定完成或继续修改。'
-    : (currentStepBelongsToTask ? currentStep?.instruction : null) ?? currentAction?.instruction ?? '按当前步骤说明推进。';
+    : currentAction?.instruction ?? '按当前步骤说明推进。';
   const stepCriteria = taskDone
     ? submissionResult?.evaluation.feedback ?? learningState?.latestEvaluation?.feedback ?? currentTask?.doneWhen.join('\n') ?? ''
     : allActionsDone
       ? currentTask?.doneWhen.join('\n') ?? ''
-    : (currentStepBelongsToTask ? currentStep?.successCriteria : null) ?? currentAction?.checkpoint ?? '';
+    : currentAction?.checkpoint ?? '';
   const sessionStatusText = isActive ? '专注中' : isPaused ? '已暂停' : isNotStarted ? '未开始' : '进行中';
   const sessionStatusClass = isActive ? 'active' : isPaused ? 'paused' : '';
 
@@ -321,8 +322,8 @@ export function StudyPage({
             </span>
           ) : (
             <>
-              {isNotStarted && currentPlanBlockId ? (
-                <button className="primary-action" type="button" onClick={() => void onStartSession(currentPlanBlockId)}>
+              {isNotStarted && currentTaskId ? (
+                <button className="primary-action" type="button" onClick={() => void onStartSession(currentTaskId)}>
                   <Play size={16} />
                   开始学习
                 </button>

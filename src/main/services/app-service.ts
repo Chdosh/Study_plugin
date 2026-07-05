@@ -435,16 +435,18 @@ export class AppService {
 
   async getActiveSession(): Promise<{ session: StudySession; block: DailyPlanBlock } | null> {
     const sessions = await this.store.listSessions();
-    // "Current session" for UI recovery: active and paused sessions both belong to
-    // the same resumable Focus Session. Completed/skipped sessions are historical.
     const active = sessions.find((s) => s.status === 'active' || s.status === 'paused');
-    if (!active || !active.blockId) return null;
-    const block = await this.store.getBlock(active.blockId);
-    if (!block) return null;
-    if (block.status === 'done' || block.status === 'skipped' || block.status === 'deferred') {
+    if (!active || !active.taskId) return null;
+    const guideTaskSnapshot = await this.store.getLearningRuntimeSnapshot();
+    const guideTask = guideTaskSnapshot.dailyGuideTask;
+    if (!guideTask) return null;
+    if (guideTask.status === 'done' || guideTask.status === 'skipped' || guideTask.status === 'deferred') {
       return null;
     }
-    return { session: active, block };
+    const block = guideTask.legacyPlanBlockId
+      ? await this.store.getBlock(guideTask.legacyPlanBlockId)
+      : null;
+    return { session: active, block: block! };
   }
 
   async getAccumulatedSeconds(blockId: string, excludeSessionId?: string): Promise<number> {
@@ -461,7 +463,7 @@ export class AppService {
       this.store.getPromptProfile(promptProfileId),
       this.settings.getRuntimeSettings()
     ]);
-    if (!built.snapshot.step) {
+    if (!built.snapshot.dailyGuideAction) {
       throw new Error('当前没有可展开的学习步骤。请先开始今日任务。');
     }
     const output = await this.teachStepAgent.run({
@@ -481,9 +483,8 @@ export class AppService {
       status: 'success'
     });
     void aiReviewId;
-    const step = await this.store.updateCurrentStepFromTeaching(built.snapshot.step.id, output);
     return {
-      step,
+      action: built.snapshot.dailyGuideAction,
       explanation: output.explanation,
       userAction: output.userAction,
       requiresSubmission: output.requiresSubmission,
@@ -500,12 +501,13 @@ export class AppService {
       throw new Error('问题不能为空。');
     }
     const before = await this.store.getLearningRuntimeSnapshot();
-    if (!before.step) {
+    if (!before.dailyGuideAction) {
       throw new Error('当前没有学习步骤，无法提问。');
     }
+    const actionId = before.dailyGuideAction.id;
     const thread = before.questionThread?.status === 'open'
       ? before.questionThread
-      : await this.store.openQuestion(before.step.id, question);
+      : await this.store.openQuestion(actionId, question);
     if (before.questionThread?.status === 'open') {
       await this.store.addQuestionMessage(thread.id, 'user', question);
     }
@@ -552,12 +554,12 @@ export class AppService {
       throw new Error('提交内容不能为空。');
     }
     const before = await this.store.getLearningRuntimeSnapshot();
-    if (!before.step) {
+    if (!before.dailyGuideAction) {
       throw new Error('当前没有学习步骤，无法提交结果。');
     }
     const active = await this.getActiveSession();
-    const submission = await this.store.createSubmission(before.step.id, active?.session.id ?? null, content);
-    const guideTask = before.step.blockId ? await this.store.getDailyGuideTaskByBlockId(before.step.blockId) : null;
+    const submission = await this.store.createSubmission(before.dailyGuideAction.id, active?.session.id ?? null, content);
+    const guideTask = before.dailyGuideTask;
     const [evaluationContext, profile, runtimeSettings] = await Promise.all([
       this.contextBuilder.build('evaluate_submission', { submission: content }),
       this.store.getPromptProfile(promptProfileId),
@@ -613,13 +615,9 @@ export class AppService {
   }
 
   async pushSessionState(session: StudySession): Promise<void> {
-    let block: DailyPlanBlock | null = null;
-    if (session.blockId) {
-      block = await this.store.getBlock(session.blockId);
-    }
     const win = this.getMainWindow();
     if (win && !win.isDestroyed()) {
-      win.webContents.send(ipcChannels.sessionStateChanged, { session, block });
+      win.webContents.send(ipcChannels.sessionStateChanged, { session, block: null });
     }
   }
 

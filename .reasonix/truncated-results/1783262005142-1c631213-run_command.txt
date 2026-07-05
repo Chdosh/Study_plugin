@@ -1,0 +1,323 @@
+$ npx vitest run --exclude="src/main/ai/deepseek-contract*" 2>&1
+[exit 1]
+
+[1m[46m RUN [49m[22m [36mv3.2.6 [39m[90mD:/work/study_plugin[39m
+
+ [32m✓[39m src/renderer/src/session-time.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/main/domain/execution-state-machine.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/main/ai/ai-client.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/shared/schemas.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mStudyStore[2m > [22m[2mseeds editable prompt profiles
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/app-service.test.ts[2m > [22m[2mAppService progressive AI flow[2m > [22m[2mruns active goal intake and generates a layered first-day guide
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/app-service.test.ts[2m > [22m[2mAppService progressive AI flow[2m > [22m[2marchives today guide and reopens active intake
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mStudyStore[2m > [22m[2muses Daily Guide blocks as the session anchor without a separate daily-plan lifecycle
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mStudyStore[2m > [22m[2mpersists question branches and returns to the same Daily Guide action
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/app-service.test.ts[2m > [22m[2mAppService progressive AI flow[2m > [22m[2mkeeps the confirmed Daily Guide as the execution spine through questions, actions, and submission
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mRuntime convergence[2m > [22m[2m1. activeDailyTaskId directly queries daily_guide_tasks by task id
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/app-service.test.ts[2m > [22m[2mAppService progressive AI flow[2m > [22m[2mtreats a paused Focus Session as the current recoverable session
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mRuntime convergence[2m > [22m[2m2. activeStepId directly queries daily_guide_actions
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/app-service.test.ts[2m > [22m[2mAppService progressive AI flow[2m > [22m[2mhandles need_more_info then ready in goal intake multi-round flow
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mRuntime convergence[2m > [22m[2m3. activeStageId directly queries roadmap_stages
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/app-service.test.ts[2m > [22m[2mAppService progressive AI flow[2m > [22m[2mgenerates a daily review via ReflectionAgent
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mRuntime convergence[2m > [22m[2m4. Study Session anchors to daily_guide_tasks.id
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/app-service.test.ts[2m > [22m[2mAppService progressive AI flow[2m > [22m[2mrecords daily_guide failure to ai_reviews when schema validation fails
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mRuntime convergence[2m > [22m[2m5. context-builder reads from guideTask/guideAction not block/step
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/app-service.test.ts[2m > [22m[2mAppService progressive AI flow[2m > [22m[2mrecords daily_guide timeout to ai_reviews
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mRuntime convergence[2m > [22m[2m6. restart recovers to same task/action
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/app-service.test.ts[2m > [22m[2mAppService progressive AI flow[2m > [22m[2mgetTodayState returns needs_goal when no goal exists
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mRuntime convergence[2m > [22m[2m7. missing ID mapping preserves formal learning data
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/app-service.test.ts[2m > [22m[2mAppService progressive AI flow[2m > [22m[2mprepareCurrentLearningDay returns active when guide already exists
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mRuntime convergence[2m > [22m[2m8. blockId unique → dailyGuideTaskId (one-to-one)
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/app-service.test.ts[2m > [22m[2mAppService progressive AI flow[2m > [22m[2mprepareCurrentLearningDay returns short_plan_exhausted when no shortPlanDays
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mRuntime convergence[2m > [22m[2m9. blockId no match → runtime pointer null
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mRuntime convergence[2m > [22m[2m10. blockId multiple matches → no arbitrary selection
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/app-service.test.ts[2m > [22m[2mAppService progressive AI flow[2m > [22m[2mcompleteLearningDay is triggered when all tasks are done
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mRuntime convergence[2m > [22m[2m11. old activeStepId NOT mapped by position
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/app-service.test.ts[2m > [22m[2mAppService progressive AI flow[2m > [22m[2mstartSession rejects completed block after task done
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mRuntime convergence[2m > [22m[2m12. valid task.currentAction used for recovery
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+ [32m✓[39m src/main/services/app-service.test.ts [2m([22m[2m13 tests[22m[2m)[22m[33m 11018[2mms[22m[39m
+   [33m[2m✓[22m[39m AppService progressive AI flow[2m > [22mruns active goal intake and generates a layered first-day guide [33m 625[2mms[22m[39m
+   [33m[2m✓[22m[39m AppService progressive AI flow[2m > [22marchives today guide and reopens active intake [33m 978[2mms[22m[39m
+   [33m[2m✓[22m[39m AppService progressive AI flow[2m > [22mkeeps the confirmed Daily Guide as the execution spine through questions, actions, and submission [33m 1124[2mms[22m[39m
+   [33m[2m✓[22m[39m AppService progressive AI flow[2m > [22mtreats a paused Focus Session as the current recoverable session [33m 936[2mms[22m[39m
+   [33m[2m✓[22m[39m AppService progressive AI flow[2m > [22mhandles need_more_info then ready in goal intake multi-round flow [33m 890[2mms[22m[39m
+   [33m[2m✓[22m[39m AppService progressive AI flow[2m > [22mgenerates a daily review via ReflectionAgent [33m 574[2mms[22m[39m
+   [33m[2m✓[22m[39m AppService progressive AI flow[2m > [22mrecords daily_guide failure to ai_reviews when schema validation fails [33m 808[2mms[22m[39m
+   [33m[2m✓[22m[39m AppService progressive AI flow[2m > [22mrecords daily_guide timeout to ai_reviews [33m 827[2mms[22m[39m
+   [33m[2m✓[22m[39m AppService progressive AI flow[2m > [22mgetTodayState returns needs_goal when no goal exists [33m 763[2mms[22m[39m
+   [33m[2m✓[22m[39m AppService progressive AI flow[2m > [22mprepareCurrentLearningDay returns active when guide already exists [33m 561[2mms[22m[39m
+   [33m[2m✓[22m[39m AppService progressive AI flow[2m > [22mprepareCurrentLearningDay returns short_plan_exhausted when no shortPlanDays [33m 796[2mms[22m[39m
+   [33m[2m✓[22m[39m AppService progressive AI flow[2m > [22mcompleteLearningDay is triggered when all tasks are done [33m 1127[2mms[22m[39m
+   [33m[2m✓[22m[39m AppService progressive AI flow[2m > [22mstartSession rejects completed block after task done [33m 1008[2mms[22m[39m
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mRuntime convergence[2m > [22m[2m13. invalid currentAction → state machine recovers
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mRuntime convergence[2m > [22m[2m14. old activeStageId NOT mapped by position
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mRuntime convergence[2m > [22m[2m15. unmappable active session safely terminated
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mRuntime convergence[2m > [22m[2m16. new sessions only write dailyGuideTaskId
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mRuntime convergence[2m > [22m[2m17. PRAGMA foreign_key_check passes
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+[90mstdout[2m | src/main/services/store.test.ts[2m > [22m[2mRuntime convergence[2m > [22m[2m18. formal data record counts unchanged
+[22m[39m[migrations] 202607050006_short_plan_day_association skipped (already applied by bootstrap): SQLITE_ERROR: duplicate column name: short_plan_day_id
+
+ [31m❯[39m src/main/services/store.test.ts [2m([22m[2m21 tests[22m[2m | [22m[31m12 failed[39m[2m)[22m[33m 15081[2mms[22m[39m
+   [33m[2m✓[22m[39m StudyStore[2m > [22mseeds editable prompt profiles [33m 796[2mms[22m[39m
+   [33m[2m✓[22m[39m StudyStore[2m > [22muses Daily Guide blocks as the session anchor without a separate daily-plan lifecycle [33m 885[2mms[22m[39m
+   [33m[2m✓[22m[39m StudyStore[2m > [22mpersists question branches and returns to the same Daily Guide action [33m 983[2mms[22m[39m
+[31m   [31m×[31m Runtime convergence[2m > [22m1. activeDailyTaskId directly queries daily_guide_tasks by task id[39m[33m 530[2mms[22m[39m
+[31m     → 找不到主任务：block_f44519ea-75fc-4efc-a87f-1d4bd9e36a58[39m
+[31m   [31m×[31m Runtime convergence[2m > [22m2. activeStepId directly queries daily_guide_actions[39m[33m 826[2mms[22m[39m
+[31m     → 找不到主任务：block_a8e691bd-4412-456f-99ce-be74a8f413a4[39m
+[31m   [31m×[31m Runtime convergence[2m > [22m3. activeStageId directly queries roadmap_stages[39m[33m 781[2mms[22m[39m
+[31m     → expected 0 to be greater than 0[39m
+[31m   [31m×[31m Runtime convergence[2m > [22m4. Study Session anchors to daily_guide_tasks.id[39m[33m 840[2mms[22m[39m
+[31m     → 找不到主任务：block_9314d4c3-353b-49c1-a999-c9c865e468b1[39m
+[31m   [31m×[31m Runtime convergence[2m > [22m5. context-builder reads from guideTask/guideAction not block/step[39m[33m 497[2mms[22m[39m
+[31m     → 找不到主任务：block_a46b657e-136c-490e-b9c5-05de52dc350e[39m
+[31m   [31m×[31m Runtime convergence[2m > [22m6. restart recovers to same task/action[39m[33m 840[2mms[22m[39m
+[31m     → 找不到主任务：block_a5b6d88f-6de8-4721-8071-fd66e69f1661[39m
+[31m   [31m×[31m Runtime convergence[2m > [22m7. missing ID mapping preserves formal learning data[39m[33m 826[2mms[22m[39m
+[31m     → 找不到主任务：block_5f6607a0-acf1-4d77-bf77-fe165bab4ae5[39m
+   [33m[2m✓[22m[39m Runtime convergence[2m > [22m8. blockId unique → dailyGuideTaskId (one-to-one) [33m 514[2mms[22m[39m
+   [33m[2m✓[22m[39m Runtime convergence[2m > [22m9. blockId no match → runtime pointer null [33m 548[2mms[22m[39m
+   [33m[2m✓[22m[39m Runtime convergence[2m > [22m10. blockId multiple matches → no arbitrary selection [33m 892[2mms[22m[39m
+[31m   [31m×[31m Runtime convergence[2m > [22m11. old activeStepId NOT mapped by position[39m[33m 499[2mms[22m[39m
+[31m     → 找不到主任务：block_15603314-4274-4da6-a27b-2d01850ec197[39m
+   [33m[2m✓[22m[39m Runtime convergence[2m > [22m12. valid task.currentAction used for recovery [33m 836[2mms[22m[39m
+   [33m[2m✓[22m[39m Runtime convergence[2m > [22m13. invalid currentAction → state machine recovers [33m 857[2mms[22m[39m
+   [33m[2m✓[22m[39m Runtime convergence[2m > [22m14. old activeStageId NOT mapped by position [33m 780[2mms[22m[39m
+[31m   [31m×[31m Runtime convergence[2m > [22m15. unmappable active session safely terminated[39m[33m 836[2mms[22m[39m
+[31m     → 找不到主任务：block_8529cad8-6619-4865-82d8-136bf32c6a66[39m
+[31m   [31m×[31m Runtime convergence[2m > [22m16. new sessions only write dailyGuideTaskId[39m[33m 501[2mms[22m[39m
+[31m     → 找不到主任务：block_7ebde75a-de28-41ca-b0e9-9fd5f48f4012[39m
+[31m   [31m×[31m Runtime convergence[2m > [22m17. PRAGMA foreign_key_check passes[39m[33m 497[2mms[22m[39m
+[31m     → 找不到主任务：block_64cf1bb7-bf5e-4f52-aaf1-89f3ae3b7222[39m
+[31m   [31m×[31m Runtime convergence[2m > [22m18. formal data record counts unchanged[39m[33m 514[2mms[22m[39m
+[31m     → 找不到主任务：block_43c82283-bd29-4aab-93be-b1b1e2727232[39m
+
+[31m⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 12 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/main/services/store.test.ts[2m > [22mRuntime convergence[2m > [22m1. activeDailyTaskId directly queries daily_guide_tasks by task id
+[31m[1mError[22m: 找不到主任务：block_f44519ea-75fc-4efc-a87f-1d4bd9e36a58[39m
+[36m [2m❯[22m StudyStore.startSession src/main/services/store.ts:[2m888:27[22m[39m
+    [90m886| [39m  [35masync[39m [34mstartSession[39m(taskId[33m:[39m string)[33m:[39m [33mPromise[39m[33m<[39m[33mStudySession[39m[33m>[39m {
+    [90m887| [39m    [35mconst[39m guideTask [33m=[39m [35mawait[39m [35mthis[39m[33m.[39m[34mgetDailyGuideTaskById[39m(taskId)[33m;[39m
+    [90m888| [39m    [35mif[39m ([33m![39mguideTask) [35mthrow[39m [35mnew[39m [33mError[39m([32m`找不到主任务：[39m[36m${[39mtaskId[36m}[39m[32m`[39m)[33m;[39m
+    [90m   | [39m                          [31m^[39m
+    [90m889| [39m    [35mif[39m (guideTask[33m.[39mstatus [33m===[39m [32m'done'[39m) {
+    [90m890| [39m      [35mthrow[39m [35mnew[39m [33mError[39m([32m'当前主任务已完成，不能重新开始学习。'[39m)[33m;[39m
+[90m [2m❯[22m src/main/services/store.test.ts:[2m208:5[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/12]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/main/services/store.test.ts[2m > [22mRuntime convergence[2m > [22m2. activeStepId directly queries daily_guide_actions
+[31m[1mError[22m: 找不到主任务：block_a8e691bd-4412-456f-99ce-be74a8f413a4[39m
+[36m [2m❯[22m StudyStore.startSession src/main/services/store.ts:[2m888:27[22m[39m
+    [90m886| [39m  [35masync[39m [34mstartSession[39m(taskId[33m:[39m string)[33m:[39m [33mPromise[39m[33m<[39m[33mStudySession[39m[33m>[39m {
+    [90m887| [39m    [35mconst[39m guideTask [33m=[39m [35mawait[39m [35mthis[39m[33m.[39m[34mgetDailyGuideTaskById[39m(taskId)[33m;[39m
+    [90m888| [39m    [35mif[39m ([33m![39mguideTask) [35mthrow[39m [35mnew[39m [33mError[39m([32m`找不到主任务：[39m[36m${[39mtaskId[36m}[39m[32m`[39m)[33m;[39m
+    [90m   | [39m                          [31m^[39m
+    [90m889| [39m    [35mif[39m (guideTask[33m.[39mstatus [33m===[39m [32m'done'[39m) {
+    [90m890| [39m      [35mthrow[39m [35mnew[39m [33mError[39m([32m'当前主任务已完成，不能重新开始学习。'[39m)[33m;[39m
+[90m [2m❯[22m src/main/services/store.test.ts:[2m222:5[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/12]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/main/services/store.test.ts[2m > [22mRuntime convergence[2m > [22m3. activeStageId directly queries roadmap_stages
+[31m[1mAssertionError[22m: expected 0 to be greater than 0[39m
+[36m [2m❯[22m src/main/services/store.test.ts:[2m234:25[22m[39m
+    [90m232| [39m  [34mit[39m([32m'3. activeStageId directly queries roadmap_stages'[39m[33m,[39m [35masync[39m () [33m=>[39m {
+    [90m233| [39m    [35mconst[39m rows [33m=[39m [35mawait[39m db[33m.[39m[34mselect[39m()[33m.[39m[35mfrom[39m(roadmapStages)[33m;[39m
+    [90m234| [39m    [34mexpect[39m(rows[33m.[39mlength)[33m.[39m[34mtoBeGreaterThan[39m([34m0[39m)[33m;[39m
+    [90m   | [39m                        [31m^[39m
+    [90m235| [39m  })[33m;[39m
+    [90m236| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/12]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/main/services/store.test.ts[2m > [22mRuntime convergence[2m > [22m4. Study Session anchors to daily_guide_tasks.id
+[31m[1mError[22m: 找不到主任务：block_9314d4c3-353b-49c1-a999-c9c865e468b1[39m
+[36m [2m❯[22m StudyStore.startSession src/main/services/store.ts:[2m888:27[22m[39m
+    [90m886| [39m  [35masync[39m [34mstartSession[39m(taskId[33m:[39m string)[33m:[39m [33mPromise[39m[33m<[39m[33mStudySession[39m[33m>[39m {
+    [90m887| [39m    [35mconst[39m guideTask [33m=[39m [35mawait[39m [35mthis[39m[33m.[39m[34mgetDailyGuideTaskById[39m(taskId)[33m;[39m
+    [90m888| [39m    [35mif[39m ([33m![39mguideTask) [35mthrow[39m [35mnew[39m [33mError[39m([32m`找不到主任务：[39m[36m${[39mtaskId[36m}[39m[32m`[39m)[33m;[39m
+    [90m   | [39m                          [31m^[39m
+    [90m889| [39m    [35mif[39m (guideTask[33m.[39mstatus [33m===[39m [32m'done'[39m) {
+    [90m890| [39m      [35mthrow[39m [35mnew[39m [33mError[39m([32m'当前主任务已完成，不能重新开始学习。'[39m)[33m;[39m
+[90m [2m❯[22m src/main/services/store.test.ts:[2m240:21[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/12]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/main/services/store.test.ts[2m > [22mRuntime convergence[2m > [22m5. context-builder reads from guideTask/guideAction not block/step
+[31m[1mError[22m: 找不到主任务：block_a46b657e-136c-490e-b9c5-05de52dc350e[39m
+[36m [2m❯[22m StudyStore.startSession src/main/services/store.ts:[2m888:27[22m[39m
+    [90m886| [39m  [35masync[39m [34mstartSession[39m(taskId[33m:[39m string)[33m:[39m [33mPromise[39m[33m<[39m[33mStudySession[39m[33m>[39m {
+    [90m887| [39m    [35mconst[39m guideTask [33m=[39m [35mawait[39m [35mthis[39m[33m.[39m[34mgetDailyGuideTaskById[39m(taskId)[33m;[39m
+    [90m888| [39m    [35mif[39m ([33m![39mguideTask) [35mthrow[39m [35mnew[39m [33mError[39m([32m`找不到主任务：[39m[36m${[39mtaskId[36m}[39m[32m`[39m)[33m;[39m
+    [90m   | [39m                          [31m^[39m
+    [90m889| [39m    [35mif[39m (guideTask[33m.[39mstatus [33m===[39m [32m'done'[39m) {
+    [90m890| [39m      [35mthrow[39m [35mnew[39m [33mError[39m([32m'当前主任务已完成，不能重新开始学习。'[39m)[33m;[39m
+[90m [2m❯[22m src/main/services/store.test.ts:[2m253:5[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/12]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/main/services/store.test.ts[2m > [22mRuntime convergence[2m > [22m6. restart recovers to same task/action
+[31m[1mError[22m: 找不到主任务：block_a5b6d88f-6de8-4721-8071-fd66e69f1661[39m
+[36m [2m❯[22m StudyStore.startSession src/main/services/store.ts:[2m888:27[22m[39m
+    [90m886| [39m  [35masync[39m [34mstartSession[39m(taskId[33m:[39m string)[33m:[39m [33mPromise[39m[33m<[39m[33mStudySession[39m[33m>[39m {
+    [90m887| [39m    [35mconst[39m guideTask [33m=[39m [35mawait[39m [35mthis[39m[33m.[39m[34mgetDailyGuideTaskById[39m(taskId)[33m;[39m
+    [90m888| [39m    [35mif[39m ([33m![39mguideTask) [35mthrow[39m [35mnew[39m [33mError[39m([32m`找不到主任务：[39m[36m${[39mtaskId[36m}[39m[32m`[39m)[33m;[39m
+    [90m   | [39m                          [31m^[39m
+    [90m889| [39m    [35mif[39m (guideTask[33m.[39mstatus [33m===[39m [32m'done'[39m) {
+    [90m890| [39m      [35mthrow[39m [35mnew[39m [33mError[39m([32m'当前主任务已完成，不能重新开始学习。'[39m)[33m;[39m
+[90m [2m❯[22m src/main/services/store.test.ts:[2m265:5[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/12]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/main/services/store.test.ts[2m > [22mRuntime convergence[2m > [22m7. missing ID mapping preserves formal learning data
+[31m[1mError[22m: 找不到主任务：block_5f6607a0-acf1-4d77-bf77-fe165bab4ae5[39m
+[36m [2m❯[22m StudyStore.startSession src/main/services/store.ts:[2m888:27[22m[39m
+    [90m886| [39m  [35masync[39m [34mstartSession[39m(taskId[33m:[39m string)[33m:[39m [33mPromise[39m[33m<[39m[33mStudySession[39m[33m>[39m {
+    [90m887| [39m    [35mconst[39m guideTask [33m=[39m [35mawait[39m [35mthis[39m[33m.[39m[34mgetDailyGuideTaskById[39m(taskId)[33m;[39m
+    [90m888| [39m    [35mif[39m ([33m![39mguideTask) [35mthrow[39m [35mnew[39m [33mError[39m([32m`找不到主任务：[39m[36m${[39mtaskId[36m}[39m[32m`[39m)[33m;[39m
+    [90m   | [39m                          [31m^[39m
+    [90m889| [39m    [35mif[39m (guideTask[33m.[39mstatus [33m===[39m [32m'done'[39m) {
+    [90m890| [39m      [35mthrow[39m [35mnew[39m [33mError[39m([32m'当前主任务已完成，不能重新开始学习。'[39m)[33m;[39m
+[90m [2m❯[22m src/main/services/store.test.ts:[2m276:5[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/12]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/main/services/store.test.ts[2m > [22mRuntime convergence[2m > [22m11. old activeStepId NOT mapped by position
+[31m[1mError[22m: 找不到主任务：block_15603314-4274-4da6-a27b-2d01850ec197[39m
+[36m [2m❯[22m StudyStore.startSession src/main/services/store.ts:[2m888:27[22m[39m
+    [90m886| [39m  [35masync[39m [34mstartSession[39m(taskId[33m:[39m string)[33m:[39m [33mPromise[39m[33m<[39m[33mStudySession[39m[33m>[39m {
+    [90m887| [39m    [35mconst[39m guideTask [33m=[39m [35mawait[39m [35mthis[39m[33m.[39m[34mgetDailyGuideTaskById[39m(taskId)[33m;[39m
+    [90m888| [39m    [35mif[39m ([33m![39mguideTask) [35mthrow[39m [35mnew[39m [33mError[39m([32m`找不到主任务：[39m[36m${[39mtaskId[36m}[39m[32m`[39m)[33m;[39m
+    [90m   | [39m                          [31m^[39m
+    [90m889| [39m    [35mif[39m (guideTask[33m.[39mstatus [33m===[39m [32m'done'[39m) {
+    [90m890| [39m      [35mthrow[39m [35mnew[39m [33mError[39m([32m'当前主任务已完成，不能重新开始学习。'[39m)[33m;[39m
+[90m [2m❯[22m src/main/services/store.test.ts:[2m336:5[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/12]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/main/services/store.test.ts[2m > [22mRuntime convergence[2m > [22m15. unmappable active session safely terminated
+[31m[1mError[22m: 找不到主任务：block_8529cad8-6619-4865-82d8-136bf32c6a66[39m
+[36m [2m❯[22m StudyStore.startSession src/main/services/store.ts:[2m888:27[22m[39m
+    [90m886| [39m  [35masync[39m [34mstartSession[39m(taskId[33m:[39m string)[33m:[39m [33mPromise[39m[33m<[39m[33mStudySession[39m[33m>[39m {
+    [90m887| [39m    [35mconst[39m guideTask [33m=[39m [35mawait[39m [35mthis[39m[33m.[39m[34mgetDailyGuideTaskById[39m(taskId)[33m;[39m
+    [90m888| [39m    [35mif[39m ([33m![39mguideTask) [35mthrow[39m [35mnew[39m [33mError[39m([32m`找不到主任务：[39m[36m${[39mtaskId[36m}[39m[32m`[39m)[33m;[39m
+    [90m   | [39m                          [31m^[39m
+    [90m889| [39m    [35mif[39m (guideTask[33m.[39mstatus [33m===[39m [32m'done'[39m) {
+    [90m890| [39m      [35mthrow[39m [35mnew[39m [33mError[39m([32m'当前主任务已完成，不能重新开始学习。'[39m)[33m;[39m
+[90m [2m❯[22m src/main/services/store.test.ts:[2m380:5[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/12]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/main/services/store.test.ts[2m > [22mRuntime convergence[2m > [22m16. new sessions only write dailyGuideTaskId
+[31m[1mError[22m: 找不到主任务：block_7ebde75a-de28-41ca-b0e9-9fd5f48f4012[39m
+[36m [2m❯[22m StudyStore.startSession src/main/services/store.ts:[2m888:27[22m[39m
+    [90m886| [39m  [35masync[39m [34mstartSession[39m(taskId[33m:[39m string)[33m:[39m [33mPromise[39m[33m<[39m[33mStudySession[39m[33m>[39m {
+    [90m887| [39m    [35mconst[39m guideTask [33m=[39m [35mawait[39m [35mthis[39m[33m.[39m[34mgetDailyGuideTaskById[39m(taskId)[33m;[39m
+    [90m888| [39m    [35mif[39m ([33m![39mguideTask) [35mthrow[39m [35mnew[39m [33mError[39m([32m`找不到主任务：[39m[36m${[39mtaskId[36m}[39m[32m`[39m)[33m;[39m
+    [90m   | [39m                          [31m^[39m
+    [90m889| [39m    [35mif[39m (guideTask[33m.[39mstatus [33m===[39m [32m'done'[39m) {
+    [90m890| [39m      [35mthrow[39m [35mnew[39m [33mError[39m([32m'当前主任务已完成，不能重新开始学习。'[39m)[33m;[39m
+[90m [2m❯[22m src/main/services/store.test.ts:[2m393:21[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/12]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/main/services/store.test.ts[2m > [22mRuntime convergence[2m > [22m17. PRAGMA foreign_key_check passes
+[31m[1mError[22m: 找不到主任务：block_64cf1bb7-bf5e-4f52-aaf1-89f3ae3b7222[39m
+[36m [2m❯[22m StudyStore.startSession src/main/services/store.ts:[2m888:27[22m[39m
+    [90m886| [39m  [35masync[39m [34mstartSession[39m(taskId[33m:[39m string)[33m:[39m [33mPromise[39m[33m<[39m[33mStudySession[39m[33m>[39m {
+    [90m887| [39m    [35mconst[39m guideTask [33m=[39m [35mawait[39m [35mthis[39m[33m.[39m[34mgetDailyGuideTaskById[39m(taskId)[33m;[39m
+    [90m888| [39m    [35mif[39m ([33m![39mguideTask) [35mthrow[39m [35mnew[39m [33mError[39m([32m`找不到主任务：[39m[36m${[39mtaskId[36m}[39m[32m`[39m)[33m;[39m
+    [90m   | [39m                          [31m^[39m
+    [90m889| [39m    [35mif[39m (guideTask[33m.[39mstatus [33m===[39m [32m'done'[39m) {
+    [90m890| [39m      [35mthrow[39m [35mnew[39m [33mError[39m([32m'当前主任务已完成，不能重新开始学习。'[39m)[33m;[39m
+[90m [2m❯[22m src/main/services/store.test.ts:[2m405:5[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/12]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/main/services/store.test.ts[2m > [22mRuntime convergence[2m > [22m18. formal data record counts unchanged
+[31m[1mError[22m: 找不到主任务：block_43c82283-bd29-4aab-93be-b1b1e2727232[39m
+[36m [2m❯[22m StudyStore.startSession src/main/services/store.ts:[2m888:27[22m[39m
+    [90m886| [39m  [35masync[39m [34mstartSession[39m(taskId[33m:[39m string)[33m:[39m [33mPromise[39m[33m<[39m[33mStudySession[39m[33m>[39m {
+    [90m887| [39m    [35mconst[39m guideTask [33m=[39m [35mawait[39m [35mthis[39m[33m.[39m[34mgetDailyGuideTaskById[39m(taskId)[33m;[39m
+    [90m888| [39m    [35mif[39m ([33m![39mguideTask) [35mthrow[39m [35mnew[39m [33mError[39m([32m`找不到主任务：[39m[36m${[39mtaskId[36m}[39m[32m`[39m)[33m;[39m
+    [90m   | [39m                          [31m^[39m
+    [90m889| [39m    [35mif[39m (guideTask[33m.[39mstatus [33m===[39m [32m'done'[39m) {
+    [90m890| [39m      [35mthrow[39m [35mnew[39m [33mError[39m([32m'当前主任务已完成，不能重新开始学习。'[39m)[33m;[39m
+[90m [2m❯[22m src/main/services/store.test.ts:[2m414:5[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/12]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m5 passed[39m[22m[90m (6)[39m
+[2m      Tests [22m [1m[31m12 failed[39m[22m[2m | [22m[1m[32m48 passed[39m[22m[90m (60)[39m
+[2m   Start at [22m 22:33:08
+[2m   Duration [22m 16.72s[2m (transform 674ms, setup 0ms, collect 2.68s, tests 26.14s, environment 2ms, prepare 1.42s)[22m
+
