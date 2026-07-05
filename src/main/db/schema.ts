@@ -129,8 +129,9 @@ export const taskDependencies = sqliteTable(
 export const dailyPlans = sqliteTable('daily_plans', {
   id: text('id').primaryKey(),
   date: text('date').notNull(),
-  status: text('status', { enum: ['draft', 'confirmed', 'archived'] }).notNull().default('draft'),
+  status: text('status', { enum: ['draft', 'confirmed', 'completed', 'archived'] }).notNull().default('draft'),
   availableWindowsJson: text('available_windows_json').notNull(),
+  shortPlanDayId: text('short_plan_day_id').references(() => shortPlanDays.id),
   createdAt: text('created_at').notNull(),
   confirmedAt: text('confirmed_at'),
   sourceReviewId: text('source_review_id'),
@@ -167,8 +168,9 @@ export const dailyGuides = sqliteTable('daily_guides', {
   planId: text('plan_id')
     .notNull()
     .references(() => dailyPlans.id),
+  shortPlanDayId: text('short_plan_day_id').references(() => shortPlanDays.id),
   date: text('date').notNull(),
-  status: text('status', { enum: ['draft', 'confirmed', 'archived'] }).notNull().default('draft'),
+  status: text('status', { enum: ['draft', 'confirmed', 'completed', 'archived'] }).notNull().default('draft'),
   weekFocus: text('week_focus').notNull().default(''),
   todayGoal: text('today_goal').notNull(),
   deliverablesJson: text('deliverables_json').notNull(),

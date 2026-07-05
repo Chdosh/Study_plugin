@@ -239,6 +239,7 @@ export function createDailyGuide(scenario: MockScenario): DailyGuide {
     id: guideId,
     goalId: mockId('goal'),
     planId: mockId('plan'),
+    shortPlanDayId: mockId('spday'),
     date: '2026-07-04',
     status: 'confirmed',
     weekFocus: '夯实 React 基础，掌握组件化开发思维',
@@ -260,13 +261,14 @@ export function createDailyGuide(scenario: MockScenario): DailyGuide {
 export function createTodayGuideState(config: PreviewConfig): TodayGuideState {
   const scenario = toScenario(config);
   if (config.guide === 'no-guide') {
-    return { goal: scenario.isEmpty ? null : createLearningGoal(scenario), roadmap: [], shortPlan: [], guide: null };
+    return { goal: scenario.isEmpty ? null : createLearningGoal(scenario), roadmap: [], shortPlan: [], guide: null, todayState: 'needs_goal' as const };
   }
   return {
     goal: createLearningGoal(scenario),
     roadmap: createRoadmapStages(),
     shortPlan: createShortPlanDays(),
-    guide: createDailyGuide(scenario)
+    guide: createDailyGuide(scenario),
+    todayState: 'active' as const
   };
 }
 

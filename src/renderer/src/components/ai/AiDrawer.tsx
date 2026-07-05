@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, SendHorizontal, Sparkles, Upload, X } from 'lucide-react';
 import type {
   AppSettings,
@@ -8,6 +8,24 @@ import type {
 } from '../../../../shared/types';
 import { MessageContent } from './MessageContent';
 import { StatePanel } from '../shared/StatePanel';
+
+function mapEvaluationResult(result: string): string {
+  const map: Record<string, string> = {
+    passed: '已通过',
+    partial: '部分完成',
+    failed: '未通过',
+    unclear: '需要补充'
+  };
+  return map[result] ?? result;
+}
+
+function mapDecisionLabel(decision: string): string {
+  const map: Record<string, string> = {
+    complete_task: '当前主任务已完成',
+    remediate: '需要修改后再提交'
+  };
+  return map[decision] ?? decision;
+}
 
 export function AiDrawer({
   show,
@@ -37,6 +55,8 @@ export function AiDrawer({
   const [question, setQuestion] = useState('');
   const [submission, setSubmission] = useState('');
   const [activeTab, setActiveTab] = useState<'question' | 'submission'>('question');
+  const [submitted, setSubmitted] = useState(false);
+  const prevSubmissionResultRef = useRef<SubmissionEvaluationResult | null>(null);
   const activeThread = learningState?.questionThread ?? null;
   const latestEvaluation = submissionResult?.evaluation ?? learningState?.latestEvaluation ?? null;
   const latestDecision = submissionResult?.decision ?? learningState?.latestDecision ?? null;
@@ -46,6 +66,14 @@ export function AiDrawer({
       setActiveTab(initialTab);
     }
   }, [show, initialTab]);
+
+  // Track submission completion for post-submit state
+  useEffect(() => {
+    if (submissionResult && submissionResult !== prevSubmissionResultRef.current) {
+      prevSubmissionResultRef.current = submissionResult;
+      setSubmitted(true);
+    }
+  }, [submissionResult]);
 
   if (!show) return null;
 
@@ -124,47 +152,67 @@ export function AiDrawer({
 
             {activeTab === 'submission' && (
               <div className="submission-panel">
-                <label className="assistant-field">
-                  提交结果
-                  <textarea
-                    value={submission}
-                    onChange={(event) => setSubmission(event.target.value)}
-                    placeholder="粘贴最终产出、答案或链接..."
-                    aria-label="提交学习结果"
-                  />
-                </label>
-                <div className="upload-dropzone">
-                  <Upload size={26} />
-                  <span>拖拽文件或截图到此</span>
-                  <small>支持图片 / 文档 / 链接等说明文本</small>
-                </div>
-                <button
-                  className="primary-action full"
-                  type="button"
-                  disabled={!learningState?.step || !submission.trim()}
-                  onClick={() => {
-                    const value = submission.trim();
-                    if (!value) return;
-                    setSubmission('');
-                    void onSubmitResult(value);
-                  }}
-                >
-                  <CheckCircle2 size={16} />
-                  提交并评估
-                </button>
+                {submitted && latestEvaluation ? (
+                  <div className="submission-complete-state">
+                    <CheckCircle2 size={24} />
+                    <strong>已提交并完成评估</strong>
+                    <p>评估结果和下一步已显示在下方。关闭抽屉即可继续学习。</p>
+                    <button
+                      className="secondary-action full"
+                      type="button"
+                      onClick={() => {
+                        setSubmitted(false);
+                        setSubmission('');
+                      }}
+                    >
+                      提交新的结果
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <label className="assistant-field">
+                      提交结果
+                      <textarea
+                        value={submission}
+                        onChange={(event) => setSubmission(event.target.value)}
+                        placeholder="粘贴最终产出、答案或链接..."
+                        aria-label="提交学习结果"
+                      />
+                    </label>
+                    <div className="upload-dropzone">
+                      <Upload size={26} />
+                      <span>拖拽文件或截图到此</span>
+                      <small>支持图片 / 文档 / 链接等说明文本</small>
+                    </div>
+                    <button
+                      className="primary-action full"
+                      type="button"
+                      disabled={!learningState?.step || !submission.trim()}
+                      onClick={() => {
+                        const value = submission.trim();
+                        if (!value) return;
+                        setSubmission('');
+                        void onSubmitResult(value);
+                      }}
+                    >
+                      <CheckCircle2 size={16} />
+                      提交并评估
+                    </button>
+                  </>
+                )}
               </div>
             )}
 
             {latestEvaluation && (
               <div className="assistant-message assistant-message-system">
-                <strong>评估：{latestEvaluation.result} · 掌握度 {latestEvaluation.mastery}</strong>
+                <strong>评估：{mapEvaluationResult(latestEvaluation.result)} · 掌握度 {latestEvaluation.mastery}</strong>
                 <MessageContent content={latestEvaluation.feedback} />
               </div>
             )}
 
             {latestDecision && (
               <div className="assistant-message">
-                <strong>下一步：{latestDecision.decision}</strong>
+                <strong>下一步：{mapDecisionLabel(latestDecision.decision)}</strong>
                 <MessageContent content={latestDecision.reason} />
               </div>
             )}
