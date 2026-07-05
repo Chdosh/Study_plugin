@@ -116,7 +116,7 @@ export function AiDrawer({
                   className="secondary-action full"
                   type="button"
                   onClick={() => void onTeachStep()}
-                  disabled={!learningState?.step}
+                  disabled={!learningState?.dailyGuideAction}
                 >
                   <Sparkles size={16} />
                   展开当前步骤
@@ -187,7 +187,7 @@ export function AiDrawer({
                     <button
                       className="primary-action full"
                       type="button"
-                      disabled={!learningState?.step || !submission.trim()}
+                      disabled={!learningState?.dailyGuideAction || !submission.trim()}
                       onClick={() => {
                         const value = submission.trim();
                         if (!value) return;

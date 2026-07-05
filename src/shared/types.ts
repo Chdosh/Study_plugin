@@ -262,8 +262,8 @@ export interface DailyPlanBlock {
 
 export interface StudySession {
   id: Id;
-  blockId: Id | null;
   taskId: Id | null;
+  taskItemsId: Id | null;
   startedAt: string;
   endedAt: string | null;
   durationMinutes: number | null;
@@ -324,7 +324,7 @@ export interface QuestionThread {
   goalId: Id | null;
   stageId: Id | null;
   taskId: Id | null;
-  stepId: Id;
+  stepId: Id | null;
   status: 'open' | 'resolved';
   question: string;
   resolutionSummary: string | null;
@@ -343,7 +343,8 @@ export interface QuestionMessage {
 
 export interface LearningSubmission {
   id: Id;
-  stepId: Id;
+  stepId: Id | null;
+  dailyGuideActionId: Id | null;
   sessionId: Id | null;
   content: string;
   createdAt: string;
@@ -352,7 +353,7 @@ export interface LearningSubmission {
 export interface LearningEvaluation {
   id: Id;
   submissionId: Id;
-  stepId: Id;
+  stepId: Id | null;
   result: 'passed' | 'partial' | 'failed' | 'unclear';
   mastery: number;
   evidence: string[];
@@ -368,7 +369,7 @@ export interface LearningEvaluation {
 export interface StoredNextStepDecision {
   id: Id;
   evaluationId: Id;
-  stepId: Id;
+  stepId: Id | null;
   decision: NextStepDecision;
   reason: string;
   taskCompleted: boolean;
@@ -417,13 +418,12 @@ export interface PlanAdjustmentProposal {
 export interface LearningRuntimeSnapshot {
   state: LearningRuntimeState;
   goal: LearningGoal | null;
-  stage: PlanStage | null;
-  task: TaskItem | null;
-  block: DailyPlanBlock | null;
-  step: LearningStep | null;
+  dailyGuide: DailyGuide | null;
+  dailyGuideTask: DailyGuideTask | null;
+  dailyGuideAction: DailyGuideAction | null;
+  roadmapStage: RoadmapStage | null;
   questionThread: QuestionThread | null;
   questionMessages: QuestionMessage[];
-  recentStepSummaries: LearningSummary[];
   latestSubmission: LearningSubmission | null;
   latestEvaluation: LearningEvaluation | null;
   latestDecision: StoredNextStepDecision | null;
@@ -496,10 +496,10 @@ export interface StudyAppApi {
   };
   sessions: {
     getActive: () => Promise<{ session: StudySession; block: DailyPlanBlock } | null>;
-    start: (blockId: Id) => Promise<StudySession>;
+    start: (taskId: Id) => Promise<StudySession>;
     pause: (sessionId: Id) => Promise<StudySession>;
     skip: (blockId: Id, reason: string) => Promise<void>;
-    getAccumulated: (blockId: Id, excludeSessionId?: Id) => Promise<number>;
+    getAccumulated: (taskId: Id, excludeSessionId?: Id) => Promise<number>;
   };
   learning: {
     getState: () => Promise<LearningRuntimeSnapshot>;

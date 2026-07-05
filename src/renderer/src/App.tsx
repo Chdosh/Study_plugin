@@ -208,12 +208,12 @@ export default function App(): JSX.Element {
             teaching={teaching}
             questionAnswer={questionAnswer}
             submissionResult={submissionResult}
-            onStartSession={(blockId) =>
+            onStartSession={(taskId) =>
               runAction('开始学习', async () => {
                 if (todayGuide?.guide?.status === 'draft') {
                   await window.studyApp.guides.confirmDailyGuide(todayGuide.guide.id);
                 }
-                const session = await window.studyApp.sessions.start(blockId);
+                const session = await window.studyApp.sessions.start(taskId);
                 setActiveSession(session);
                 await refresh();
               })
@@ -228,9 +228,9 @@ export default function App(): JSX.Element {
                 : Promise.resolve()
             }
             onResumeSession={() =>
-              activeSession?.blockId
+              activeSession?.taskId
                 ? runAction('恢复学习', async () => {
-                    const session = await window.studyApp.sessions.start(activeSession.blockId!);
+                    const session = await window.studyApp.sessions.start(activeSession.taskId!);
                     setActiveSession(session);
                     await syncActiveSession();
                   })
