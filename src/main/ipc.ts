@@ -22,7 +22,7 @@ export function registerIpcHandlers(appService: AppService): void {
   ipcMain.handle(ipcChannels.guidesPrepareCurrentLearningDay, () => appService.prepareCurrentLearningDay());
   ipcMain.handle(ipcChannels.guidesGetTodayState, () => appService.getTodayState());
   ipcMain.handle(ipcChannels.guidesListToday, () => appService.listTodayGuide());
-  ipcMain.handle(ipcChannels.sessionsStart, (_event, payload) => appService.startSession(payload.blockId));
+  ipcMain.handle(ipcChannels.sessionsStart, (_event, payload) => appService.startSession(payload.taskId));
   ipcMain.handle(ipcChannels.sessionsPause, (_event, payload) => appService.pauseSession(payload.sessionId));
   ipcMain.handle(ipcChannels.sessionsSkip, (_event, payload) =>
     appService.skipBlock(payload.blockId, payload.reason)

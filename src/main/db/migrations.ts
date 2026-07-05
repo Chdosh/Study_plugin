@@ -306,6 +306,180 @@ export const databaseMigrations: DatabaseMigration[] = [
       CREATE UNIQUE INDEX IF NOT EXISTS daily_guides_short_plan_day_unique
         ON daily_guides(short_plan_day_id);
     `
+  },
+  {
+    id: '202607050007_runtime_convergence',
+    sql: `
+      PRAGMA foreign_keys = OFF;
+
+      CREATE TABLE IF NOT EXISTS _migration_backup_runtime AS SELECT * FROM learning_runtime_states;
+      CREATE TABLE IF NOT EXISTS _migration_backup_sessions AS SELECT * FROM study_sessions;
+
+      CREATE TABLE learning_runtime_states_new (
+        id TEXT PRIMARY KEY,
+        active_goal_id TEXT REFERENCES goals(id),
+        active_stage_id TEXT REFERENCES roadmap_stages(id),
+        active_daily_task_id TEXT REFERENCES daily_guide_tasks(id),
+        active_step_id TEXT REFERENCES daily_guide_actions(id),
+        active_question_thread_id TEXT,
+        session_status TEXT NOT NULL DEFAULT 'idle' CHECK(session_status IN ('idle','active','paused','completed')),
+        updated_at TEXT NOT NULL
+      );
+
+      INSERT INTO learning_runtime_states_new
+      SELECT
+        r.id,
+        r.active_goal_id,
+        NULL AS active_stage_id,
+        (SELECT dgt.id FROM daily_guide_tasks dgt
+         WHERE dgt.legacy_plan_block_id = r.active_daily_task_id LIMIT 1) AS active_daily_task_id,
+        NULL AS active_step_id,
+        r.active_question_thread_id,
+        r.session_status,
+        r.updated_at
+      FROM learning_runtime_states r;
+
+      CREATE TABLE study_sessions_new (
+        id TEXT PRIMARY KEY,
+        task_id TEXT REFERENCES daily_guide_tasks(id),
+        task_items_id TEXT REFERENCES task_items(id),
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        duration_minutes INTEGER,
+        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','paused','completed','skipped')),
+        focus_score INTEGER,
+        notes TEXT
+      );
+
+      INSERT INTO study_sessions_new
+      SELECT
+        s.id,
+        CASE
+          WHEN s.status IN ('active','paused') AND (
+            SELECT dgt.id FROM daily_guide_tasks dgt WHERE dgt.legacy_plan_block_id = s.block_id LIMIT 1
+          ) IS NULL THEN NULL
+          ELSE (SELECT dgt.id FROM daily_guide_tasks dgt WHERE dgt.legacy_plan_block_id = s.block_id LIMIT 1)
+        END AS task_id,
+        s.task_id AS task_items_id,
+        s.started_at,
+        s.ended_at,
+        s.duration_minutes,
+        CASE
+          WHEN s.status IN ('active','paused') AND (
+            SELECT dgt.id FROM daily_guide_tasks dgt WHERE dgt.legacy_plan_block_id = s.block_id LIMIT 1
+          ) IS NULL THEN 'completed'
+          ELSE s.status
+        END AS status,
+        s.focus_score,
+        s.notes
+      FROM study_sessions s;
+
+      DROP TABLE learning_runtime_states;
+      ALTER TABLE learning_runtime_states_new RENAME TO learning_runtime_states;
+
+      DROP TABLE study_sessions;
+      ALTER TABLE study_sessions_new RENAME TO study_sessions;
+
+      UPDATE learning_runtime_states
+      SET active_step_id = (
+        SELECT dgt.current_action_id FROM daily_guide_tasks dgt
+        WHERE dgt.id = learning_runtime_states.active_daily_task_id
+        AND dgt.current_action_id IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM daily_guide_actions dga
+          WHERE dga.id = dgt.current_action_id AND dga.task_id = dgt.id
+        )
+      )
+      WHERE active_daily_task_id IS NOT NULL AND active_step_id IS NULL;
+
+      UPDATE learning_runtime_states
+      SET active_stage_id = (
+        SELECT rs.id FROM roadmap_stages rs
+        WHERE rs.goal_id = learning_runtime_states.active_goal_id
+        ORDER BY rs.position ASC LIMIT 1
+      )
+      WHERE active_goal_id IS NOT NULL AND active_stage_id IS NULL;
+
+      PRAGMA foreign_keys = ON;
+      PRAGMA foreign_key_check;
+    `
+  },
+  {
+    id: '202607050008_daily_guide_action_fks',
+    sql: `
+      ALTER TABLE learning_submissions ADD COLUMN daily_guide_action_id TEXT REFERENCES daily_guide_actions(id);
+      ALTER TABLE learning_evaluations ADD COLUMN daily_guide_action_id TEXT REFERENCES daily_guide_actions(id);
+      CREATE TABLE learning_submissions_new (
+        id TEXT PRIMARY KEY,
+        step_id TEXT REFERENCES learning_steps(id),
+        daily_guide_action_id TEXT REFERENCES daily_guide_actions(id),
+        session_id TEXT REFERENCES study_sessions(id),
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO learning_submissions_new SELECT id, step_id, NULL, session_id, content, created_at FROM learning_submissions;
+      DROP TABLE learning_submissions;
+      ALTER TABLE learning_submissions_new RENAME TO learning_submissions;
+      CREATE TABLE learning_evaluations_new (
+        id TEXT PRIMARY KEY,
+        submission_id TEXT NOT NULL REFERENCES learning_submissions(id),
+        step_id TEXT REFERENCES learning_steps(id),
+        daily_guide_action_id TEXT REFERENCES daily_guide_actions(id),
+        result TEXT NOT NULL,
+        mastery INTEGER NOT NULL,
+        evidence_json TEXT NOT NULL,
+        correct_parts_json TEXT NOT NULL,
+        misconceptions_json TEXT NOT NULL,
+        missing_requirements_json TEXT NOT NULL,
+        feedback TEXT NOT NULL,
+        recommended_action TEXT NOT NULL,
+        ai_review_id TEXT,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO learning_evaluations_new SELECT id, submission_id, step_id, NULL, result, mastery, evidence_json, correct_parts_json, misconceptions_json, missing_requirements_json, feedback, recommended_action, ai_review_id, created_at FROM learning_evaluations;
+      DROP TABLE learning_evaluations;
+      ALTER TABLE learning_evaluations_new RENAME TO learning_evaluations;
+      CREATE TABLE next_step_decisions_new (
+        id TEXT PRIMARY KEY,
+        evaluation_id TEXT NOT NULL REFERENCES learning_evaluations(id),
+        step_id TEXT REFERENCES learning_steps(id),
+        decision TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        task_completed INTEGER NOT NULL DEFAULT 0,
+        next_step_json TEXT,
+        remediation_json TEXT,
+        carry_forward TEXT,
+        ai_review_id TEXT,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO next_step_decisions_new SELECT id, evaluation_id, step_id, decision, reason, task_completed, next_step_json, remediation_json, carry_forward, ai_review_id, created_at FROM next_step_decisions;
+      DROP TABLE next_step_decisions;
+      ALTER TABLE next_step_decisions_new RENAME TO next_step_decisions;
+    `
+  },
+  {
+    id: '202607050009_question_thread_action_fk',
+    sql: `
+      PRAGMA foreign_keys = OFF;
+      CREATE TABLE question_threads_v2 (
+        id TEXT PRIMARY KEY,
+        goal_id TEXT REFERENCES goals(id),
+        stage_id TEXT REFERENCES plan_stages(id),
+        task_id TEXT REFERENCES task_items(id),
+        step_id TEXT REFERENCES learning_steps(id),
+        daily_guide_action_id TEXT REFERENCES daily_guide_actions(id),
+        status TEXT NOT NULL DEFAULT 'open',
+        question TEXT NOT NULL,
+        resolution_summary TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        resolved_at TEXT
+      );
+      INSERT INTO question_threads_v2 SELECT id, goal_id, stage_id, task_id, step_id, NULL, status, question, resolution_summary, created_at, updated_at, resolved_at FROM question_threads;
+      DROP TABLE question_threads;
+      ALTER TABLE question_threads_v2 RENAME TO question_threads;
+      PRAGMA foreign_keys = ON;
+    `
   }
 ];
 

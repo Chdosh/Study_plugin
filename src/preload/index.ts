@@ -53,11 +53,11 @@ const api: StudyAppApi = {
   },
   sessions: {
     getActive: () => ipcRenderer.invoke(ipcChannels.sessionGetActive),
-    start: (blockId: Id) => ipcRenderer.invoke(ipcChannels.sessionsStart, { blockId }),
+    start: (taskId: Id) => ipcRenderer.invoke(ipcChannels.sessionsStart, { taskId }),
     pause: (sessionId: Id) => ipcRenderer.invoke(ipcChannels.sessionsPause, { sessionId }),
     skip: (blockId: Id, reason: string) => ipcRenderer.invoke(ipcChannels.sessionsSkip, { blockId, reason }),
-    getAccumulated: (blockId: Id, excludeSessionId?: Id) =>
-      ipcRenderer.invoke(ipcChannels.sessionsGetAccumulated, { blockId, excludeSessionId })
+    getAccumulated: (taskId: Id, excludeSessionId?: Id) =>
+      ipcRenderer.invoke(ipcChannels.sessionsGetAccumulated, { blockId: taskId, excludeSessionId })
   },
   learning: {
     getState: (): Promise<LearningRuntimeSnapshot> => ipcRenderer.invoke(ipcChannels.learningGetState),
