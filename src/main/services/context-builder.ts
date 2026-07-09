@@ -20,19 +20,29 @@ export interface BuiltLearningContext {
 const CONTEXT_MAX_AGE_DAYS = 30;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
+const OPERATION_FIELD_WHITELIST: Record<LearningAiOperation, string[]> = {
+  generate_daily_plan: ['operation', 'goal', 'guide', 'roadmapStage', 'pendingAdjustment', 'latestEvaluation'],
+  generate_stage_outline: ['operation', 'goal', 'roadmapStage', 'pendingAdjustment'],
+  teach_step: ['operation', 'guideTask', 'guideAction', 'roadmapStage'],
+  answer_step_question: ['operation', 'guideTask', 'guideAction', 'currentQuestionThread'],
+  evaluate_submission: ['operation', 'guideTask', 'latestSubmission', 'latestEvaluation'],
+  decide_next_step: ['operation', 'guideTask', 'latestEvaluation', 'latestDecision', 'pendingAdjustment'],
+  summarize_step: ['operation', 'guideTask', 'guideAction', 'latestSubmission', 'latestEvaluation']
+};
+
 export class ContextBuilder {
   constructor(private readonly store: StudyStore) {}
 
   async build(operation: LearningAiOperation, extra: Record<string, unknown> = {}): Promise<BuiltLearningContext> {
     const snapshot = await this.store.getLearningRuntimeSnapshot();
     const contextSourceIds = collectSourceIds(snapshot);
-    const context: Record<string, unknown> = {
+    const full: Record<string, unknown> = {
       operation,
       goal: snapshot.goal
         ? {
             id: snapshot.goal.id,
             title: snapshot.goal.title,
-            description: snapshot.goal.description,
+            description: truncateField(snapshot.goal.description, 300),
             status: snapshot.goal.status
           }
         : null,
@@ -70,13 +80,16 @@ export class ContextBuilder {
             question: snapshot.questionThread.question,
             status: snapshot.questionThread.status,
             resolutionSummary: snapshot.questionThread.resolutionSummary,
-            messages: snapshot.questionMessages.slice(-4)
+            messages: snapshot.questionMessages.slice(-4).map((m) => ({
+              role: m.role,
+              content: truncateField(m.content, 300)
+            }))
           }
         : null,
       latestSubmission: snapshot.latestSubmission
         ? {
             id: snapshot.latestSubmission.id,
-            content: snapshot.latestSubmission.content,
+            content: truncateField(snapshot.latestSubmission.content, 500),
             createdAt: snapshot.latestSubmission.createdAt
           }
         : null,
@@ -86,9 +99,19 @@ export class ContextBuilder {
       latestDecision: evaluationRelevant(operation)
         ? foldIfStale(snapshot.latestDecision, operation)
         : null,
-      pendingAdjustment: foldIfStale(snapshot.pendingAdjustment, operation),
-      ...extra
+      pendingAdjustment: foldIfStale(snapshot.pendingAdjustment, operation)
     };
+
+    const whitelist = OPERATION_FIELD_WHITELIST[operation];
+    const context: Record<string, unknown> = {};
+    for (const key of whitelist) {
+      if (key in full) {
+        context[key] = full[key];
+      }
+    }
+    for (const [key, value] of Object.entries(extra)) {
+      context[key] = value;
+    }
 
     const conflicts = detectConflicts(snapshot);
     if (conflicts.length > 0) {
@@ -126,6 +149,11 @@ export class ContextBuilder {
     }
     return base;
   }
+}
+
+function truncateField(value: string | null | undefined, maxChars: number): string | null | undefined {
+  if (!value || value.length <= maxChars) return value;
+  return `${value.slice(0, maxChars)}…`;
 }
 
 function evaluationRelevant(operation: LearningAiOperation): boolean {
