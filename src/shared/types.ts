@@ -83,6 +83,8 @@ export interface HistoryIntakeSummary {
   messageCount: number;
 }
 
+export type RoadmapStageStatus = 'pending' | 'active' | 'completed' | 'blocked' | 'adjusted';
+
 export interface RoadmapStage {
   id: Id;
   goalId: Id;
@@ -90,22 +92,54 @@ export interface RoadmapStage {
   objective: string;
   direction: string;
   successCriteria: string;
+  status: RoadmapStageStatus;
   position: number;
   createdAt: string;
   updatedAt: string;
 }
 
+export type ShortPlanDayStatus = 'pending' | 'active' | 'completed' | 'skipped';
+
 export interface ShortPlanDay {
   id: Id;
   goalId: Id;
+  roadmapStageId: string | null;
   dayIndex: number;
   date: string | null;
+  sessionStatus: ShortPlanDayStatus;
   title: string;
   focus: string;
   tasks: string[];
   expectedOutput: string;
   successCriteria: string;
+  locked: boolean;
   createdAt: string;
+}
+
+export interface GenerateRollingPlanResult {
+  goal: LearningGoal;
+  roadmap: RoadmapStage[];
+  shortPlan: ShortPlanDay[];
+  guide: DailyGuide;
+  activatedStage: RoadmapStage | null;
+}
+
+export type KnowledgeItemSourceType = 'misconception' | 'weakness' | 'insight' | 'correction';
+export type KnowledgeItemStatus = 'active' | 'resolved' | 'dormant';
+
+export interface KnowledgeItem {
+  id: Id;
+  goalId: string | null;
+  key: string;
+  summary: string;
+  detail: string | null;
+  sourceType: KnowledgeItemSourceType;
+  sourceId: string | null;
+  occurrenceCount: number;
+  lastSeenAt: string | null;
+  status: KnowledgeItemStatus;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface DailyGuideBlock {
@@ -149,6 +183,7 @@ export interface DailyGuideAction {
 export interface DailyGuideTask {
   id: Id;
   guideId: Id;
+  roadmapStageId: Id | null;
   legacyPlanBlockId: Id | null;
   title: string;
   objective: string;
@@ -180,6 +215,7 @@ export interface DailyGuide {
   shortPlanDayId: string | null;
   date: string;
   status: 'draft' | 'confirmed' | 'completed' | 'archived';
+  sessionStatus: 'draft' | 'active' | 'closed';
   weekFocus: string;
   todayGoal: string;
   deliverables: string[];
@@ -206,7 +242,7 @@ export type TodayState =
   | 'generation_failed'
   | 'active'
   | 'completed'
-  | 'short_plan_exhausted';
+  | 'plan_exhausted';
 
 export interface TodayGuideState {
   goal: LearningGoal | null;
@@ -226,6 +262,10 @@ export interface PrepareCurrentLearningDayResult {
   todayState: TodayState;
   result?: LayeredPlanResult;
   errorMessage?: string;
+}
+
+export interface StartNextSessionResult extends PrepareCurrentLearningDayResult {
+  review: ReviewResult | null;
 }
 
 export interface PlanStage {
@@ -347,6 +387,7 @@ export interface LearningSubmission {
   dailyGuideActionId: Id | null;
   sessionId: Id | null;
   content: string;
+  evaluationStatus: 'waiting' | 'completed' | 'failed';
   createdAt: string;
 }
 
@@ -362,6 +403,7 @@ export interface LearningEvaluation {
   missingRequirements: string[];
   feedback: string;
   recommendedAction: NextStepDecision;
+  decision: 'advance' | 'stay' | 'remediate' | 'replan';
   aiReviewId: Id | null;
   createdAt: string;
 }
@@ -447,6 +489,14 @@ export interface ReviewResult {
   focusScore: number;
   summary: string;
   nextActions: string[];
+  planAdjustments: Array<{
+    dayIndex: number;
+    title: string;
+    focus: string;
+    expectedOutput: string;
+    successCriteria: string;
+    reason: string;
+  }>;
 }
 
 export interface TeachStepResult {
@@ -487,6 +537,8 @@ export interface StudyAppApi {
     confirmDailyGuide: (guideId: Id) => Promise<DailyGuide>;
     archiveTodayAndRestart: () => Promise<GoalIntakeState>;
     prepareCurrentLearningDay: () => Promise<PrepareCurrentLearningDayResult>;
+    startNextSession: (goalId?: Id) => Promise<StartNextSessionResult>;
+    generateRollingPlan: (goalId: Id) => Promise<GenerateRollingPlanResult>;
     getTodayState: () => Promise<TodayState>;
     listToday: () => Promise<TodayGuideState>;
   };
@@ -505,6 +557,9 @@ export interface StudyAppApi {
     getState: () => Promise<LearningRuntimeSnapshot>;
     teachCurrentStep: (promptProfileId?: Id) => Promise<TeachStepResult>;
     completeCurrentAction: () => Promise<LearningRuntimeSnapshot>;
+    skipCurrentAction: () => Promise<LearningRuntimeSnapshot>;
+    skipCurrentTask: () => Promise<LearningRuntimeSnapshot>;
+    terminateLearning: () => Promise<LearningRuntimeSnapshot>;
     askQuestion: (question: string, promptProfileId?: Id) => Promise<QuestionAnswerResult>;
     resolveQuestion: (threadId: Id, summary?: string) => Promise<LearningRuntimeSnapshot>;
     submitResult: (content: string, promptProfileId?: Id) => Promise<SubmissionEvaluationResult>;
@@ -512,6 +567,18 @@ export interface StudyAppApi {
   };
   reviews: {
     generate: (date: string) => Promise<ReviewResult>;
+    getLatest: (date?: string) => Promise<ReviewResult | null>;
+    applyAdjustments: (goalId: string, adjustments: Array<{
+      dayIndex: number;
+      title: string;
+      focus: string;
+      expectedOutput: string;
+      successCriteria: string;
+      reason: string;
+    }>) => Promise<ShortPlanDay[]>;
+  };
+  knowledge: {
+    listForGoal: (goalId: string) => Promise<KnowledgeItem[]>;
   };
   prompts: {
     list: () => Promise<PromptProfile[]>;

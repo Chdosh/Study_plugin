@@ -20,6 +20,10 @@ export function registerIpcHandlers(appService: AppService): void {
   );
   ipcMain.handle(ipcChannels.guidesArchiveTodayAndRestart, () => appService.archiveTodayAndRestart());
   ipcMain.handle(ipcChannels.guidesPrepareCurrentLearningDay, () => appService.prepareCurrentLearningDay());
+  ipcMain.handle(ipcChannels.guidesStartNextSession, (_event, payload) => appService.startNextSession(payload?.goalId));
+  ipcMain.handle(ipcChannels.guidesGenerateRollingPlan, (_event, payload) =>
+    appService.generateRollingPlan(payload.goalId)
+  );
   ipcMain.handle(ipcChannels.guidesGetTodayState, () => appService.getTodayState());
   ipcMain.handle(ipcChannels.guidesListToday, () => appService.listTodayGuide());
   ipcMain.handle(ipcChannels.sessionsStart, (_event, payload) => appService.startSession(payload.taskId));
@@ -35,6 +39,9 @@ export function registerIpcHandlers(appService: AppService): void {
     appService.teachCurrentStep(payload?.promptProfileId)
   );
   ipcMain.handle(ipcChannels.learningCompleteCurrentAction, () => appService.completeCurrentAction());
+  ipcMain.handle(ipcChannels.learningSkipCurrentAction, () => appService.skipCurrentAction());
+  ipcMain.handle(ipcChannels.learningSkipCurrentTask, () => appService.skipCurrentTask());
+  ipcMain.handle(ipcChannels.learningTerminateLearning, () => appService.terminateLearning());
   ipcMain.handle(ipcChannels.learningAskQuestion, (_event, payload) =>
     appService.askStepQuestion(payload.question, payload?.promptProfileId)
   );
@@ -48,6 +55,9 @@ export function registerIpcHandlers(appService: AppService): void {
     appService.decidePlanAdjustment(payload.proposalId, payload.status)
   );
   ipcMain.handle(ipcChannels.reviewsGenerate, (_event, payload) => appService.generateReview(payload.date));
+  ipcMain.handle(ipcChannels.reviewsGetLatest, (_event, payload) => appService.getLatestReview(payload?.date));
+  ipcMain.handle(ipcChannels.reviewsApplyAdjustments, (_event, payload) => appService.applyReviewPlanAdjustments(payload));
+  ipcMain.handle(ipcChannels.knowledgeListForGoal, (_event, payload) => appService.getKnowledgeItemsForGoal(payload));
   ipcMain.handle(ipcChannels.promptsList, () => appService.listPrompts());
   ipcMain.handle(ipcChannels.promptsUpdate, (_event, payload) =>
     appService.updatePrompt(payload.profileId, payload.content)

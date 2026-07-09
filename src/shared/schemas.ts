@@ -111,19 +111,21 @@ export const studyWindowSchema = z.object({
   end: z.string().min(1)
 });
 
-export const evaluationAgentOutputSchema = z.object({
-  completionScore: z.number().min(0).max(100),
-  focusScore: z.number().min(0).max(100),
-  difficultyFit: z.string().min(1),
-  delayReason: z.string().default(''),
-  nextAction: z.string().min(1)
-});
-
 export const reviewAgentOutputSchema = z.object({
   completionScore: z.coerce.number().min(0).max(100),
   focusScore: z.coerce.number().min(0).max(100),
   summary: z.string().min(1),
-  nextActions: stringArrayFromAiSchema
+  nextActions: stringArrayFromAiSchema,
+  planAdjustments: z.array(
+    z.object({
+      dayIndex: z.number().int().min(1),
+     title: z.string().min(1),
+      focus: z.string().min(1),
+      expectedOutput: z.string().min(1),
+      successCriteria: z.string().min(1),
+      reason: z.string().min(1)
+    })
+  ).default([])
 });
 
 export const goalBriefSchema = z.object({
@@ -162,7 +164,7 @@ export const shortPlanAgentOutputSchema = z.object({
     z.object({
       dayIndex: z.preprocess(
         (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : v),
-        z.number().int().min(1).max(3)
+        z.number().int().min(1)
       ),
       title: z.string().min(1),
       focus: z.string().min(1),
@@ -170,7 +172,7 @@ export const shortPlanAgentOutputSchema = z.object({
       expectedOutput: z.string().min(1),
       successCriteria: z.string().min(1)
     })
-  ).min(1).max(3)
+  ).min(1).max(5)
 });
 
 export const dailyGuideAgentOutputSchema = z.object({
@@ -261,7 +263,8 @@ export const submissionEvaluationAgentOutputSchema = z.object({
   misconceptions: stringArrayFromAiSchema,
   missingRequirements: stringArrayFromAiSchema,
   feedback: z.string().min(1),
-  recommendedAction: recommendedActionFromAiSchema
+  recommendedAction: recommendedActionFromAiSchema,
+  decision: z.enum(['advance', 'stay', 'remediate', 'replan']).default('stay')
 });
 
 export const nextStepDecisionAgentOutputSchema = z.object({
