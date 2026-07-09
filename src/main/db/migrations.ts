@@ -480,6 +480,80 @@ export const databaseMigrations: DatabaseMigration[] = [
       ALTER TABLE question_threads_v2 RENAME TO question_threads;
       PRAGMA foreign_keys = ON;
     `
+  },
+  {
+    id: '202607060001_ai_reviews_observability',
+    sql: `
+      ALTER TABLE ai_reviews ADD COLUMN input_tokens INTEGER;
+      ALTER TABLE ai_reviews ADD COLUMN output_tokens INTEGER;
+      ALTER TABLE ai_reviews ADD COLUMN latency_ms INTEGER;
+      ALTER TABLE ai_reviews ADD COLUMN error_category TEXT;
+      ALTER TABLE ai_reviews ADD COLUMN trace_id TEXT;
+    `
+  },
+  {
+    id: '202607060002_learning_submissions_eval_status',
+    sql: `
+      ALTER TABLE learning_submissions ADD COLUMN evaluation_status TEXT NOT NULL DEFAULT 'completed';
+    `
+  },
+  {
+    id: '202607060003_generation_locks',
+    sql: `
+      CREATE TABLE IF NOT EXISTS generation_locks (
+        lock_key TEXT PRIMARY KEY,
+        locked_at TEXT NOT NULL
+      );
+    `
+  },
+  {
+    id: '202607060004_session_status',
+    sql: `
+      ALTER TABLE daily_guides ADD COLUMN session_status TEXT NOT NULL DEFAULT 'active';
+      ALTER TABLE short_plan_days ADD COLUMN session_status TEXT NOT NULL DEFAULT 'pending';
+    `
+  },
+  {
+    id: '202607060005_drop_short_plan_date_unique',
+    sql: `DROP INDEX IF EXISTS short_plan_days_goal_date_not_null_idx;`
+  },
+  {
+    id: '202607060006_roadmap_stage_status',
+    sql: `
+      ALTER TABLE roadmap_stages ADD COLUMN status TEXT NOT NULL DEFAULT 'pending';
+      ALTER TABLE daily_guide_tasks ADD COLUMN roadmap_stage_id TEXT REFERENCES roadmap_stages(id);
+    `
+  },
+  {
+    id: '202607060007_evaluation_decision',
+    sql: `ALTER TABLE learning_evaluations ADD COLUMN decision TEXT NOT NULL DEFAULT 'stay';`
+  },
+  {
+    id: '202607060008_short_plan_roadmap_stage',
+    sql: `ALTER TABLE short_plan_days ADD COLUMN roadmap_stage_id TEXT REFERENCES roadmap_stages(id);`
+  },
+  {
+    id: '202607060009_knowledge_items',
+    sql: `
+      CREATE TABLE IF NOT EXISTS knowledge_items (
+        id TEXT PRIMARY KEY,
+        goal_id TEXT REFERENCES goals(id),
+        key TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        detail TEXT,
+        source_type TEXT NOT NULL,
+        source_id TEXT,
+        occurrence_count INTEGER NOT NULL DEFAULT 1,
+        last_seen_at TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `
+  },
+  {
+    id: '202607060010_short_plan_locked',
+    sql: `ALTER TABLE short_plan_days ADD COLUMN locked INTEGER NOT NULL DEFAULT 0;`
   }
 ];
 
