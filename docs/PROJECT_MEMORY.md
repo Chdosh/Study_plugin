@@ -46,6 +46,64 @@ AI 主动访谈澄清目标
 
 ## 最近完成
 
+### 2026-07-06 架构收敛审查高风险修复
+
+根据最新架构收敛审查修复两个高风险断点：初始分层计划写入 `short_plan_days` 时补齐 `roadmap_stage_id`，与首批 `daily_guide_tasks.roadmap_stage_id` 一致，避免初始批次完成后 roadmap 推进链路断裂；`startNextSession()` 在关闭 active guide 前增加任务完成校验，非 UI / IPC 调用也不能提前关闭未完成 guide。
+
+同时收敛一处状态判断重复：`getTodayState()` 在 closed/completed guide 且无可用 pending short plan day 时返回 `plan_exhausted`，TodayPage 改为消费 `todayState === 'plan_exhausted'` 展示“生成下一批任务”，不再自行计算批次耗尽。新增回归测试覆盖首批 short plan day stage 关联和未完成 guide 禁止推进。
+
+验证：`npm run typecheck` 通过；`npm test` 通过（73 passed, 6 skipped）；`npm run build` 通过。测试日志仍有已知 migration duplicate column 跳过噪声，未在本轮处理。
+
+### 2026-07-06 修复下一学习日推进与复盘显示
+
+修复第一轮代码审核发现的状态流问题：`listTodayGuide()` 现在返回完整 `TodayGuideState.todayState`；`startNextSession()` 在 guide 已关闭时也会复用或生成复盘，再生成下一学习日；下一学习日选择改为按 Product Truth 使用 `date === null` 且 `dayIndex` 最小的 pending short plan day，激活时写入实际日期，避免误选已有 guide 的 short plan day 并触发唯一约束错误。
+
+Renderer 侧改为读取 `roadmap_stages.status` 渲染学习路径状态，新增 `reviews.getLatest` IPC 用于恢复最近复盘；开启下一天后保留旧 guide snapshot 给 Review 页面，避免旧复盘摘要和新 guide 任务统计混显示。新增 app-service 测试覆盖“closed guide -> 自动复盘 -> 新 daily guide active -> 最新复盘可读取”。
+
+修改范围：`src/main/services/app-service.ts`、`src/main/services/store.ts`、`src/main/ipc.ts`、`src/preload/index.ts`、`src/shared/ipc.ts`、`src/shared/types.ts`、`src/renderer/src/App.tsx`、`src/renderer/src/pages/TodayPage.tsx`、`src/renderer/src/pages/ReviewPage.tsx`、`src/main/services/app-service.test.ts`。
+
+验证：`npm run typecheck` 通过；`npx vitest run src/main/services/app-service.test.ts` 通过（14 passed）；`npm test` 通过（63 passed, 6 skipped）；`npm run build` 通过。
+
+### 2026-07-06 落地 Phase 1 Step 1.3：错误分类 + UI 差异化文案
+
+新增 `src/main/ai/categorized-error.ts`，定义 `CategorizedError` 与 `AppErrorCategory`（`user_input_error` / `ai_failure` / `schema_violation` / `db_error` / `missing_config` / `validation_error`）。`AiClient` 所有抛错路径统一抛 `CategorizedError`，`AiCallMetrics.errorCategory` 类型放宽为 `AppErrorCategory`。`agents.ts` 不感知，由 `ai-client` 自动包装。`app-service.ts` 各 AI 调用入口（`sendOnboardingMessage`、`generateLayeredPlan`、`askStepQuestion`、`submitLearningResult`）catch 后按分类重抛 `CategorizedError`，保持分类贯穿到 Renderer。`ai_reviews.error_category` enum 扩展为 6 个值。`App.tsx.toUserErrorMessage` 重写为按分类给出不同文案（missing_config 提示去设置页、schema_violation 提示格式问题、ai_failure 提示重试、user_input_error 直接显示原消息等）。
+
+首次有可视变化的应用层修改：不同类别的 AI 错误在 UI 上显示不同的友好提示，不再是统一的"生成失败"。
+
+修改范围：`src/main/ai/categorized-error.ts`、`src/main/ai/ai-client.ts`、`src/main/services/app-service.ts`、`src/main/db/schema.ts`、`src/renderer/src/App.tsx`。
+
+验证：typecheck / test (62 passed, 6 skipped) / build 均通过。
+
+### 2026-07-06 落地 Phase 2 Step 2.2：持久化 generationLock
+
+新增 `generation_locks` 表（`lock_key` / `locked_at`），对应 migration `202607060003_generation_locks`。`store.acquireGenerationLock` 先清理过期锁（默认 TTL 120s），再通过 INSERT 原子抢锁；返回 false 表示已被占用。`store.releaseGenerationLock` 删除行。`AppService.prepareCurrentLearningDay` 改为双层锁：先内存 Map 快速路径，再调 `store.acquireGenerationLock` 跨进程保护；未获锁时返回 `{ todayState: 'generating' }`。finally 中同时释放内存锁和 DB 锁。
+
+修改范围：`src/main/db/schema.ts`、`src/main/db/migrations.ts`、`src/main/services/store.ts`、`src/main/services/app-service.ts`。
+
+验证：typecheck / test (62 passed, 6 skipped) / build 均通过。
+
+### 2026-07-06 继续落地 Phase 2 Step 2.1：提交评价状态显式落库
+
+在 `learning_submissions` 表增加 `evaluation_status` 列（`waiting` / `completed` / `failed`，默认 `completed` 兼容旧数据）。新增对应 bootstrap 列定义与 drizzle 迁移（`202607060002_learning_submissions_eval_status`）。`store.createSubmission` 写入时标记 `waiting`；`store.saveEvaluationAndDecision` 成功时标记 `completed`；Agent 异常 propagate 后保留 `waiting` 状态供后续恢复。新增 `store.markSubmissionEvaluation(submissionId, status)` 工具方法可外部调用。`mapSubmission` / `mapSubmissionOld` 增加对新列的映射，缺省值 `completed`。
+
+关键决策：列默认 `completed` 保证旧提交不被纳入等待恢复检查；只在 `saveEvaluationAndDecision` 路径统一改 `completed`，不依赖上层调用方；AI 失败时不主动更新状态，保留 `waiting` 供恢复入口识别。
+
+修改范围：`src/main/db/schema.ts`、`src/main/db/migrations.ts`、`src/main/services/store.ts`、`src/shared/types.ts`、`src/renderer/src/bridge/mock-api.ts`。
+
+验证：`npm run typecheck` 通过；`npm test`（62 passed, 6 skipped）通过；`npm run build` 通过。
+
+### 2026-07-06 落地 Phase 1 Step 1.1 + 1.2：AI 调用可观测性埋点
+
+按 `docs/v2/ANALYSIS_vs_goal.md` 的 Phase 1，在 `ai_reviews` 表中新增五个 nullable 列（`input_tokens`、`output_tokens`、`latency_ms`、`error_category`、`trace_id`），新增对应 bootstrap 列定义与 drizzle 迁移（`202607060001_ai_reviews_observability`）。`AiClient.generateJson` 接口增加 `traceId` / `onMetrics` 回调；每次调用前后记录耗时、解析输出中的 usage（如有）、按错误类型打 `error_category`（`user_input_error` / `ai_failure` / `schema_violation`）。`agents.ts` 中所有 8 个 Agent 的 `run()` 方法增加 `AgentRunExtras`（`traceId?` / `onMetrics?`）透传到 `ai.generateJson()`。`app-service.ts` 在每个 AI 调用入口生成 `ta_` 前缀的 traceId，通过 onMetrics 收集指标，传入 `store.saveAiReview`。`store.saveAiReview` 入参增加 `metrics?: AiCallMetrics`，写入 ai_reviews 对应列。
+
+关键决策：不改变 AiClient 返回类型，通过 onMetrics 回调把指标从 AppService 传回 store；error_category 纯客户端推断（基于错误消息正则），不依赖模型输出；新列全部 nullable 保证旧库文件兼容。
+
+修改范围：`src/main/db/schema.ts`、`src/main/db/bootstrap.ts`、`src/main/db/migrations.ts`、`src/main/ai/ai-client.ts`、`src/main/ai/agents.ts`、`src/main/services/app-service.ts`、`src/main/services/store.ts`。
+
+验证：`npm run typecheck` 通过；`npm test`（62 passed, 6 skipped）通过；`npm run build` 通过。迁移因 bootstrap 表已含新列按既定兼容逻辑自动跳过，未报错。
+
+待做：Phase 2 Step 2.3（重复提交防护）、Phase 3（上下文裁剪）。
+
 ### 2026-07-05 删除独立浮窗与公开结束计时通道
 
 继续排查启动后弹出长时间计时条、复盘页疑似开始按钮和多页面互跳问题。删除独立学习浮窗的主进程窗口、renderer 入口、样式、preload `floatApp`、`float:*` IPC、浮窗位置持久化、托盘“开始当前学习块/生成今日复盘”入口，以及 `navigate:toPage` 强制导航通道。设置页删除浮窗、计时提醒、自动进入复盘等未落到真实主流程的假控制。
@@ -250,6 +308,31 @@ StudyPage 只负责展示当前步骤：当前任务名称、步骤进度（如 
 
 验证：`npm run typecheck`（通过）、`npm test`（31 passed, 1 skipped）、`npm run build`（成功）。
 
+### 2026-07-06 真实桌面流程阻塞修复
+
+根据正式库 + Electron 桌面测试结果修复三类阻塞：
+- `重新开始新计划`：归档当前 active goal 下的所有 guide，并清空 runtime 指针，避免刷新/重启后又回到历史 completed guide。
+- `开启下一天`：下一学习日选择排除已绑定 `daily_guides.short_plan_day_id` 的 short plan day；计划用尽时返回明确 `short_plan_exhausted` 文案，renderer 全局通知栏会显示错误而不是看起来无反应。
+- 复盘与概览：复盘 snapshot 改为按 date 读取对应 guide，避免新旧 guide 混用；概览页对旧数据中 roadmap 全 pending 但 short plan 已完成的情况做展示兼容。
+
+新增回归测试覆盖“归档后不再捡回旧 completed guide”和“所有 short plan day 已使用时返回明确 exhausted 结果”。验证：`npm run typecheck`、`npm test`（65 passed, 6 skipped）、`npm run build` 均通过。测试日志仍有既有 migration duplicate column 跳过噪声，未在本轮处理。
+
+### 2026-07-06 学习单元语义与滚动计划收敛
+
+修复概览页把 `short_plan_days.dayIndex` 展示为“第 N 天”的误导：UI 改为“当前学习单元”，Daily Guide prompt 也改为“当前学习单元 + 内部顺序编号”，避免 AI 和用户都把内部序号理解成日历天数。
+
+修复“生成下一批任务”绕过已有待学单元的问题：`generateRollingPlan` 现在会先复用当前 active roadmap stage 下最早的未绑定、待执行 short plan day；只有当前阶段没有可用待学单元时，才调用 rolling plan AI 续写新学习单元。新增 `listAvailableShortPlanDaysForStage`，并补充两条回归测试覆盖“先复用已有单元”和“单元耗尽后才续写”。
+
+验证：`npm test -- src/main/services/app-service.test.ts`（20 passed）、`npm run typecheck`、`npm test`（76 passed, 6 skipped）、`npm run build` 均通过。正式库只做过只读诊断；历史测试数据中已存在的多个 active guide / active short plan day 未自动清理。
+
+### 2026-07-07 复盘调整建议风险收敛
+
+修复复盘 `planAdjustments` 采纳链路的中高风险问题：`applyReviewPlanAdjustments` 不再把未来学习单元的 `tasksJson` 覆盖为“调整原因”，避免下一轮 Daily Guide 丢失主题任务；当存在 active roadmap stage 时，调整只匹配该阶段下的 pending short plan day，避免同一 `dayIndex` 跨阶段误改。
+
+Review 页采纳调整后增加本地“已应用调整”状态，按钮禁用并更新说明，降低重复点击造成的状态混乱。新增 store 层回归测试覆盖“只改 active stage pending day 且保留任务列表”。
+
+验证：新增回归测试先红后绿；`npm test -- src/main/services/store.test.ts -- -t "applyReviewPlanAdjustments only"`、`npm run typecheck`、`npm test -- src/main/services/app-service.test.ts src/main/services/store.test.ts`（49 passed）、`npm test`（77 passed, 6 skipped）、`npm run build` 均通过。仍存在既有 migration duplicate column 跳过噪声，未在本轮处理。
+
 ## 当前风险
 
 * 真实 DeepSeek 完整主流程仍需人工验收一次，确认当前 daily guide prompt 在真实模型下稳定。
@@ -259,7 +342,8 @@ StudyPage 只负责展示当前步骤：当前任务名称、步骤进度（如 
 
 ## 推荐下一步
 
-1. 用真实 DeepSeek API 验收一次完整分层计划生成。
-2. 检查提问、提交评估、复盘调整是否完全接到当前 `daily_guide_tasks` 主流程。
-3. 设计替换旧 block/session 锚点的最小迁移方案，再清理旧 plan 结构。
-4. 新功能开发前读取 `AGENTS.md`、本文件和对应专题文档。
+1. 落地 Step 1.3：在 `app-service.ts` 中把 `error_category` 字段接进 saveAiReview（失败时写入 errorCategory），并让 renderer 根据错误类别给出差异化的用户提示（用户输入错误 / AI 调用失败 / 输出不合法）。
+2. 落地 Phase 2 Step 2.2-2.3：为当前内存 generationLock 增加持久化备份（app_settings 或 generation_locks 表）；为明确幂等操作增加重复提交防护。
+3. 落地 Phase 3 Step 3.1-3.3：给 ContextBuilder 增加 operation 级别的上下文预算裁剪，实现冲突仲裁规则（时间限制按最近确认为准），并处理超过 30 天的上下文折叠。
+4. 待 1-3 完成后，继续 Phase 4-8 补齐 `docs/v2/ANALYSIS_vs_goal.md` 中的计划版本、知识库、时间规则、测试补齐。
+5. 用真实 DeepSeek API 验收一次完整分层计划生成。
