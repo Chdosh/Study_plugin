@@ -4,6 +4,7 @@ import type {
   AppSettings,
   DailyPlanBlock,
   GoalBrief,
+  GenerateRollingPlanResult,
   HistoryIntakeSummary,
   Id,
   LearningRuntimeSnapshot,
@@ -16,6 +17,7 @@ import type {
   QuestionAnswerResult,
   StudyAppApi,
   StudySession,
+  StartNextSessionResult,
   SubmissionEvaluationResult,
   TodayGuideState,
   TodayState,
@@ -43,6 +45,10 @@ const api: StudyAppApi = {
       ipcRenderer.invoke(ipcChannels.guidesArchiveTodayAndRestart),
     prepareCurrentLearningDay: (): Promise<PrepareCurrentLearningDayResult> =>
       ipcRenderer.invoke(ipcChannels.guidesPrepareCurrentLearningDay),
+    startNextSession: (goalId?: Id): Promise<StartNextSessionResult> =>
+      ipcRenderer.invoke(ipcChannels.guidesStartNextSession, { goalId }),
+    generateRollingPlan: (goalId: Id): Promise<GenerateRollingPlanResult> =>
+      ipcRenderer.invoke(ipcChannels.guidesGenerateRollingPlan, { goalId }),
     getTodayState: (): Promise<TodayState> =>
       ipcRenderer.invoke(ipcChannels.guidesGetTodayState),
     listToday: (): Promise<TodayGuideState> => ipcRenderer.invoke(ipcChannels.guidesListToday)
@@ -65,6 +71,12 @@ const api: StudyAppApi = {
       ipcRenderer.invoke(ipcChannels.learningTeachCurrentStep, { promptProfileId }),
     completeCurrentAction: (): Promise<LearningRuntimeSnapshot> =>
       ipcRenderer.invoke(ipcChannels.learningCompleteCurrentAction),
+    skipCurrentAction: (): Promise<LearningRuntimeSnapshot> =>
+      ipcRenderer.invoke(ipcChannels.learningSkipCurrentAction),
+    skipCurrentTask: (): Promise<LearningRuntimeSnapshot> =>
+      ipcRenderer.invoke(ipcChannels.learningSkipCurrentTask),
+    terminateLearning: (): Promise<LearningRuntimeSnapshot> =>
+      ipcRenderer.invoke(ipcChannels.learningTerminateLearning),
     askQuestion: (question: string, promptProfileId?: Id): Promise<QuestionAnswerResult> =>
       ipcRenderer.invoke(ipcChannels.learningAskQuestion, { question, promptProfileId }),
     resolveQuestion: (threadId: Id, summary?: string): Promise<LearningRuntimeSnapshot> =>
@@ -75,7 +87,19 @@ const api: StudyAppApi = {
       ipcRenderer.invoke(ipcChannels.learningDecideAdjustment, { proposalId, status })
   },
   reviews: {
-    generate: (date: string) => ipcRenderer.invoke(ipcChannels.reviewsGenerate, { date })
+    generate: (date: string) => ipcRenderer.invoke(ipcChannels.reviewsGenerate, { date }),
+    getLatest: (date?: string) => ipcRenderer.invoke(ipcChannels.reviewsGetLatest, { date }),
+    applyAdjustments: (goalId: string, adjustments: Array<{
+      dayIndex: number;
+      title: string;
+      focus: string;
+      expectedOutput: string;
+      successCriteria: string;
+      reason: string;
+    }>) => ipcRenderer.invoke(ipcChannels.reviewsApplyAdjustments, { goalId, adjustments })
+  },
+  knowledge: {
+    listForGoal: (goalId: string) => ipcRenderer.invoke(ipcChannels.knowledgeListForGoal, { goalId })
   },
   prompts: {
     list: () => ipcRenderer.invoke(ipcChannels.promptsList),
