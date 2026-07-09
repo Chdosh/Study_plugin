@@ -16,6 +16,56 @@
   gap: 24px;
 }
 
+/* 全部任务横条 */
+.study-task-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.study-task-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-surface-subtle);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.study-task-chip.current {
+  border-color: var(--color-primary-border);
+  background: var(--color-primary-surface);
+  color: var(--color-primary-active);
+  font-weight: var(--font-weight-medium);
+}
+
+.study-task-chip.done {
+  border-color: var(--color-success-border);
+  color: var(--color-success);
+  text-decoration: line-through;
+}
+
+.chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-border-default);
+  flex-shrink: 0;
+}
+
+.chip-dot.active {
+  background: var(--color-primary);
+}
+
+.chip-dot.done {
+  background: var(--color-success);
+}
+
 .study-session-bar {
   min-height: 96px;
   display: grid;

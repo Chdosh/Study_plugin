@@ -33,8 +33,7 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: {
-          main: resolve(__dirname, 'src/renderer/index.html'),
-          float: resolve(__dirname, 'src/renderer/float-index.html')
+          main: resolve(__dirname, 'src/renderer/index.html')
         }
       }
     }

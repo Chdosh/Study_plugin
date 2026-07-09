@@ -16,15 +16,6 @@ export interface StudyWindow {
   end: string;
 }
 
-export interface RawImport {
-  id: Id;
-  source: 'chatgpt' | 'codex' | 'manual';
-  rawText: string;
-  status: 'created' | 'parsed' | 'failed';
-  createdAt: string;
-  parsedAt: string | null;
-}
-
 export interface TaskItem {
   id: Id;
   goalId: Id | null;
@@ -246,17 +237,6 @@ export interface DailyPlanBlock {
   position: number;
 }
 
-export interface DailyPlan {
-  id: Id;
-  date: string;
-  status: 'draft' | 'confirmed' | 'archived';
-  availableWindowsJson: string;
-  createdAt: string;
-  confirmedAt: string | null;
-  version: number;
-  blocks: DailyPlanBlock[];
-}
-
 export interface StudySession {
   id: Id;
   blockId: Id | null;
@@ -437,13 +417,6 @@ export interface PromptProfile {
   content: string;
 }
 
-export interface ImportParseResult {
-  importId: Id;
-  goalsCreated: number;
-  tasksCreated: number;
-  tasks: TaskItem[];
-}
-
 export interface ReviewResult {
   reviewId: Id;
   date: string;
@@ -451,11 +424,6 @@ export interface ReviewResult {
   focusScore: number;
   summary: string;
   nextActions: string[];
-}
-
-export interface StageOutlineResult {
-  goal: LearningGoal;
-  stages: PlanStage[];
 }
 
 export interface TeachStepResult {
@@ -481,24 +449,6 @@ export interface SubmissionEvaluationResult {
   nextStep: LearningStep | null;
 }
 
-export interface FloatWindowApi {
-  session: {
-    getActive: () => Promise<{ session: StudySession; block: DailyPlanBlock } | null>;
-    pause: (sessionId: Id) => Promise<StudySession>;
-    resume: (blockId: Id) => Promise<StudySession>;
-    complete: (sessionId: Id, notes?: string) => Promise<StudySession>;
-    getAccumulated: (blockId: Id, excludeSessionId?: Id) => Promise<number>;
-    onStateChanged: (callback: (data: { session: StudySession; block: DailyPlanBlock | null }) => void) => () => void;
-  };
-  float: {
-    getPosition: () => Promise<{ x: number; y: number } | null>;
-    savePosition: (x: number, y: number) => Promise<void>;
-    openMain: () => Promise<void>;
-    resize: (width: number, height: number) => Promise<void>;
-    move: (deltaX: number, deltaY: number) => Promise<void>;
-  };
-}
-
 export interface StudyAppApi {
   settings: {
     get: () => Promise<AppSettings>;
@@ -519,31 +469,10 @@ export interface StudyAppApi {
     listAll: () => Promise<HistoryIntakeSummary[]>;
     getById: (intakeId: Id) => Promise<GoalIntakeState>;
   };
-  imports: {
-    create: (rawText: string, source: RawImport['source']) => Promise<RawImport>;
-    parse: (importId: Id, promptProfileId?: Id) => Promise<ImportParseResult>;
-  };
-  tasks: {
-    list: () => Promise<TaskItem[]>;
-    update: (taskId: Id, patch: Partial<TaskItem>) => Promise<TaskItem>;
-  };
-  goals: {
-    create: (title: string, description?: string) => Promise<LearningGoal>;
-    list: () => Promise<LearningGoal[]>;
-    listStages: (goalId?: Id) => Promise<PlanStage[]>;
-    generateStages: (goalId?: Id, promptProfileId?: Id) => Promise<StageOutlineResult>;
-    confirmStages: (goalId: Id) => Promise<PlanStage[]>;
-  };
-  plans: {
-    list: (date?: string) => Promise<DailyPlan[]>;
-    generate: (date: string, availableWindows: StudyWindow[], promptProfileId?: Id) => Promise<DailyPlan>;
-    confirm: (planId: Id) => Promise<DailyPlan>;
-  };
   sessions: {
     getActive: () => Promise<{ session: StudySession; block: DailyPlanBlock } | null>;
     start: (blockId: Id) => Promise<StudySession>;
     pause: (sessionId: Id) => Promise<StudySession>;
-    complete: (sessionId: Id, notes?: string) => Promise<StudySession>;
     skip: (blockId: Id, reason: string) => Promise<void>;
     getAccumulated: (blockId: Id, excludeSessionId?: Id) => Promise<number>;
   };
@@ -563,6 +492,5 @@ export interface StudyAppApi {
     list: () => Promise<PromptProfile[]>;
     update: (profileId: Id, content: string) => Promise<PromptProfile>;
   };
-  onNavigate: (callback: (page: string) => void) => () => void;
   onSessionStateChanged: (callback: (data: { session: StudySession | null; block: DailyPlanBlock | null }) => void) => () => void;
 }

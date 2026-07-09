@@ -13,3 +13,11 @@ release/
 .env.*
 coverage/
 *.tsbuildinfo
+*.exitcode
+.agent/evidence/**/*.log
+.agent/evidence/**/*.exitcode
+.cache/
+tmp/
+temp/
+playwright-report/
+test-results/

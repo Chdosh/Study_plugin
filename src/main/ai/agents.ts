@@ -3,16 +3,13 @@ import {
   dailyGuideAgentOutputSchema,
   goalIntakeAgentOutputSchema,
   nextStepDecisionAgentOutputSchema,
-  importAgentOutputSchema,
-  looseDailyPlanAgentOutputSchema,
   roadmapAgentOutputSchema,
   reviewAgentOutputSchema,
   shortPlanAgentOutputSchema,
-  stageOutlineAgentOutputSchema,
   submissionEvaluationAgentOutputSchema,
   teachStepAgentOutputSchema
 } from '../../shared/schemas';
-import type { AppSettings, GoalBrief, GoalIntakeMessage, LearningGoal, PromptProfile, RoadmapStage, ShortPlanDay, StudyWindow, TaskItem } from '../../shared/types';
+import type { AppSettings, GoalBrief, GoalIntakeMessage, LearningGoal, PromptProfile, RoadmapStage, ShortPlanDay, StudyWindow } from '../../shared/types';
 import { AiClient } from './ai-client';
 import {
   buildAnswerStepQuestionPrompt,
@@ -20,72 +17,14 @@ import {
   buildDecideNextStepPrompt,
   buildEvaluateSubmissionPrompt,
   buildGoalIntakePrompt,
-  buildImportPrompt,
-  buildPlanPrompt,
   buildRoadmapPrompt,
   buildReviewPrompt,
   buildShortPlanPrompt,
-  buildStageOutlinePrompt,
   buildTeachStepPrompt
 } from './agent-prompts';
-import { normalizeDailyPlanOutput } from './normalize-plan';
 
 export interface AgentRuntimeSettings extends AppSettings {
   deepseekApiKey: string | null;
-}
-
-export class ImportAgent {
-  constructor(private readonly ai: AiClient) {}
-
-  run(rawText: string, profile: PromptProfile, settings: AgentRuntimeSettings) {
-    return this.ai.generateJson({
-      apiKey: settings.deepseekApiKey,
-      baseUrl: settings.deepseekBaseUrl,
-      model: settings.deepseekModel,
-      schema: importAgentOutputSchema,
-      system: '你是本地优先 AI 学习管家的 import-agent。只返回合法 JSON。',
-      user: buildImportPrompt(rawText, profile)
-    });
-  }
-}
-
-export class PlannerAgent {
-  constructor(private readonly ai: AiClient) {}
-
-  async run(params: {
-    date: string;
-    windows: StudyWindow[];
-    tasks: TaskItem[];
-    profile: PromptProfile;
-    settings: AgentRuntimeSettings;
-    goal?: unknown;
-    stage?: unknown;
-    context?: unknown;
-  }) {
-    const raw = await this.ai.generateJson({
-      apiKey: params.settings.deepseekApiKey,
-      baseUrl: params.settings.deepseekBaseUrl,
-      model: params.settings.deepseekModel,
-      schema: looseDailyPlanAgentOutputSchema,
-      system: '你是本地优先 AI 学习管家的 planner-agent。只返回合法 JSON。',
-      user: buildPlanPrompt({
-        date: params.date,
-        windows: params.windows,
-        tasks: params.tasks,
-        goal: params.goal,
-        stage: params.stage,
-        context: params.context,
-        profile: params.profile,
-        blockMinutes: params.settings.defaultBlockMinutes
-      })
-    });
-    return normalizeDailyPlanOutput({
-      raw,
-      windows: params.windows,
-      tasks: params.tasks,
-      blockMinutes: params.settings.defaultBlockMinutes
-    });
-  }
 }
 
 export class ReflectionAgent {
@@ -198,25 +137,6 @@ export class DailyGuideAgent {
         brief: params.brief,
         roadmap: params.roadmap,
         shortPlan: params.shortPlan,
-        profile: params.profile
-      })
-    });
-  }
-}
-
-export class StageOutlineAgent {
-  constructor(private readonly ai: AiClient) {}
-
-  run(params: { goal: unknown; tasks: unknown[]; profile: PromptProfile; settings: AgentRuntimeSettings }) {
-    return this.ai.generateJson({
-      apiKey: params.settings.deepseekApiKey,
-      baseUrl: params.settings.deepseekBaseUrl,
-      model: params.settings.deepseekModel,
-      schema: stageOutlineAgentOutputSchema,
-      system: '你是渐进式 AI 学习导师的 planning-service。只返回合法 JSON。',
-      user: buildStageOutlinePrompt({
-        goal: params.goal,
-        tasks: params.tasks,
         profile: params.profile
       })
     });

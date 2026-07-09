@@ -1,10 +1,10 @@
 import type {
   AppSettings, DailyGuide, DailyGuideBlock, DailyGuideTask, DailyGuideAction,
-  DailyPlan, DailyPlanBlock, GoalBrief, GoalIntake, GoalIntakeMessage,
+  GoalBrief, GoalIntake, GoalIntakeMessage,
   GoalIntakeState, HistoryIntakeSummary, LearningGoal, LearningRuntimeSnapshot,
   LearningRuntimeState, LearningStep, LearningSubmission, LearningEvaluation,
   StoredNextStepDecision, PlanAdjustmentProposal, PlanStage, PromptProfile,
-  ReviewResult, RoadmapStage, ShortPlanDay, StudySession, TaskItem,
+  ReviewResult, RoadmapStage, ShortPlanDay, StudySession,
   TeachStepResult, TodayGuideState, QuestionThread, QuestionMessage,
   QuestionAnswerResult, SubmissionEvaluationResult, LayeredPlanResult
 } from '../../../shared/types';
@@ -67,52 +67,6 @@ export function createAppSettings(scenario: MockScenario): AppSettings {
       { start: '20:00', end: '22:00' }
     ]
   };
-}
-
-/* ------------------------------------------------------------------ */
-/*  FACTORY: TaskItem[]                                                */
-/* ------------------------------------------------------------------ */
-export function createTaskItems(scenario: MockScenario): TaskItem[] {
-  if (scenario.isEmpty) return [];
-  const items: TaskItem[] = [
-    {
-      id: mockId('task'), goalId: mockId('goal'), sourceImportId: null,
-      title: scenario.hasLongTitle ? LONG_TITLE : '完成 React 核心概念学习',
-      description: '系统学习 React 组件、Hooks、状态管理等核心概念',
-      status: 'in_progress', priority: 1, difficulty: 'standard',
-      estimateMinutes: 120, acceptanceCriteria: '能独立完成一个 Todo 应用',
-      createdAt: '2026-07-04T08:00:00.000Z', updatedAt: '2026-07-04T10:00:00.000Z'
-    },
-    {
-      id: mockId('task'), goalId: mockId('goal'), sourceImportId: null,
-      title: 'TypeScript 类型系统进阶',
-      description: '深入学习 TypeScript 的高级类型特性',
-      status: 'planned', priority: 2, difficulty: 'advanced',
-      estimateMinutes: 90, acceptanceCriteria: '能编写复杂类型工具',
-      createdAt: '2026-07-04T08:00:00.000Z', updatedAt: '2026-07-04T08:00:00.000Z'
-    },
-    {
-      id: mockId('task'), goalId: mockId('goal'), sourceImportId: null,
-      title: '项目实战：搭建个人博客系统',
-      description: '使用 React + TypeScript 从零搭建个人博客',
-      status: 'backlog', priority: 3, difficulty: 'exam',
-      estimateMinutes: 300, acceptanceCriteria: '完成博客的完整功能',
-      createdAt: '2026-07-03T08:00:00.000Z', updatedAt: '2026-07-03T08:00:00.000Z'
-    }
-  ];
-  if (scenario.hasManyTasks) {
-    for (let i = 0; i < 6; i++) {
-      items.push({
-        id: mockId('task'), goalId: mockId('goal'), sourceImportId: null,
-        title: `额外任务 ${i + 1}：${['算法练习', '数据结构复习', '网络协议', '数据库设计', '系统设计', '性能优化'][i]}`,
-        description: `这是第 ${i + 1} 个额外任务`,
-        status: 'backlog', priority: i + 4, difficulty: 'standard',
-        estimateMinutes: 60 + i * 15, acceptanceCriteria: '完成任务要求',
-        createdAt: '2026-07-03T08:00:00.000Z', updatedAt: '2026-07-03T08:00:00.000Z'
-      });
-    }
-  }
-  return items;
 }
 
 /* ------------------------------------------------------------------ */
@@ -191,37 +145,83 @@ export function createGuideActions(taskId: string): DailyGuideAction[] {
 /* ------------------------------------------------------------------ */
 /*  FACTORY: DailyGuideTask[]                                          */
 /* ------------------------------------------------------------------ */
-export function createGuideTasks(guideId: string, scenario: MockScenario, guideBlocks: DailyGuideBlock[]): DailyGuideTask[] {
-  if (scenario.isEmpty || guideBlocks.length === 0) return [];
-  const blocks = guideBlocks;
-  return blocks.map((block, idx) => ({
+export function createGuideTasks(guideId: string, scenario: MockScenario): DailyGuideTask[] {
+  if (scenario.isEmpty) return [];
+  const taskData = [
+    {
+      legacyPlanBlockId: mockId('pblock'),
+      title: scenario.hasLongTitle ? LONG_TITLE : 'React 组件设计原则',
+      objective: '掌握 React 组件的设计原则和最佳实践',
+      scope: scenario.hasLongTitle ? LONG_SCOPE : '阅读 React 官方文档中关于组件设计的部分，完成 3 个练习组件',
+      deliverable: '3 个符合设计原则的 React 组件代码',
+      doneWhen: ['组件满足单一职责、可组合性、可测试性要求', '代码通过 lint 检查', '提交到 Git 仓库'],
+      quickHint: '参考官方示例或查阅社区最佳实践文章',
+      evaluationMode: 'local' as const,
+      status: 'active' as const,
+      progressPercent: 35,
+      completedActions: [mockId('gact_done')],
+      currentAction: {
+        id: mockId('gact'), taskId: mockId('gtask'),
+        title: '编写示例代码',
+        instruction: '根据所学概念编写至少 2 个可运行的示例代码',
+        checkpoint: '代码能正常运行并通过基本测试',
+        status: 'planned' as const, progressNote: null, completedAt: null, position: 1
+      },
+      totalElapsedMinutes: 35
+    },
+    {
+      legacyPlanBlockId: mockId('pblock'),
+      title: 'React Hooks 深入理解',
+      objective: '深入理解 useState、useEffect、useCallback 等核心 Hooks 的工作原理',
+      scope: '实现自定义 Hook，理解闭包陷阱和依赖数组管理',
+      deliverable: '3 个自定义 Hook 的实现和测试',
+      doneWhen: ['Hooks 无内存泄漏，依赖数组正确管理', '代码通过 lint 检查'],
+      quickHint: '查看 React 官方 Hooks 文档和常见问题',
+      evaluationMode: 'ai' as const,
+      status: 'planned' as const,
+      progressPercent: 0,
+      completedActions: [],
+      currentAction: null,
+      totalElapsedMinutes: 0
+    },
+    {
+      legacyPlanBlockId: mockId('pblock'),
+      title: '状态管理方案对比',
+      objective: '对比 Context、Redux、Zustand 等不同状态管理方案的优劣',
+      scope: '用至少两种方案实现同一个计数器应用，总结差异',
+      deliverable: '对比报告 + 两种实现的代码',
+      doneWhen: ['能清晰阐述各方案的适用场景和取舍', '代码通过 lint 检查'],
+      quickHint: '参考各框架的官方对比文档',
+      evaluationMode: 'ai' as const,
+      status: 'planned' as const,
+      progressPercent: 0,
+      completedActions: [],
+      currentAction: null,
+      totalElapsedMinutes: 0
+    }
+  ];
+  return taskData.map((data, idx) => ({
     id: mockId('gtask'),
     guideId,
-    legacyPlanBlockId: block.planBlockId,
-    title: block.title,
-    objective: block.objective,
-    scope: idx === 0 && scenario.hasLongTitle ? LONG_SCOPE : block.action.slice(0, 80),
+    legacyPlanBlockId: data.legacyPlanBlockId,
+    title: data.title,
+    objective: data.objective,
+    scope: data.scope,
     estimatedMinutes: { min: 30, target: 90, max: 120 },
     actions: createGuideActions(mockId('gtask')),
-    deliverable: block.expectedOutput,
-    doneWhen: [block.successCriteria, '代码通过 lint 检查', '提交到 Git 仓库'],
-    quickHint: block.fallback,
-    evaluationMode: idx === 0 ? 'local' : 'ai',
-    submissionPolicy: 'once_after_task',
+    deliverable: data.deliverable,
+    doneWhen: data.doneWhen,
+    quickHint: data.quickHint,
+    evaluationMode: data.evaluationMode,
+    submissionPolicy: 'once_after_task' as const,
     carryoverAllowed: true,
-    status: idx === 0 ? 'active' : 'planned',
-    progressPercent: idx === 0 ? 35 : 0,
-    completedActions: idx === 0 ? [mockId('gact_done')] : [],
+    status: data.status,
+    progressPercent: data.progressPercent,
+    completedActions: data.completedActions,
     remainingActions: [],
-    currentAction: idx === 0 ? {
-      id: mockId('gact'), taskId: mockId('gtask'),
-      title: '编写示例代码',
-      instruction: '根据所学概念编写至少 2 个可运行的示例代码',
-      checkpoint: '代码能正常运行并通过基本测试',
-      status: 'planned', progressNote: null, completedAt: null, position: 1
-    } : null,
+    currentAction: data.currentAction,
     nextStartPoint: null,
-    totalElapsedMinutes: idx === 0 ? 35 : 0,
+    totalElapsedMinutes: data.totalElapsedMinutes,
     position: idx,
     createdAt: '2026-07-04T08:00:00.000Z',
     updatedAt: '2026-07-04T10:30:00.000Z'
@@ -234,7 +234,7 @@ export function createGuideTasks(guideId: string, scenario: MockScenario, guideB
 export function createDailyGuide(scenario: MockScenario): DailyGuide {
   const guideId = mockId('guide');
   const blocks = createGuideBlocks(guideId, scenario);
-  const tasks = createGuideTasks(guideId, scenario, blocks);
+  const tasks = createGuideTasks(guideId, scenario);
   return {
     id: guideId,
     goalId: mockId('goal'),
@@ -358,40 +358,6 @@ export function createHistorySummaries(): HistoryIntakeSummary[] {
     { intake: { id: intakeId1, status: 'confirmed', goalId: mockId('goal'), brief: null, createdAt: '2026-07-01T09:00:00.000Z', updatedAt: '2026-07-01T09:30:00.000Z', confirmedAt: '2026-07-01T09:30:00.000Z' }, goalTitle: '掌握 React + TypeScript 全栈开发', messageCount: 12 },
     { intake: { id: intakeId2, status: 'confirmed', goalId: mockId('goal'), brief: null, createdAt: '2026-06-28T10:00:00.000Z', updatedAt: '2026-06-28T10:20:00.000Z', confirmedAt: '2026-06-28T10:20:00.000Z' }, goalTitle: '算法与数据结构基础', messageCount: 8 }
   ];
-}
-
-/* ------------------------------------------------------------------ */
-/*  FACTORY: DailyPlan                                                 */
-/* ------------------------------------------------------------------ */
-export function createDailyPlans(scenario: MockScenario): DailyPlan[] {
-  if (scenario.isEmpty) return [];
-  const planId = mockId('plan');
-  const blocks: DailyPlanBlock[] = [
-    {
-      id: mockId('pblock'), planId, taskId: null,
-      startTime: '09:00', endTime: '10:30', durationMinutes: 90,
-      objective: 'React 组件设计原则',
-      action: '阅读文档，完成练习组件',
-      expectedOutput: '3 个组件代码',
-      difficulty: 'standard', material: 'React 官方文档', successCheck: '组件满足设计原则', fallback: '参考社区文章',
-      status: 'active', position: 0
-    },
-    {
-      id: mockId('pblock'), planId, taskId: null,
-      startTime: '10:30', endTime: '12:00', durationMinutes: 90,
-      objective: 'React Hooks 深入理解',
-      action: '实现自定义 Hook',
-      expectedOutput: '3 个自定义 Hook',
-      difficulty: 'advanced', material: 'React Hooks 文档', successCheck: 'Hooks 无内存泄漏', fallback: '查看常见问题',
-      status: 'planned', position: 1
-    }
-  ];
-  return [{
-    id: planId, date: '2026-07-04', status: 'confirmed',
-    availableWindowsJson: JSON.stringify(createAppSettings(scenario).dailyStudyWindows),
-    createdAt: '2026-07-04T08:00:00.000Z', confirmedAt: '2026-07-04T08:30:00.000Z',
-    version: 1, blocks
-  }];
 }
 
 /* ------------------------------------------------------------------ */

@@ -1,19 +1,18 @@
 import type {
-  AppSettings, DailyGuide, DailyPlan, DailyPlanBlock, GoalBrief, GoalIntake,
-  GoalIntakeState, HistoryIntakeSummary, ImportParseResult, LayeredPlanResult,
-  LearningGoal, LearningRuntimeSnapshot, PlanAdjustmentProposal, PlanStage,
-  PromptProfile, QuestionAnswerResult, ReviewResult, StageOutlineResult,
-  StudySession, StudyWindow, SubmissionEvaluationResult, TaskItem,
+  AppSettings, DailyGuide, DailyPlanBlock, GoalBrief, GoalIntake,
+  GoalIntakeState, HistoryIntakeSummary, LayeredPlanResult,
+  LearningGoal, LearningRuntimeSnapshot, PlanAdjustmentProposal,
+  PromptProfile, QuestionAnswerResult, ReviewResult,
+  StudySession, SubmissionEvaluationResult,
   TeachStepResult, TodayGuideState, StudyAppApi
 } from '../../../shared/types';
 import { type PreviewConfig, getPreviewConfig, isBrowserMode, SCENARIO_DELAY_MS } from './url-state';
 import {
-  createAppSettings, createDailyGuide, createDailyPlans, createGoalIntakeState,
-  createGuideActions, createGuideBlocks, createGuideTasks, createHistorySummaries,
-  createLayeredPlanResult, createLearningGoal, createLearningRuntimeSnapshot,
-  createPromptProfiles, createReviewResult, createRoadmapStages, createShortPlanDays,
-  createStudySession, createTaskItems, createAdjustmentProposal,
-  createTodayGuideState, mockId, toScenario, type MockScenario
+  createAppSettings, createDailyGuide, createGoalIntakeState,
+  createHistorySummaries, createLayeredPlanResult, createLearningGoal,
+  createLearningRuntimeSnapshot, createPromptProfiles, createReviewResult,
+  createStudySession, createAdjustmentProposal, createTodayGuideState,
+  mockId, toScenario, type MockScenario
 } from './mock-data';
 
 /* ------------------------------------------------------------------ */
@@ -33,13 +32,10 @@ export class MockStudyAppApi implements StudyAppApi {
   private _guideSeq = 0;
   private _intakeSeq = 0;
   private _sessionSeq = 0;
-  private _navCallbacks: Array<(page: string) => void> = [];
   private _sessionCallbacks: Array<(data: { session: StudySession | null; block: DailyPlanBlock | null }) => void> = [];
   private _goalIntakeState: GoalIntakeState;
   private _todayGuideState: TodayGuideState;
   private _settings: AppSettings;
-  private _tasks: TaskItem[];
-  private _plans: DailyPlan[];
   private _prompts: PromptProfile[];
   private _historySummaries: HistoryIntakeSummary[];
   private _runtimeSnapshot: LearningRuntimeSnapshot;
@@ -48,15 +44,13 @@ export class MockStudyAppApi implements StudyAppApi {
     this.config = config;
     this.scenario = toScenario(config);
     this._settings = createAppSettings(this.scenario);
-    this._tasks = createTaskItems(this.scenario);
     this._todayGuideState = createTodayGuideState(config);
     this._goalIntakeState = createGoalIntakeState(this.scenario);
-    this._plans = createDailyPlans(this.scenario);
     this._prompts = createPromptProfiles();
     this._historySummaries = createHistorySummaries();
     this._runtimeSnapshot = createLearningRuntimeSnapshot(this.scenario.isEmpty ? false : true);
 
-    const block = this._todayGuideState.guide?.blocks[0] ?? this._plans[0]?.blocks[0] ?? null;
+    const block = this._todayGuideState.guide?.blocks[0] ?? null;
     if (config.session === 'running') {
       this._currentSession = createStudySession('active', block?.id);
     } else if (config.session === 'paused') {
@@ -158,97 +152,29 @@ export class MockStudyAppApi implements StudyAppApi {
     }
   };
 
-  // ── imports ───────────────────────────────────────────────────────
-  imports = {
-    create: async (rawText: string, source: string): Promise<any> => {
-      await this.maybeDelay();
-      return { id: mockId('import'), source, rawText, status: 'created', createdAt: new Date().toISOString(), parsedAt: null };
-    },
-    parse: async (importId: string, promptProfileId?: string): Promise<ImportParseResult> => {
-      await this.maybeDelay();
-      return { importId, goalsCreated: 1, tasksCreated: 3, tasks: this._tasks };
-    }
-  };
-
-  // ── tasks ─────────────────────────────────────────────────────────
-  tasks = {
-    list: async (): Promise<TaskItem[]> => {
-      await this.maybeDelay();
-      return this._tasks;
-    },
-    update: async (taskId: string, patch: Partial<TaskItem>): Promise<TaskItem> => {
-      await this.maybeDelay();
-      const idx = this._tasks.findIndex((t) => t.id === taskId);
-      if (idx === -1) throw new Error(`Task ${taskId} not found`);
-      this._tasks[idx] = { ...this._tasks[idx], ...patch, updatedAt: new Date().toISOString() };
-      return this._tasks[idx];
-    }
-  };
-
-  // ── goals ─────────────────────────────────────────────────────────
-  goals = {
-    create: async (title: string, description?: string): Promise<LearningGoal> => {
-      await this.maybeDelay();
-      return createLearningGoal(this.scenario);
-    },
-    list: async (): Promise<LearningGoal[]> => {
-      await this.maybeDelay();
-      return [createLearningGoal(this.scenario)];
-    },
-    listStages: async (goalId?: string): Promise<PlanStage[]> => {
-      await this.maybeDelay();
-      return createRoadmapStages().map((s) => ({
-        id: s.id, goalId: s.goalId, title: s.title, objective: s.objective,
-        prerequisites: null, successCriteria: s.successCriteria,
-        status: 'confirmed' as const, position: s.position,
-        summary: null, createdAt: '', updatedAt: ''
-      }));
-    },
-    generateStages: async (goalId?: string, promptProfileId?: string): Promise<StageOutlineResult> => {
-      await this.maybeDelay();
-      const goal = createLearningGoal(this.scenario);
-      const stages = createRoadmapStages().map((s) => ({
-        id: s.id, goalId: s.goalId, title: s.title, objective: s.objective,
-        prerequisites: null, successCriteria: s.successCriteria,
-        status: 'proposed' as const, position: s.position,
-        summary: null, createdAt: '', updatedAt: ''
-      }));
-      return { goal, stages };
-    },
-    confirmStages: async (goalId: string): Promise<PlanStage[]> => {
-      await this.maybeDelay();
-      return createRoadmapStages().map((s) => ({
-        id: s.id, goalId: s.goalId, title: s.title, objective: s.objective,
-        prerequisites: null, successCriteria: s.successCriteria,
-        status: 'confirmed' as const, position: s.position,
-        summary: null, createdAt: '', updatedAt: ''
-      }));
-    }
-  };
-
-  // ── plans ─────────────────────────────────────────────────────────
-  plans = {
-    list: async (date?: string): Promise<DailyPlan[]> => {
-      await this.maybeDelay();
-      return this._plans;
-    },
-    generate: async (date: string, availableWindows: StudyWindow[], promptProfileId?: string): Promise<DailyPlan> => {
-      await this.maybeDelay();
-      return this._plans[0] ?? createDailyPlans(this.scenario)[0];
-    },
-    confirm: async (planId: string): Promise<DailyPlan> => {
-      await this.maybeDelay();
-      const plan = this._plans.find((p) => p.id === planId);
-      if (plan) {
-        plan.status = 'confirmed';
-      }
-      return this._plans[0] ?? createDailyPlans(this.scenario)[0];
-    }
-  };
-
   // ── sessions ──────────────────────────────────────────────────────
   private _getActiveBlock(): DailyPlanBlock | null {
-    return this._plans[0]?.blocks[0] ?? null;
+    const block = this._todayGuideState.guide?.blocks.find((item) => item.planBlockId === this._currentSession?.blockId)
+      ?? this._todayGuideState.guide?.blocks[0]
+      ?? null;
+    if (!block) return null;
+    return {
+      id: block.planBlockId,
+      planId: this._todayGuideState.guide?.planId ?? 'mock-plan',
+      taskId: null,
+      startTime: block.startTime,
+      endTime: block.endTime,
+      durationMinutes: block.durationMinutes,
+      objective: block.objective,
+      action: block.action,
+      expectedOutput: block.expectedOutput,
+      difficulty: 'foundation',
+      material: '今日主任务',
+      successCheck: block.successCriteria,
+      fallback: block.fallback,
+      status: block.status,
+      position: block.position
+    };
   }
 
   sessions = {
@@ -272,13 +198,6 @@ export class MockStudyAppApi implements StudyAppApi {
         this._notifySessionChange();
       }
       return this._currentSession ?? createStudySession('paused');
-    },
-    complete: async (sessionId: string, notes?: string): Promise<StudySession> => {
-      await this.maybeDelay();
-      this._currentSession = createStudySession('completed', this._currentSession?.blockId ?? undefined);
-      if (notes) this._currentSession.notes = notes;
-      this._notifySessionChange();
-      return this._currentSession;
     },
     skip: async (blockId: string, reason: string): Promise<void> => {
       await this.maybeDelay();
@@ -417,13 +336,6 @@ export class MockStudyAppApi implements StudyAppApi {
   };
 
   // ── event listeners ───────────────────────────────────────────────
-  onNavigate = (callback: (page: string) => void): (() => void) => {
-    this._navCallbacks.push(callback);
-    return () => {
-      this._navCallbacks = this._navCallbacks.filter((cb) => cb !== callback);
-    };
-  };
-
   onSessionStateChanged = (callback: (data: { session: StudySession | null; block: DailyPlanBlock | null }) => void): (() => void) => {
     this._sessionCallbacks.push(callback);
     return () => {

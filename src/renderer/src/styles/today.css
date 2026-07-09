@@ -313,6 +313,247 @@
   font-size: var(--font-size-xs);
 }
 
+.restart-plan-card {
+  display: grid;
+  gap: 14px;
+}
+
+.restart-plan-card p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+
+.restart-confirm-modal {
+  display: grid;
+  gap: 14px;
+  max-width: 440px;
+}
+
+.restart-confirm-modal > svg {
+  color: var(--color-danger);
+}
+
+.restart-confirm-modal h3 {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xl);
+}
+
+.restart-confirm-modal p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+
+/* ---- 学习路径 ---- */
+.roadmap-stages-panel {
+  padding: 24px 30px;
+}
+
+.roadmap-stages-panel h3 {
+  margin: 0 0 16px;
+  color: var(--color-text-primary);
+  font-size: 18px;
+  font-weight: var(--font-weight-heavy);
+}
+
+.roadmap-stage-list {
+  display: grid;
+  gap: 4px;
+}
+
+.roadmap-stage-item {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border-left: 3px solid var(--color-border-default);
+}
+
+.roadmap-stage-item.current {
+  border-left-color: var(--color-primary);
+  background: var(--color-primary-surface);
+}
+
+.roadmap-stage-item.done {
+  border-left-color: var(--color-success);
+}
+
+.stage-marker {
+  display: grid;
+  place-items: center;
+  padding-top: 3px;
+  color: var(--color-text-muted);
+}
+
+.roadmap-stage-item.current .stage-marker {
+  color: var(--color-primary);
+}
+
+.roadmap-stage-item.done .stage-marker {
+  color: var(--color-success);
+}
+
+.stage-info {
+  display: grid;
+  gap: 4px;
+}
+
+.stage-info strong {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+}
+
+.stage-info span {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+}
+
+/* ---- 今日任务精简行 ---- */
+.section-head-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.section-head-row h3 {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: 18px;
+  font-weight: var(--font-weight-heavy);
+}
+
+.section-head-meta {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.today-tasks-compact {
+  padding: 24px 30px;
+  display: grid;
+  gap: 6px;
+}
+
+.compact-task-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+}
+
+.compact-task-row.current {
+  border-color: var(--color-primary-border);
+  background: var(--color-primary-surface);
+}
+
+.compact-task-row.done .task-title-text {
+  text-decoration: line-through;
+  color: var(--color-text-muted);
+}
+
+.task-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-border-default);
+  flex-shrink: 0;
+}
+
+.task-status-dot.active {
+  background: var(--color-primary);
+}
+
+.task-status-dot.done {
+  background: var(--color-success);
+}
+
+.task-title-text {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-time-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.task-status-text {
+  min-width: 56px;
+  text-align: right;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.task-status-text.active {
+  color: var(--color-primary);
+}
+
+.task-status-text.done {
+  color: var(--color-success);
+}
+
+.compact-task-row + .primary-action.full {
+  margin-top: 10px;
+}
+
+/* ---- 知识库 ---- */
+.knowledge-base-card {
+  border: 1px dashed var(--color-border-default);
+  background: var(--color-bg-surface-subtle);
+}
+
+.knowledge-base-card h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-primary);
+}
+
+.knowledge-base-card .muted {
+  margin: 0 0 12px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+
+.knowledge-placeholder {
+  display: grid;
+  gap: 8px;
+}
+
+.placeholder-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.placeholder-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-border-default);
+}
+
 @media (max-width: 1180px) {
   .today-v2 {
     grid-template-columns: 1fr;

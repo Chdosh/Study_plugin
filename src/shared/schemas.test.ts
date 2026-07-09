@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  dailyPlanAgentOutputSchema,
   dailyGuideAgentOutputSchema,
   goalIntakeAgentOutputSchema,
-  importAgentOutputSchema,
   nextStepDecisionAgentOutputSchema,
   roadmapAgentOutputSchema,
   shortPlanAgentOutputSchema,
@@ -11,55 +9,6 @@ import {
 } from './schemas';
 
 describe('AI output schemas', () => {
-  it('accepts a valid import-agent output', () => {
-    const result = importAgentOutputSchema.parse({
-      goals: [
-        {
-          title: 'Learn TypeScript',
-          description: 'Build foundations',
-          priority: 3,
-          dueDate: null
-        }
-      ],
-      tasks: [
-        {
-          title: 'Read generics guide',
-          description: 'Focus on constraints',
-          goalTitle: 'Learn TypeScript',
-          priority: 2,
-          difficulty: 'foundation',
-          estimateMinutes: 30,
-          acceptanceCriteria: 'Explain generic constraints',
-          dependsOnTitles: []
-        }
-      ]
-    });
-
-    expect(result.tasks[0].estimateMinutes).toBe(30);
-  });
-
-  it('rejects an invalid daily plan block duration', () => {
-    expect(() =>
-      dailyPlanAgentOutputSchema.parse({
-        blocks: [
-          {
-            taskTitle: 'Read generics guide',
-            startTime: '20:00',
-            endTime: '20:02',
-            durationMinutes: 2,
-            objective: 'Learn generics',
-            action: 'Read and summarize',
-            expectedOutput: 'Short note',
-            difficulty: 'foundation',
-            material: 'Docs',
-            successCheck: 'Can explain it',
-            fallback: 'Read simpler intro'
-          }
-        ]
-      })
-    ).toThrow();
-  });
-
   it('normalizes string fields in submission evaluation output from AI', () => {
     const result = submissionEvaluationAgentOutputSchema.parse({
       result: '通过',
@@ -260,6 +209,202 @@ describe('AI output schemas', () => {
 
     expect(guide.tasks).toHaveLength(4);
     expect(guide.tasks[0].actions).toHaveLength(1);
+  });
+
+  it('fills missing instruction and checkpoint from action title', () => {
+    const guide = dailyGuideAgentOutputSchema.parse({
+      date: '2026-07-05',
+      todayGoal: '测试默认补齐',
+      deliverables: ['产物'],
+      boundaries: [],
+      acceptanceCriteria: ['有产出'],
+      tomorrowActions: [],
+      tasks: [
+        {
+          title: '仅标题的任务',
+          objective: '测试 action 只提供 title',
+          scope: '最小范围',
+          estimatedMinutes: { min: 10, target: 15, max: 20 },
+          actions: [
+            { title: '唯一动作' }
+          ],
+          deliverable: '产物',
+          doneWhen: ['完成'],
+          quickHint: '提示',
+          evaluationMode: 'local',
+          submissionPolicy: 'once_after_task',
+          carryoverAllowed: true
+        }
+      ]
+    });
+
+    const action = guide.tasks[0].actions[0];
+    expect(action.title).toBe('唯一动作');
+    expect(action.instruction).toBe('执行「唯一动作」');
+    expect(action.checkpoint).toBe('完成「唯一动作」');
+  });
+
+  it('converts string array actions to full action objects', () => {
+    const guide = dailyGuideAgentOutputSchema.parse({
+      date: '2026-07-05',
+      todayGoal: '测试字符串数组转换',
+      deliverables: ['产物'],
+      boundaries: [],
+      acceptanceCriteria: ['有产出'],
+      tomorrowActions: [],
+      tasks: [
+        {
+          title: '字符串 actions 任务',
+          objective: '测试 actions 为字符串数组时的转换',
+          scope: '最小范围',
+          estimatedMinutes: { min: 10, target: 15, max: 20 },
+          actions: ['准备环境', '执行主路径', '写初稿'],
+          deliverable: '产物',
+          doneWhen: ['完成'],
+          quickHint: '提示',
+          evaluationMode: 'local',
+          submissionPolicy: 'once_after_task',
+          carryoverAllowed: true
+        }
+      ]
+    });
+
+    expect(guide.tasks[0].actions).toHaveLength(3);
+    expect(guide.tasks[0].actions[0].title).toBe('准备环境');
+    expect(guide.tasks[0].actions[0].instruction).toBe('执行「准备环境」');
+    expect(guide.tasks[0].actions[0].checkpoint).toBe('完成「准备环境」');
+    expect(guide.tasks[0].actions[1].title).toBe('执行主路径');
+    expect(guide.tasks[0].actions[2].title).toBe('写初稿');
+  });
+
+  it('rounds and clamps float mastery in submission evaluation', () => {
+    // 85.5 → round to 86
+    const r1 = submissionEvaluationAgentOutputSchema.parse({
+      result: 'passed',
+      mastery: 85.5,
+      evidence: [],
+      correctParts: [],
+      misconceptions: [],
+      missingRequirements: [],
+      feedback: 'ok',
+      recommendedAction: 'advance'
+    });
+    expect(r1.mastery).toBe(86);
+
+    // 100.8 → round to 101 → clamp to 100
+    const r2 = submissionEvaluationAgentOutputSchema.parse({
+      result: 'passed',
+      mastery: 100.8,
+      evidence: [],
+      correctParts: [],
+      misconceptions: [],
+      missingRequirements: [],
+      feedback: 'ok',
+      recommendedAction: 'advance'
+    });
+    expect(r2.mastery).toBe(100);
+
+    // -2 → round to -2 → clamp to 0
+    const r3 = submissionEvaluationAgentOutputSchema.parse({
+      result: 'passed',
+      mastery: -2,
+      evidence: [],
+      correctParts: [],
+      misconceptions: [],
+      missingRequirements: [],
+      feedback: 'ok',
+      recommendedAction: 'advance'
+    });
+    expect(r3.mastery).toBe(0);
+
+    // 85 stays 85
+    const r4 = submissionEvaluationAgentOutputSchema.parse({
+      result: 'passed',
+      mastery: 85,
+      evidence: [],
+      correctParts: [],
+      misconceptions: [],
+      missingRequirements: [],
+      feedback: 'ok',
+      recommendedAction: 'advance'
+    });
+    expect(r4.mastery).toBe(85);
+  });
+
+  it('rejects NaN mastery as invalid', () => {
+    expect(() =>
+      submissionEvaluationAgentOutputSchema.parse({
+        result: 'passed',
+        mastery: NaN,
+        evidence: [],
+        correctParts: [],
+        misconceptions: [],
+        missingRequirements: [],
+        feedback: 'ok',
+        recommendedAction: 'advance'
+      })
+    ).toThrow();
+  });
+
+  it('rejects non-numeric string mastery as invalid', () => {
+    expect(() =>
+      submissionEvaluationAgentOutputSchema.parse({
+        result: 'passed',
+        mastery: 'abc',
+        evidence: [],
+        correctParts: [],
+        misconceptions: [],
+        missingRequirements: [],
+        feedback: 'ok',
+        recommendedAction: 'advance'
+      })
+    ).toThrow();
+  });
+
+  it('rounds float estimatedMinutes in daily guide', () => {
+    const guide = dailyGuideAgentOutputSchema.parse({
+      date: '2026-07-05',
+      todayGoal: '测试浮点数分钟',
+      deliverables: ['产物'],
+      boundaries: [],
+      acceptanceCriteria: ['有产出'],
+      tomorrowActions: [],
+      tasks: [
+        {
+          title: '任务',
+          objective: '测试浮点 estimatedMinutes',
+          scope: '最小范围',
+          estimatedMinutes: { min: 10.3, target: 15.7, max: 20.2 },
+          actions: [{ title: 'a', instruction: 'b', checkpoint: 'c' }],
+          deliverable: '产物',
+          doneWhen: ['完成'],
+          quickHint: '提示',
+          evaluationMode: 'ai',
+          submissionPolicy: 'once_after_task',
+          carryoverAllowed: true
+        }
+      ]
+    });
+    expect(guide.tasks[0].estimatedMinutes.min).toBe(10);
+    expect(guide.tasks[0].estimatedMinutes.target).toBe(16);
+    expect(guide.tasks[0].estimatedMinutes.max).toBe(20);
+  });
+
+  it('rounds float dayIndex in short plan', () => {
+    const plan = shortPlanAgentOutputSchema.parse({
+      weekFocus: '测试',
+      days: [
+        {
+          dayIndex: 1.2,
+          title: '第一天',
+          focus: '测试',
+          tasks: ['任务'],
+          expectedOutput: '产出',
+          successCriteria: '标准'
+        }
+      ]
+    });
+    expect(plan.days[0].dayIndex).toBe(1);
   });
 
   it('rejects estimatedMinutes that violate min <= target <= max', () => {
