@@ -2,8 +2,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { AiClient } from '../ai/ai-client';
+import { aiReviews } from '../db/schema';
 import { createDatabase, type DatabaseClient } from '../db/client';
+import type { Database } from '../db/client';
+import type { InferSelectModel } from 'drizzle-orm';
 import { AppService } from './app-service';
 import type { SettingsService } from './settings-service';
 import { StudyStore } from './store';
@@ -17,6 +21,7 @@ vi.mock('./windows-foreground', () => ({
 
 let tmpPath: string;
 let client: DatabaseClient;
+let db: Database;
 let store: StudyStore;
 let appService: AppService;
 
@@ -24,12 +29,12 @@ beforeEach(async () => {
   tmpPath = mkdtempSync(join(tmpdir(), 'study-supervisor-app-service-test-'));
   const created = await createDatabase(tmpPath);
   client = created.client;
+  db = created.db;
   store = new StudyStore(created.db);
   await store.seedDefaults();
   appService = new AppService(
     store,
     createFakeSettingsService(),
-    () => null,
     () => null
   );
 });
@@ -88,197 +93,215 @@ describe('AppService progressive AI flow', () => {
     expect(nextIntake.intake.status).toBe('collecting');
     expect(nextIntake.messages[0].content).toContain('归档');
     expect((await appService.listTodayGuide()).guide).toBeNull();
+
+    await appService.sendOnboardingMessage('直接开始，先生成计划。');
+    const afterRestartMessage = await appService.getCurrentOnboarding();
+    expect(afterRestartMessage.intake.id).toBe(nextIntake.intake.id);
+    expect(afterRestartMessage.messages.map((message) => message.content)).toContain('直接开始，先生成计划。');
   });
 
-  it('generates a daily plan from a manual goal after stage confirmation', async () => {
+  it('keeps the confirmed Daily Guide as the execution spine through questions, actions, and submission', async () => {
     const aiCalls = installDeterministicAi();
-    const goal = await appService.createGoal('掌握 HTTP 缓存', '能解释并选择基础缓存策略');
 
-    expect(await appService.listTasks()).toHaveLength(0);
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
 
-    const outline = await appService.generateStageOutline(goal.id);
-    await appService.confirmStages(goal.id);
-    const plan = await appService.generatePlan('2026-07-02', [{ start: '20:00', end: '20:30' }]);
-    const tasks = await appService.listTasks();
+    const firstBlockId = layered.guide.blocks[0].planBlockId;
+    const secondBlockId = layered.guide.blocks[1].planBlockId;
+    const session = await appService.startSession(firstBlockId);
+    expect(session.blockId).toBe(firstBlockId);
 
-    expect(outline.stages[0].status).toBe('proposed');
-    expect(tasks).toHaveLength(1);
-    expect(tasks[0].title).toBe('阶段起步：缓存语义基础');
-    expect(plan.blocks[0].taskId).toBe(tasks[0].id);
-    expect(plan.blocks[0].objective).toBe('区分 Cache-Control 指令');
-    expect(aiCalls.map((call) => call.operation)).toEqual(['stage_outline', 'plan']);
-  });
+    const started = await appService.getLearningState();
+    expect(started.state.activeDailyTaskId).toBe(firstBlockId);
+    expect(started.step?.title).toBe('打开项目');
 
-  it('runs a structured AI learning flow without turning Study into a long chat', async () => {
-    const aiCalls = installDeterministicAi();
-    const rawImport = await appService.createImport('我要学习 HTTP 缓存。', 'manual');
-    const imported = await appService.parseImport(rawImport.id);
-    const goal = (await appService.listGoals())[0];
+    const taught = await appService.teachCurrentStep();
+    expect(taught.step.id).toBe(started.step?.id);
+    expect(taught.step.title).toBe('打开项目');
 
-    expect(imported.tasksCreated).toBe(1);
-    expect(goal.title).toBe('掌握 HTTP 缓存');
+    const answer = await appService.askStepQuestion('入口在哪？');
+    expect(answer.thread.status).toBe('open');
+    expect((await appService.getLearningState()).state.activeQuestionThreadId).toBe(answer.thread.id);
 
-    const outline = await appService.generateStageOutline(goal.id);
-    expect(outline.stages[0].status).toBe('proposed');
+    const resolved = await appService.resolveQuestion(answer.thread.id, '已经知道入口文件。');
+    expect(resolved.state.activeQuestionThreadId).toBeNull();
+    expect(resolved.state.activeStepId).toBe(started.step?.id);
 
-    await appService.confirmStages(goal.id);
-    const plan = await appService.generatePlan('2026-07-02', [{ start: '20:00', end: '20:30' }]);
-    await appService.confirmPlan(plan.id);
-    const session = await appService.startSession(plan.blocks[0].id);
-    const firstTeaching = await appService.teachCurrentStep();
+    expect((await appService.completeCurrentAction()).step?.title).toBe('跑主流程');
+    const finalAction = await appService.completeCurrentAction();
+    expect(finalAction.state.activeDailyTaskId).toBe(firstBlockId);
+    expect(finalAction.step?.title).toBe('写边界');
 
-    expect(firstTeaching.step.status).toBe('waiting_for_submission');
-    expect(firstTeaching.contextSourceIds).toContain(goal.id);
+    const submitted = await appService.submitLearningResult('已完成当前版本功能清单，并记录今天做和不做的边界。');
+    expect(submitted.evaluation.result).toBe('passed');
+    expect(submitted.nextStep?.title).toBe('找入口');
+    expect(await appService.getActiveSession()).toBeNull();
 
-    const firstQuestion = await appService.askStepQuestion('no-cache 是不缓存吗？');
-    const openQuestionState = await appService.getLearningState();
-
-    expect(firstQuestion.resolved).toBe(false);
-    expect(openQuestionState.state.activeStepId).toBe(firstTeaching.step.id);
-    expect(openQuestionState.state.activeQuestionThreadId).toBe(firstQuestion.thread.id);
-
-    const secondQuestion = await appService.askStepQuestion('must-revalidate 呢？');
-    const resolvedQuestionState = await appService.getLearningState();
-
-    expect(secondQuestion.resolved).toBe(true);
-    expect(resolvedQuestionState.state.activeStepId).toBe(firstTeaching.step.id);
-    expect(resolvedQuestionState.state.activeQuestionThreadId).toBeNull();
-
-    const firstResult = await appService.submitLearningResult('我能解释 max-age 和 no-cache，但还没覆盖 must-revalidate。');
-
-    expect(firstResult.evaluation.result).toBe('partial');
-    expect(firstResult.decision.decision).toBe('remediate');
-    expect(firstResult.nextStep).toBeNull();
-
-    const remediationState = await appService.getLearningState();
-    expect(remediationState.step?.status).toBe('needs_revision');
-    expect(remediationState.state.activeStepId).toBe(firstTeaching.step.id);
-
-    await appService.teachCurrentStep();
-    const completedResult = await appService.submitLearningResult('no-cache 可存但使用前验证；must-revalidate 强制过期后验证。');
-
-    expect(completedResult.evaluation.result).toBe('passed');
-    expect(completedResult.decision.decision).toBe('complete_task');
-
-    await appService.completeSession(session.id, '完成 Cache-Control 基础学习。');
-    const completedState = await appService.getLearningState();
-
-    expect(completedState.state.sessionStatus).toBe('completed');
-    expect(completedState.step?.status).toBe('completed');
-    expect(completedState.pendingAdjustment?.status).toBe('pending');
-
-    const accepted = await appService.decidePlanAdjustment(completedState.pendingAdjustment!.id, 'accepted');
-    expect(accepted.status).toBe('accepted');
-    expect(accepted.appliedTaskId).toBeTruthy();
-
-    const followUpPlan = await appService.generatePlan('2026-07-03', [{ start: '20:00', end: '20:30' }]);
-
-    expect(followUpPlan.blocks[0].taskId).toBe(accepted.appliedTaskId);
-    await appService.confirmPlan(followUpPlan.id);
-
-    const secondSession = await appService.startSession(followUpPlan.blocks[0].id);
-    const secondTeaching = await appService.teachCurrentStep();
-
-    expect(secondTeaching.step.status).toBe('waiting_for_submission');
-    expect(secondTeaching.step.id).not.toBe(firstTeaching.step.id);
-
-    const followUpQuestion = await appService.askStepQuestion('hash 文件名为什么适合长缓存？');
-    const followUpQuestionState = await appService.getLearningState();
-
-    expect(followUpQuestion.resolved).toBe(true);
-    expect(followUpQuestionState.state.activeStepId).toBe(secondTeaching.step.id);
-    expect(followUpQuestionState.state.activeQuestionThreadId).toBeNull();
-
-    const secondResult = await appService.submitLearningResult('静态资源可用 max-age=31536000, immutable；HTML 使用 no-cache。');
-
-    expect(secondResult.evaluation.result).toBe('passed');
-    expect(secondResult.decision.decision).toBe('complete_task');
-
-    await appService.completeSession(secondSession.id, '完成静态资源缓存头练习。');
-    const secondCompletedState = await appService.getLearningState();
-
-    expect(secondCompletedState.state.sessionStatus).toBe('completed');
-    expect(secondCompletedState.state.activeDailyTaskId).toBe(followUpPlan.blocks[0].id);
-    expect(secondCompletedState.step?.id).toBe(secondTeaching.step.id);
-    expect(secondCompletedState.step?.status).toBe('completed');
-    expect(secondCompletedState.latestEvaluation?.result).toBe('passed');
-    expect(secondCompletedState.pendingAdjustment?.status).toBe('pending');
-
-    client.close();
-    const reopened = await createDatabase(tmpPath);
-    client = reopened.client;
-    store = new StudyStore(reopened.db);
-    await store.seedDefaults();
-    appService = new AppService(
-      store,
-      createFakeSettingsService(),
-      () => null,
-      () => null
-    );
-
-    const restoredState = await appService.getLearningState();
-
-    expect(restoredState.state.sessionStatus).toBe('completed');
-    expect(restoredState.state.activeGoalId).toBe(goal.id);
-    expect(restoredState.state.activeStageId).toBe(outline.stages[0].id);
-    expect(restoredState.state.activeDailyTaskId).toBe(followUpPlan.blocks[0].id);
-    expect(restoredState.state.activeStepId).toBe(secondTeaching.step.id);
-    expect(restoredState.state.activeQuestionThreadId).toBeNull();
-    expect(restoredState.step?.status).toBe('completed');
-    expect(restoredState.pendingAdjustment?.status).toBe('pending');
+    const afterSubmit = await appService.getLearningState();
+    expect(afterSubmit.state.activeDailyTaskId).toBe(secondBlockId);
+    expect(afterSubmit.step?.title).toBe('找入口');
 
     expect(aiCalls.map((call) => call.operation)).toEqual([
-      'import',
-      'stage_outline',
-      'plan',
-      'teach_step',
-      'question',
-      'question',
-      'submission_evaluation',
-      'teach_step',
-      'submission_evaluation',
-      'plan',
+      'goal_intake',
+      'roadmap',
+      'short_plan',
+      'daily_guide',
       'teach_step',
       'question',
       'submission_evaluation'
     ]);
   });
+
+  it('treats a paused Focus Session as the current recoverable session', async () => {
+    installDeterministicAi();
+
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+
+    const blockId = layered.guide.blocks[0].planBlockId;
+    const started = await appService.startSession(blockId);
+    const paused = await appService.pauseSession(started.id);
+    const current = await appService.getActiveSession();
+
+    expect(paused.status).toBe('paused');
+    expect(current?.session.id).toBe(started.id);
+    expect(current?.session.status).toBe('paused');
+    expect(current?.block.id).toBe(blockId);
+  });
+
+  it('handles need_more_info then ready in goal intake multi-round flow', async () => {
+    installDeterministicAiWithNeedMoreInfo();
+
+    const initial = await appService.getCurrentOnboarding();
+    expect(initial.messages[0].content).toContain('目标');
+
+    const firstMessage = await appService.sendOnboardingMessage('我想学前端，但不确定具体方向。');
+    expect(firstMessage.intake.status).toBe('collecting');
+    expect(firstMessage.intake.brief).toBeNull();
+
+    const secondMessage = await appService.sendOnboardingMessage('每天晚上 2 小时，三个月内达到初级水平。');
+    expect(secondMessage.intake.status).toBe('ready');
+    expect(secondMessage.intake.brief?.title).toBe('三个月达到初级前端工程师水平');
+
+    const confirmed = await appService.confirmOnboardingGoal();
+    expect(confirmed.goal.title).toBe('三个月达到初级前端工程师水平');
+
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    expect(layered.guide.tasks).toHaveLength(1);
+  });
+
+  it('generates a daily review via ReflectionAgent', async () => {
+    const date = new Date().toISOString().slice(0, 10);
+    installDeterministicAi();
+
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+
+    const review = await appService.generateReview(date);
+    expect(review.completionScore).toBe(75);
+    expect(review.focusScore).toBe(80);
+    expect(review.summary).toBeTruthy();
+    expect(review.reviewId).toBeTruthy();
+    expect(review.date).toBe(date);
+  });
+
+  it('records daily_guide failure to ai_reviews when schema validation fails', async () => {
+    const aiCalls = installDeterministicAiWithDailyGuideFailure();
+
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+
+    await expect(
+      appService.generateLayeredPlan(confirmed.goal.id)
+    ).rejects.toThrow('生成今日执行稿失败');
+
+    expect(aiCalls.map((call) => call.operation)).toEqual(['goal_intake', 'roadmap', 'short_plan', 'daily_guide']);
+
+    const reviews = await db.select().from(aiReviews);
+    const failedReview = reviews.find((r: InferSelectModel<typeof aiReviews>) => r.kind === 'daily_guide' && r.status === 'failed');
+    expect(failedReview).toBeTruthy();
+    expect(failedReview!.errorMessage).toContain('schema');
+  });
+
+  it('records daily_guide timeout to ai_reviews', async () => {
+    const aiCalls: Array<{ operation: string }> = [];
+
+    vi.spyOn(AiClient.prototype, 'generateJson').mockImplementation(async (request) => {
+      const operation = operationFromSystem(request.system);
+      aiCalls.push({ operation });
+
+      if (operation === 'goal_intake') {
+        return request.schema.parse({
+          status: 'ready',
+          reply: '确认目标。',
+          missingInfo: [],
+          shouldForceStart: false,
+          brief: {
+            title: '测试目标',
+            targetOutcome: '完成测试',
+            currentLevel: '初级',
+            availableTime: '每天 1 小时',
+            deadline: '一个月',
+            constraints: [],
+            successCriteria: ['测试通过']
+          }
+        });
+      }
+
+      if (operation === 'roadmap') {
+        return request.schema.parse({
+          goalSummary: '测试。',
+          stages: [{ title: '阶段1', objective: '测试', direction: '测试', successCriteria: '测试' }]
+        });
+      }
+
+      if (operation === 'short_plan') {
+        return request.schema.parse({
+          weekFocus: '测试',
+          days: [{
+            dayIndex: 1, title: '测试', focus: '测试',
+            tasks: ['测试'], expectedOutput: '测试', successCriteria: '测试'
+          }]
+        });
+      }
+
+      if (operation === 'daily_guide') {
+        throw new Error('AI 请求超时');
+      }
+
+      throw new Error(`Unexpected operation: ${operation}`);
+    });
+
+    await appService.sendOnboardingMessage('测试目标。');
+    const confirmed = await appService.confirmOnboardingGoal();
+
+    await expect(
+      appService.generateLayeredPlan(confirmed.goal.id)
+    ).rejects.toThrow('生成今日执行稿失败');
+
+    expect(aiCalls.map((c) => c.operation)).toEqual(['goal_intake', 'roadmap', 'short_plan', 'daily_guide']);
+
+    const reviews = await db.select().from(aiReviews);
+    const failedReview = reviews.find((r: InferSelectModel<typeof aiReviews>) => r.kind === 'daily_guide' && r.status === 'failed');
+    expect(failedReview).toBeTruthy();
+    expect(failedReview!.errorMessage).toContain('超时');
+  });
+
 });
+
 
 function installDeterministicAi(): Array<{ operation: string; user: string }> {
   const calls: Array<{ operation: string; user: string }> = [];
-  let questionCount = 0;
-  let evaluationCount = 0;
-  let decisionCount = 0;
 
   vi.spyOn(AiClient.prototype, 'generateJson').mockImplementation(async (request) => {
     const operation = operationFromSystem(request.system);
     calls.push({ operation, user: request.user });
-
-    if (operation === 'import') {
-      return request.schema.parse({
-        goals: [
-          {
-            title: '掌握 HTTP 缓存',
-            description: '能解释并选择基础缓存策略',
-            priority: 2,
-            dueDate: null
-          }
-        ],
-        tasks: [
-          {
-            title: '理解 Cache-Control',
-            description: '学习 max-age、no-cache 和 must-revalidate',
-            goalTitle: '掌握 HTTP 缓存',
-            priority: 2,
-            difficulty: 'foundation',
-            estimateMinutes: 20,
-            acceptanceCriteria: '能解释三种指令的区别',
-            dependsOnTitles: []
-          }
-        ]
-      });
-    }
 
     if (operation === 'goal_intake') {
       return request.schema.parse({
@@ -391,121 +414,200 @@ function installDeterministicAi(): Array<{ operation: string; user: string }> {
       });
     }
 
-    if (operation === 'stage_outline') {
-      return request.schema.parse({
-        goalSummary: '先掌握缓存指令语义，再练习静态资源响应头。',
-        stages: [
-          {
-            title: '缓存语义基础',
-            objective: '理解 Cache-Control 常用指令',
-            prerequisites: 'HTTP 请求响应基础',
-            successCriteria: '能解释并选择合适缓存指令'
-          }
-        ]
-      });
-    }
-
-    if (operation === 'plan') {
-      const taskTitle = findTaskTitleInPrompt(request.user) ?? '理解 Cache-Control';
-      return request.schema.parse({
-        blocks: [
-          {
-            taskTitle,
-            startTime: '20:00',
-            endTime: '20:10',
-            durationMinutes: 10,
-            objective: taskTitle.startsWith('跟进：') ? '练习静态资源缓存响应头' : '区分 Cache-Control 指令',
-            action: taskTitle.startsWith('跟进：') ? '写出一组响应头并解释理由' : '写出 max-age、no-cache 和 must-revalidate 的区别',
-            expectedOutput: '一段可检查的中文说明',
-            difficulty: 'foundation',
-            material: '本地 HTTP 笔记',
-            successCheck: '能说明缓存命中后是否需要重新验证',
-            fallback: '先只比较两个指令'
-          }
-        ]
-      });
-    }
-
     if (operation === 'teach_step') {
       return request.schema.parse({
-        title: '当前 Cache-Control 步骤',
-        objective: '说明当前缓存指令的使用场景',
-        instruction: '写出指令含义，并说明浏览器下一次请求会发生什么。',
-        explanation: '先判断缓存是否新鲜，再判断是否需要向服务器重新验证。',
-        userAction: '用自己的话写出区别。',
-        expectedOutput: '一段包含指令区别的说明',
-        successCriteria: '能解释 no-cache 不是不缓存',
-        requiresSubmission: true
+        title: '打开项目',
+        objective: '确认应用入口和 Today 页面可进入',
+        instruction: '启动应用，进入 Today，并记录当前主任务入口。',
+        explanation: '先确认入口可以打开，再继续跑完整主流程。',
+        userAction: '打开应用并记录入口文件。',
+        expectedOutput: '入口文件和 Today 页面状态记录',
+        successCriteria: '能说明从应用启动到 Today 的入口路径',
+        requiresSubmission: false
       });
     }
 
     if (operation === 'question') {
-      questionCount += 1;
       return request.schema.parse({
-        answer: questionCount === 1
-          ? 'no-cache 可以存储响应，但使用前必须重新验证。'
-          : 'must-revalidate 表示过期后必须重新验证，不能随意使用陈旧缓存。',
-        relationToCurrentStep: '都用于补全当前步骤的 Cache-Control 指令理解。',
-        example: 'Cache-Control: max-age=60, must-revalidate',
-        resolved: questionCount >= 2,
-        returnToStepInstruction: '回到当前步骤，继续完成指令区别说明。',
-        resolutionSummary: questionCount >= 2 ? '用户理解了 no-cache 与 must-revalidate。' : ''
+        answer: '入口从 Electron main 进入 renderer，Today 页面承接当前主任务。',
+        relationToCurrentStep: '这个问题直接帮助你完成“打开项目”行动。',
+        example: '先看 Electron 入口，再看 renderer 主页面。',
+        resolved: false,
+        returnToStepInstruction: '回到当前行动，继续记录入口路径。',
+        resolutionSummary: ''
       });
     }
 
     if (operation === 'submission_evaluation') {
-      evaluationCount += 1;
-      return request.schema.parse(
-        evaluationCount === 1
-          ? {
-              result: 'partial',
-              mastery: 62,
-              evidence: ['说明了 max-age 和 no-cache'],
-              correctParts: ['知道 no-cache 需要验证'],
-              misconceptions: [],
-              missingRequirements: ['补充 must-revalidate'],
-              feedback: '还缺 must-revalidate 的强制重新验证语义。',
-              recommendedAction: 'remediate'
-            }
-          : {
-              result: 'passed',
-              mastery: 90,
-              evidence: ['完整说明三种指令'],
-              correctParts: ['区分了验证和缓存存储'],
-              misconceptions: [],
-              missingRequirements: [],
-              feedback: '已经达到当前任务完成标准。',
-              recommendedAction: 'complete_task'
-            }
-      );
+      return request.schema.parse({
+        result: 'passed',
+        mastery: 92,
+        evidence: ['提交包含功能清单和边界记录。'],
+        correctParts: ['说明了当前版本能力。', '记录了今天不做的范围。'],
+        misconceptions: [],
+        missingRequirements: [],
+        feedback: '主任务提交达到验收标准，可以进入下一主任务。',
+        recommendedAction: 'complete_task'
+      });
     }
 
-    if (operation === 'next_step') {
-      decisionCount += 1;
-      return request.schema.parse(
-        decisionCount === 1
-          ? {
-              decision: 'remediate',
-              reason: '需要补齐 must-revalidate 后再完成任务。',
-              taskCompleted: false,
-              nextStep: null,
-              remediation: {
-                title: '补齐 must-revalidate',
-                instruction: '用一句话比较 no-cache 和 must-revalidate。',
-                expectedOutput: '包含两个指令区别的说明',
-                successCriteria: '能说明过期后强制重新验证'
-              },
-              carryForward: '用户已掌握 max-age 和 no-cache。'
-            }
-          : {
-              decision: 'complete_task',
-              reason: '当前任务完成，可以安排响应头配置练习。',
-              taskCompleted: true,
-              nextStep: null,
-              remediation: null,
-              carryForward: '下一次练习为静态资源选择缓存响应头。'
-            }
-      );
+    if (operation === 'reflection') {
+      return request.schema.parse({
+        completionScore: 75,
+        focusScore: 80,
+        summary: '今天完成了两个主任务，专注度良好，明天继续推进代码地图整理。',
+        nextActions: ['明天优先整理入口和 AI 链路', '补全代码地图并提交评估']
+      });
+    }
+
+    throw new Error(`Unexpected AI operation: ${operation}`);
+  });
+
+  return calls;
+}
+
+function installDeterministicAiWithNeedMoreInfo(): Array<{ operation: string }> {
+  const calls: Array<{ operation: string }> = [];
+  let intakeCalls = 0;
+
+  vi.spyOn(AiClient.prototype, 'generateJson').mockImplementation(async (request) => {
+    const operation = operationFromSystem(request.system);
+    calls.push({ operation });
+
+    if (operation === 'goal_intake') {
+      intakeCalls++;
+      if (intakeCalls === 1) {
+        return request.schema.parse({
+          status: 'need_more_info',
+          reply: '你提到想学前端，能否告诉我你的基础和时间安排？你希望达到什么具体水平？',
+          missingInfo: ['当前基础', '可用时间', '具体目标水平'],
+          shouldForceStart: false
+        });
+      }
+      return request.schema.parse({
+        status: 'ready',
+        reply: '我理解了，你的目标是三个月内达到初级前端工程师水平，每天晚上 2 小时。请确认。',
+        missingInfo: [],
+        shouldForceStart: false,
+        brief: {
+          title: '三个月达到初级前端工程师水平',
+          targetOutcome: '能完成一个可展示项目并准备求职面试',
+          currentLevel: '有基础网页经验，需要系统补齐工程能力',
+          availableTime: '每天晚上 2 小时',
+          deadline: '三个月',
+          constraints: ['不能一次学太多方向', '先以可演示项目为核心'],
+          successCriteria: ['能讲清项目主流程', '完成 README 初稿', '准备面试问答']
+        }
+      });
+    }
+
+    if (operation === 'roadmap') {
+      return request.schema.parse({
+        goalSummary: '围绕求职演示项目补齐工程能力。',
+        stages: [
+          {
+            title: '项目接管基础',
+            objective: '能跑通项目并讲清主流程',
+            direction: '先理解已有项目，再补关键技术点',
+            successCriteria: '能用 2 分钟讲清项目为什么做、怎么做'
+          }
+        ]
+      });
+    }
+
+    if (operation === 'short_plan') {
+      return request.schema.parse({
+        weekFocus: '把项目变成可讲、可演示的资产',
+        days: [
+          {
+            dayIndex: 1, title: '跑通并梳理项目', focus: '建立项目所有权',
+            tasks: ['跑一遍主流程', '写代码地图'],
+            expectedOutput: '项目接管文档初稿',
+            successCriteria: '能说清入口、主流程和关键模块'
+          }
+        ]
+      });
+    }
+
+    if (operation === 'daily_guide') {
+      return request.schema.parse({
+        date: '2026-07-03',
+        todayGoal: '今天把项目推进到可讲可演示。',
+        deliverables: ['主流程说明'],
+        boundaries: ['不做复杂知识图谱'],
+        acceptanceCriteria: ['能讲清项目主流程'],
+        tomorrowActions: ['修最高优先级 bug'],
+        tasks: [
+          {
+            title: '锁定今天边界',
+            objective: '明确今天只做接管和文档',
+            scope: '跑通主流程并记录边界',
+            estimatedMinutes: { min: 25, target: 35, max: 50 },
+            actions: [
+              { title: '打开项目', instruction: '启动应用', checkpoint: '看到主界面' },
+              { title: '跑主流程', instruction: '按路径操作', checkpoint: '记录关键入口' }
+            ],
+            deliverable: '功能清单',
+            doneWhen: ['写出已完成能力'],
+            quickHint: '跑不通就记录阻塞点',
+            evaluationMode: 'local' as const,
+            submissionPolicy: 'once_after_task' as const,
+            carryoverAllowed: true
+          }
+        ]
+      });
+    }
+
+    throw new Error(`Unexpected AI operation: ${operation}`);
+  });
+
+  return calls;
+}
+
+function installDeterministicAiWithDailyGuideFailure(): Array<{ operation: string }> {
+  const calls: Array<{ operation: string }> = [];
+
+  vi.spyOn(AiClient.prototype, 'generateJson').mockImplementation(async (request) => {
+    const operation = operationFromSystem(request.system);
+    calls.push({ operation });
+
+    if (operation === 'goal_intake') {
+      return request.schema.parse({
+        status: 'ready',
+        reply: '确认目标。',
+        missingInfo: [],
+        shouldForceStart: false,
+        brief: {
+          title: '三个月达到初级前端工程师水平',
+          targetOutcome: '完成可展示项目',
+          currentLevel: '有基础经验',
+          availableTime: '每天晚上 2 小时',
+          deadline: '三个月',
+          constraints: [],
+          successCriteria: ['能讲清项目']
+        }
+      });
+    }
+
+    if (operation === 'roadmap') {
+      return request.schema.parse({
+        goalSummary: '测试。',
+        stages: [{ title: '阶段1', objective: '测试', direction: '测试', successCriteria: '测试' }]
+      });
+    }
+
+    if (operation === 'short_plan') {
+      return request.schema.parse({
+        weekFocus: '测试',
+        days: [{
+          dayIndex: 1, title: '测试', focus: '测试',
+          tasks: ['测试'], expectedOutput: '测试', successCriteria: '测试'
+        }]
+      });
+    }
+
+    if (operation === 'daily_guide') {
+      throw new Error('Daily Guide schema validation failed: ZodError');
     }
 
     throw new Error(`Unexpected AI operation: ${operation}`);
@@ -515,28 +617,17 @@ function installDeterministicAi(): Array<{ operation: string; user: string }> {
 }
 
 function operationFromSystem(system: string): string {
-  if (system.includes('import-agent')) return 'import';
   if (system.includes('goal-intake-agent')) return 'goal_intake';
   if (system.includes('generate-roadmap-agent')) return 'roadmap';
   if (system.includes('generate-short-plan-agent')) return 'short_plan';
   if (system.includes('generate-daily-guide-agent')) return 'daily_guide';
-  if (system.includes('planning-service')) return 'stage_outline';
-  if (system.includes('planner-agent')) return 'plan';
   if (system.includes('tutoring-service')) return 'teach_step';
   if (system.includes('question-branch')) return 'question';
   if (system.includes('evaluation-service')) return 'submission_evaluation';
-  if (system.includes('progression-service')) return 'next_step';
+  if (system.includes('reflection-agent')) return 'reflection';
   return 'unknown';
 }
 
-function findTaskTitleInPrompt(prompt: string): string | null {
-  const followUpMatch = prompt.match(/"title":"(跟进：[^"]+)"/);
-  if (followUpMatch?.[1]) return followUpMatch[1];
-  const stageStartMatch = prompt.match(/"title":"(阶段起步：[^"]+)"/);
-  if (stageStartMatch?.[1]) return stageStartMatch[1];
-  const cacheTaskMatch = prompt.match(/"title":"(理解 Cache-Control)"/);
-  return cacheTaskMatch?.[1] ?? null;
-}
 
 function createFakeSettingsService(): SettingsService {
   return {

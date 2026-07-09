@@ -22,7 +22,16 @@ const stringArrayFromAiSchema = z.preprocess((value) => {
 const percentNumberFromAiSchema = z.preprocess((value) => {
   if (typeof value === 'string') {
     const match = value.match(/-?\d+(\.\d+)?/);
-    return match ? Number(match[0]) : value;
+    if (match) {
+      const n = Number(match[0]);
+      if (Number.isFinite(n)) {
+        return Math.max(0, Math.min(100, Math.round(n)));
+      }
+    }
+    return value;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.max(0, Math.min(100, Math.round(value)));
   }
   return value;
 }, z.number().int().min(0).max(100));
@@ -102,51 +111,6 @@ export const studyWindowSchema = z.object({
   end: z.string().min(1)
 });
 
-export const importAgentOutputSchema = z.object({
-  goals: z.array(
-    z.object({
-      title: z.string().min(1),
-      description: z.string().default(''),
-      priority: z.number().int().min(1).max(5).default(3),
-      dueDate: z.string().nullable().default(null)
-    })
-  ),
-  tasks: z.array(
-    z.object({
-      title: z.string().min(1),
-      description: z.string().default(''),
-      goalTitle: z.string().nullable().default(null),
-      priority: z.number().int().min(1).max(5).default(3),
-      difficulty: z.enum(['foundation', 'standard', 'advanced', 'exam']).default('foundation'),
-      estimateMinutes: z.number().int().min(10).max(480).default(30),
-      acceptanceCriteria: z.string().default(''),
-      dependsOnTitles: z.array(z.string()).default([])
-    })
-  )
-});
-
-export const dailyPlanAgentOutputSchema = z.object({
-  blocks: z.array(
-    z.object({
-      taskTitle: z.string().nullable().default(null),
-      startTime: z.string().min(1),
-      endTime: z.string().min(1),
-      durationMinutes: z.number().int().min(5).max(120),
-      objective: z.string().min(1),
-      action: z.string().min(1),
-      expectedOutput: z.string().min(1),
-      difficulty: z.string().min(1),
-      material: z.string().min(1),
-      successCheck: z.string().min(1),
-      fallback: z.string().min(1)
-    })
-  )
-});
-
-export const looseDailyPlanAgentOutputSchema = z.object({
-  blocks: z.array(z.record(z.unknown())).default([])
-});
-
 export const evaluationAgentOutputSchema = z.object({
   completionScore: z.number().min(0).max(100),
   focusScore: z.number().min(0).max(100),
@@ -196,7 +160,10 @@ export const shortPlanAgentOutputSchema = z.object({
   weekFocus: z.string().min(1),
   days: z.array(
     z.object({
-      dayIndex: z.number().int().min(1).max(3),
+      dayIndex: z.preprocess(
+        (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : v),
+        z.number().int().min(1).max(3)
+      ),
       title: z.string().min(1),
       focus: z.string().min(1),
       tasks: stringArrayFromAiSchema,
@@ -219,19 +186,43 @@ export const dailyGuideAgentOutputSchema = z.object({
       objective: z.string().min(1),
       scope: z.string().min(1),
       estimatedMinutes: z.object({
-        min: z.number().int().min(5).max(360),
-        target: z.number().int().min(5).max(480),
-        max: z.number().int().min(5).max(600)
+        min: z.preprocess(
+          (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : v),
+          z.number().int().min(5).max(360)
+        ),
+        target: z.preprocess(
+          (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : v),
+          z.number().int().min(5).max(480)
+        ),
+        max: z.preprocess(
+          (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : v),
+          z.number().int().min(5).max(600)
+        )
       }).refine((value) => value.min <= value.target && value.target <= value.max, {
         message: 'estimatedMinutes 必须满足 min <= target <= max'
       }),
-      actions: z.array(
-        z.object({
-          title: z.string().min(1),
-          instruction: z.string().min(1),
-          checkpoint: z.string().min(1)
-        })
-      ).min(1).max(6),
+      actions: z.preprocess(
+        (val) => {
+          if (!Array.isArray(val)) return val;
+          return val.map((item) => {
+            if (typeof item === 'string') {
+              return { title: item };
+            }
+            return item;
+          });
+        },
+        z.array(
+          z.object({
+            title: z.string().min(1),
+            instruction: z.string().optional().default(''),
+            checkpoint: z.string().optional().default('')
+          }).transform((action) => ({
+            ...action,
+            instruction: action.instruction || `执行「${action.title}」`,
+            checkpoint: action.checkpoint || `完成「${action.title}」`
+          }))
+        ).min(1).max(6)
+      ),
       deliverable: z.string().min(1),
       doneWhen: stringArrayFromAiSchema,
       quickHint: z.string().min(1),
@@ -240,20 +231,6 @@ export const dailyGuideAgentOutputSchema = z.object({
       carryoverAllowed: booleanFromAiSchema.default(true)
     })
   ).min(1).max(4)
-});
-
-export const stageOutlineAgentOutputSchema = z.object({
-  goalSummary: z.string().min(1),
-  stages: z
-    .array(
-      z.object({
-        title: z.string().min(1),
-        objective: z.string().min(1),
-        prerequisites: z.string().default(''),
-        successCriteria: z.string().min(1)
-      })
-    )
-    .min(1)
 });
 
 export const teachStepAgentOutputSchema = z.object({
@@ -323,16 +300,11 @@ export const stepSummaryAgentOutputSchema = z.object({
   carryForward: z.string().default('')
 });
 
-export type ImportAgentOutput = z.infer<typeof importAgentOutputSchema>;
-export type DailyPlanAgentOutput = z.infer<typeof dailyPlanAgentOutputSchema>;
-export type LooseDailyPlanAgentOutput = z.infer<typeof looseDailyPlanAgentOutputSchema>;
 export type ReviewAgentOutput = z.infer<typeof reviewAgentOutputSchema>;
-export type GoalBrief = z.infer<typeof goalBriefSchema>;
 export type GoalIntakeAgentOutput = z.infer<typeof goalIntakeAgentOutputSchema>;
 export type RoadmapAgentOutput = z.infer<typeof roadmapAgentOutputSchema>;
 export type ShortPlanAgentOutput = z.infer<typeof shortPlanAgentOutputSchema>;
 export type DailyGuideAgentOutput = z.infer<typeof dailyGuideAgentOutputSchema>;
-export type StageOutlineAgentOutput = z.infer<typeof stageOutlineAgentOutputSchema>;
 export type TeachStepAgentOutput = z.infer<typeof teachStepAgentOutputSchema>;
 export type AnswerStepQuestionAgentOutput = z.infer<typeof answerStepQuestionAgentOutputSchema>;
 export type SubmissionEvaluationAgentOutput = z.infer<typeof submissionEvaluationAgentOutputSchema>;
