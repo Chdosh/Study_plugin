@@ -50,6 +50,7 @@ export const roadmapStages = sqliteTable('roadmap_stages', {
   objective: text('objective').notNull(),
   direction: text('direction').notNull(),
   successCriteria: text('success_criteria').notNull(),
+  status: text('status', { enum: ['pending', 'active', 'completed', 'blocked', 'adjusted'] }).notNull().default('pending'),
   position: integer('position').notNull(),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull()
@@ -60,13 +61,16 @@ export const shortPlanDays = sqliteTable('short_plan_days', {
   goalId: text('goal_id')
     .notNull()
     .references(() => goals.id),
+  roadmapStageId: text('roadmap_stage_id').references(() => roadmapStages.id),
   dayIndex: integer('day_index').notNull(),
   date: text('date'),
+  sessionStatus: text('session_status', { enum: ['pending', 'active', 'completed', 'skipped'] }).notNull().default('pending'),
   title: text('title').notNull(),
   focus: text('focus').notNull(),
   tasksJson: text('tasks_json').notNull(),
   expectedOutput: text('expected_output').notNull(),
   successCriteria: text('success_criteria').notNull(),
+  locked: integer('locked', { mode: 'boolean' }).notNull().default(false),
   createdAt: text('created_at').notNull()
 });
 
@@ -171,6 +175,7 @@ export const dailyGuides = sqliteTable('daily_guides', {
   shortPlanDayId: text('short_plan_day_id').references(() => shortPlanDays.id),
   date: text('date').notNull(),
   status: text('status', { enum: ['draft', 'confirmed', 'completed', 'archived'] }).notNull().default('draft'),
+  sessionStatus: text('session_status', { enum: ['draft', 'active', 'closed'] }).notNull().default('active'),
   weekFocus: text('week_focus').notNull().default(''),
   todayGoal: text('today_goal').notNull(),
   deliverablesJson: text('deliverables_json').notNull(),
@@ -193,11 +198,27 @@ export const dailyGuideBlocks = sqliteTable('daily_guide_blocks', {
   position: integer('position').notNull()
 });
 
+export const knowledgeItems = sqliteTable('knowledge_items', {
+  id: text('id').primaryKey(),
+  goalId: text('goal_id').references(() => goals.id),
+  key: text('key').notNull(),
+  summary: text('summary').notNull(),
+  detail: text('detail'),
+  sourceType: text('source_type', { enum: ['misconception', 'weakness', 'insight', 'correction'] }).notNull(),
+  sourceId: text('source_id'),
+  occurrenceCount: integer('occurrence_count').notNull().default(1),
+  lastSeenAt: text('last_seen_at'),
+  status: text('status', { enum: ['active', 'resolved', 'dormant'] }).notNull().default('active'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull()
+});
+
 export const dailyGuideTasks = sqliteTable('daily_guide_tasks', {
   id: text('id').primaryKey(),
   guideId: text('guide_id')
     .notNull()
     .references(() => dailyGuides.id),
+  roadmapStageId: text('roadmap_stage_id').references(() => roadmapStages.id),
   legacyPlanBlockId: text('legacy_plan_block_id').references(() => dailyPlanBlocks.id),
   title: text('title').notNull(),
   objective: text('objective').notNull(),
@@ -318,6 +339,9 @@ export const learningSubmissions = sqliteTable('learning_submissions', {
   dailyGuideActionId: text('daily_guide_action_id').references(() => dailyGuideActions.id),
   sessionId: text('session_id').references(() => studySessions.id),
   content: text('content').notNull(),
+  evaluationStatus: text('evaluation_status', {
+    enum: ['waiting', 'completed', 'failed']
+  }).notNull().default('completed'),
   createdAt: text('created_at').notNull()
 });
 
@@ -338,6 +362,7 @@ export const learningEvaluations = sqliteTable('learning_evaluations', {
   recommendedAction: text('recommended_action', {
     enum: ['advance', 'explain_again', 'remediate', 'practice', 'simplify', 'complete_task', 'request_user_decision']
   }).notNull(),
+  decision: text('decision', { enum: ['advance', 'stay', 'remediate', 'replan'] }).notNull().default('stay'),
   aiReviewId: text('ai_review_id'),
   createdAt: text('created_at').notNull()
 });
@@ -420,7 +445,8 @@ export const aiReviews = sqliteTable('ai_reviews', {
       'next_step',
       'evaluation',
       'replan',
-      'reflection'
+      'reflection',
+      'rolling_plan'
     ]
   }).notNull(),
   date: text('date'),
@@ -433,6 +459,13 @@ export const aiReviews = sqliteTable('ai_reviews', {
   outputSchemaVersion: text('output_schema_version').notNull(),
   status: text('status', { enum: ['success', 'failed'] }).notNull(),
   errorMessage: text('error_message'),
+  inputTokens: integer('input_tokens'),
+  outputTokens: integer('output_tokens'),
+  latencyMs: integer('latency_ms'),
+  errorCategory: text('error_category', {
+    enum: ['user_input_error', 'ai_failure', 'schema_violation', 'db_error', 'missing_config', 'validation_error']
+  }),
+  traceId: text('trace_id'),
   createdAt: text('created_at').notNull()
 });
 
@@ -465,6 +498,11 @@ export const planVersions = sqliteTable('plan_versions', {
   changeSummary: text('change_summary').notNull(),
   snapshotJson: text('snapshot_json').notNull(),
   createdAt: text('created_at').notNull()
+});
+
+export const generationLocks = sqliteTable('generation_locks', {
+  lockKey: text('lock_key').primaryKey(),
+  lockedAt: text('locked_at').notNull()
 });
 
 export const appSettings = sqliteTable('app_settings', {
