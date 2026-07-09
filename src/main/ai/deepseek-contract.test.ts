@@ -124,7 +124,7 @@ maybeDescribe('DeepSeek real API contract', () => {
     }
   }, contractTimeoutMs + 5000);
 
-  it('validates short plan: returns days with dayIndex 1-3', async () => {
+  it('validates short plan: returns rolling plan items with dayIndex 1+', async () => {
     expect(apiKey, 'missing STUDY_DEEPSEEK_API_KEY or DEEPSEEK_API_KEY').toBeTruthy();
 
     const started = Date.now();
@@ -139,9 +139,8 @@ maybeDescribe('DeepSeek real API contract', () => {
           schema: shortPlanAgentOutputSchema,
           system: '你是本地优先 AI 学习管家的 generate-short-plan-agent。只返回合法 JSON。',
           user: [
-            '根据目标和长期大纲生成短期计划。只生成第一周重点和前三天安排。',
-            '输出 JSON 字段：weekFocus、days。days 只包含 dayIndex 1-3。',
-            '每天包含 title、focus、tasks、expectedOutput、successCriteria。',
+            '根据目标和长期大纲生成下一批近期学习任务。默认 3-5 个学习单元。',
+            '输出 JSON 字段：weekFocus、days。每个单元包含 dayIndex、title、focus、tasks、expectedOutput、successCriteria。',
             '目标：{"title":"三个月学会 React 前端开发"}',
             '目标理解：{"title":"三个月学会 React 前端开发","targetOutcome":"能独立完成一个 React 小型项目","currentLevel":"有 JS 基础","availableTime":"每天晚上 2 小时","deadline":"三个月","constraints":[],"successCriteria":["完成可运行的项目"]}',
             '长期大纲：[{"title":"React 基础与环境搭建","objective":"掌握 JSX、组件和状态","direction":"从 create-react-app 开始","successCriteria":"能写出带状态管理的组件"}]'
@@ -151,7 +150,7 @@ maybeDescribe('DeepSeek real API contract', () => {
       );
       logContractStage('short_plan_schema_validated', started);
       expect(output.days.length).toBeGreaterThanOrEqual(1);
-      expect(output.days.length).toBeLessThanOrEqual(3);
+      expect(output.days.length).toBeLessThanOrEqual(10);
       expect(output.days[0].title.length).toBeGreaterThan(0);
       expect(output.days[0].tasks.length).toBeGreaterThan(0);
     } catch (error) {
