@@ -1,1 +1,1 @@
-export type ViewKey = 'today' | 'study' | 'review' | 'settings';
+export type ViewKey = 'overview' | 'study' | 'review' | 'settings';
