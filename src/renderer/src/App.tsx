@@ -4,7 +4,7 @@ import { AppShell } from './components/layout/AppShell';
 import { StudyPage } from './pages/StudyPage';
 import { ReviewPage } from './pages/ReviewPage';
 import { SettingsPage } from './pages/SettingsPage';
-import { TodayPage } from './pages/TodayPage';
+import { OverviewPage } from './pages/TodayPage';
 import type { ViewKey } from './types/navigation';
 import { Timer } from 'lucide-react';
 import type {
@@ -19,17 +19,13 @@ import type {
   TodayGuideState,
   TeachStepResult
 } from '../../shared/types';
-import { getPreviewConfig } from './bridge/url-state';
 import './styles.css';
 
 
 const todayIso = new Date().toISOString().slice(0, 10);
 
 export default function App(): JSX.Element {
-  const [view, setView] = useState<ViewKey>(() => {
-    const previewView = getPreviewConfig().view;
-    return previewView ?? 'today';
-  });
+  const [view, setView] = useState<ViewKey>('overview');
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [onboarding, setOnboarding] = useState<GoalIntakeState | null>(null);
   const [todayGuide, setTodayGuide] = useState<TodayGuideState | null>(null);
@@ -39,6 +35,7 @@ export default function App(): JSX.Element {
   const [questionAnswer, setQuestionAnswer] = useState<QuestionAnswerResult | null>(null);
   const [submissionResult, setSubmissionResult] = useState<SubmissionEvaluationResult | null>(null);
   const [review, setReview] = useState<ReviewResult | null>(null);
+  const [reviewGuide, setReviewGuide] = useState<TodayGuideState | null>(null);
   const [notice, setNotice] = useState<string>('就绪');
   const [bootError, setBootError] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -55,16 +52,18 @@ export default function App(): JSX.Element {
     if (!window.studyApp) {
       throw new Error('Electron preload API 不可用，请检查主进程里的 preload 路径。');
     }
-    const [nextSettings, nextOnboarding, nextTodayGuide, nextLearningState] = await Promise.all([
+    const [nextSettings, nextOnboarding, nextTodayGuide, nextLearningState, latestReview] = await Promise.all([
       window.studyApp.settings.get(),
       window.studyApp.onboarding.getCurrent(),
       window.studyApp.guides.listToday(),
-      window.studyApp.learning.getState()
+      window.studyApp.learning.getState(),
+      window.studyApp.reviews.getLatest()
     ]);
     setSettings(nextSettings);
     setOnboarding(nextOnboarding);
     setTodayGuide(nextTodayGuide);
     setLearningState(nextLearningState);
+    setReview((current) => current ?? latestReview);
   }
 
   async function syncActiveSession(): Promise<void> {
@@ -114,7 +113,7 @@ export default function App(): JSX.Element {
       mountedRef.current = true;
       return;
     }
-    if (view === 'today') {
+    if (view === 'overview') {
       void refresh();
     }
   }, [view]);
@@ -151,12 +150,18 @@ export default function App(): JSX.Element {
     <AppShell
       current={view}
       collapsed={sidebarCollapsed}
-      workspaceClassName={view === 'today' && todayGuide?.guide ? 'workspace today-workspace' : 'workspace'}
+      workspaceClassName={view === 'overview' && todayGuide?.guide ? 'workspace overview-workspace' : 'workspace'}
       onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
       onSelectView={setView}
-    >
-        {view === 'today' && (
-          <TodayPage
+>
+        {notice !== '就绪' && (
+          <div className={`global-notice-bar ${bootError ? 'is-error' : ''}`} role="status" aria-live="polite">
+            <span className="notice-dot" />
+            {notice}
+          </div>
+        )}
+        {view === 'overview' && (
+          <OverviewPage
             settings={settings}
             onboarding={onboarding}
             todayGuide={todayGuide}
@@ -196,6 +201,20 @@ export default function App(): JSX.Element {
                 setOnboarding(await window.studyApp.guides.archiveTodayAndRestart());
                 await refresh();
                 setActiveSession(null);
+                setReviewGuide(null);
+                setReview(null);
+                setSubmissionResult(null);
+                setQuestionAnswer(null);
+                setTeaching(null);
+              })
+            }
+            onGenerateRollingPlan={() =>
+              runAction('生成下一批任务', async () => {
+                if (!todayGuide?.goal?.id) {
+                  throw new Error('没有活跃的学习目标。');
+                }
+                await window.studyApp.guides.generateRollingPlan(todayGuide.goal.id);
+                await refresh();
               })
             }
           />
@@ -250,40 +269,116 @@ export default function App(): JSX.Element {
                 setTeaching(null);
               })
             }
+            onSkipCurrentAction={() =>
+              runAction('跳过当前步骤', async () => {
+                setLearningState(await window.studyApp.learning.skipCurrentAction());
+                await refresh();
+                setTeaching(null);
+              })
+            }
+            onSkipCurrentTask={() =>
+              runAction('跳过当前任务', async () => {
+                setLearningState(await window.studyApp.learning.skipCurrentTask());
+                await refresh();
+                setTeaching(null);
+              })
+            }
+            onStartNextSession={() =>
+              runAction('生成下一批任务', async () => {
+                const closedGuideSnapshot = todayGuide;
+                const result = await window.studyApp.guides.startNextSession();
+                if (result?.review) {
+                  setReview(result.review);
+                  setReviewGuide(closedGuideSnapshot);
+                }
+                if (result.todayState === 'plan_exhausted') {
+                  setNotice(result.errorMessage ?? '当前批次任务已完成，请前往复盘页。');
+                  await refresh();
+                  return;
+                }
+                if (result.todayState !== 'active') {
+                  await refresh();
+                  throw new Error(result.errorMessage ?? '下一学习日还没有生成成功，请稍后重试。');
+                }
+                await refresh();
+                setTeaching(null);
+                setQuestionAnswer(null);
+                setSubmissionResult(null);
+              })
+            }
+            onTerminateLearning={() =>
+              runAction('终止学习', async () => {
+                setLearningState(await window.studyApp.learning.terminateLearning());
+                await refresh();
+                setActiveSession(null);
+                setTeaching(null);
+              })
+            }
             onAskQuestion={(question) =>
-              runAction('回答问题', async () => {
+              runAction('回答提问', async () => {
                 const result = await window.studyApp.learning.askQuestion(question);
                 setQuestionAnswer(result);
                 setLearningState(await window.studyApp.learning.getState());
               })
             }
             onResolveQuestion={(threadId) =>
-              runAction('收束问题分支', async () => {
+              runAction('结束问题分支', async () => {
                 setLearningState(await window.studyApp.learning.resolveQuestion(threadId));
               })
             }
             onSubmitResult={(content) =>
-              runAction('评估学习结果', async () => {
+              runAction('提交学习结果', async () => {
                 await submitResultAndSyncSession(content);
               })
             }
             onOpenDrawer={handleOpenDrawer}
+            onGenerateRollingPlan={() =>
+              runAction('生成下一批任务', async () => {
+                if (!todayGuide?.goal?.id) {
+                  throw new Error('没有活跃的学习目标。');
+                }
+                await window.studyApp.guides.generateRollingPlan(todayGuide.goal.id);
+                await refresh();
+                setTeaching(null);
+                setQuestionAnswer(null);
+                setSubmissionResult(null);
+              })
+            }
           />
         )}
         {view === 'review' && (
           <ReviewPage
             review={review}
             todayGuide={todayGuide}
+            reviewGuide={reviewGuide}
             pendingAdjustment={learningState?.pendingAdjustment ?? null}
             onGenerate={() =>
               runAction('生成复盘', async () => {
                 setReview(await window.studyApp.reviews.generate(todayIso));
+                setReviewGuide(todayGuide);
               })
             }
             hasApiKey={settings.hasDeepseekApiKey}
             onDecideAdjustment={(proposalId, status) =>
               runAction(status === 'accepted' ? '接受调整建议' : '拒绝调整建议', async () => {
                 await window.studyApp.learning.decideAdjustment(proposalId, status);
+                await refresh();
+              })
+            }
+            onGenerateRollingPlan={() =>
+              runAction('生成下一批任务', async () => {
+                if (!todayGuide?.goal?.id) {
+                  throw new Error('没有活跃的学习目标。');
+                }
+                await window.studyApp.guides.generateRollingPlan(todayGuide.goal.id);
+                await refresh();
+                setView('study');
+              })
+            }
+            onApplyPlanAdjustments={(adjustments) =>
+              runAction('应用计划调整', async () => {
+                if (!todayGuide?.goal?.id) return;
+                await window.studyApp.reviews.applyAdjustments(todayGuide.goal.id, adjustments);
                 await refresh();
               })
             }
@@ -336,8 +431,42 @@ export default function App(): JSX.Element {
 function toUserErrorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   const withoutIpcPrefix = raw.replace(/^Error invoking remote method '[^']+':\s*/u, '');
-  if (withoutIpcPrefix.includes('invalid_type') || withoutIpcPrefix.includes('Required')) {
-    return 'AI 返回内容格式不完整，已阻止写入正式计划。请重试生成，或在设置里调整提示词档位。';
+  const categorized = describeError(withoutIpcPrefix);
+
+  switch (categorized.category) {
+    case 'missing_config':
+      return '缺少 DeepSeek API Key。请先在“设置”里填写密钥，再运行 AI 功能。';
+    case 'schema_violation':
+      return 'AI 返回内容格式不完整，已阻止写入正式计划。请重试，或在设置里调整提示词档位。';
+    case 'user_input_error':
+      return categorized.message;
+    case 'validation_error':
+      return categorized.message;
+    case 'db_error':
+      return '数据保存失败，请重试。如果问题持续，请检查本地数据库权限。';
+    case 'ai_failure':
+    default:
+      if (/timeout|超时/i.test(categorized.message)) {
+        return 'AI 响应超时，请稍后重试。';
+      }
+      return categorized.message.length > 240
+        ? `${categorized.message.slice(0, 240)}...`
+        : categorized.message;
   }
-  return withoutIpcPrefix.length > 240 ? `${withoutIpcPrefix.slice(0, 240)}...` : withoutIpcPrefix;
+}
+
+function describeError(message: string): { category: string; message: string } {
+  if (/DeepSeek API Key|API [Kk]ey|缺少|密钥/i.test(message)) {
+    return { category: 'missing_config', message };
+  }
+  if (/JSON|schema|valid|parse|required|expected|格式/i.test(message)) {
+    return { category: 'schema_violation', message };
+  }
+  if (/timeout|超时|timed out|ECONNRESET/i.test(message)) {
+    return { category: 'ai_failure', message };
+  }
+  if (/不能为空|必须填写|没有学习步骤|无法提问/i.test(message)) {
+    return { category: 'user_input_error', message };
+  }
+  return { category: 'ai_failure', message };
 }
