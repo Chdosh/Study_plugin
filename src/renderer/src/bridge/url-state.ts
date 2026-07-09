@@ -1,7 +1,7 @@
 export const SCENARIO_DELAY_MS = 1500;
 
 export interface PreviewConfig {
-  view: 'today' | 'study' | 'review' | 'settings' | 'settlement' | null;
+  view: 'today' | 'study' | 'review' | 'settings' | null;
   guide: 'has-guide' | 'no-guide' | null;
   session: 'normal' | 'running' | 'paused' | null;
   review: 'normal' | 'completed' | null;
@@ -18,7 +18,7 @@ export function getPreviewConfig(): PreviewConfig {
   const rawGuide = params.get('guide');
   const rawScenario = params.get('scenario');
 
-  const validViews = ['today', 'study', 'review', 'settings', 'settlement'] as const;
+  const validViews = ['today', 'study', 'review', 'settings'] as const;
   const view = validViews.includes(rawPreview as typeof validViews[number])
     ? (rawPreview as PreviewConfig['view'])
     : null;

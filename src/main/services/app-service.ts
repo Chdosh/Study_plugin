@@ -1,17 +1,14 @@
 import type { BrowserWindow } from 'electron';
 import { ipcChannels } from '../../shared/ipc';
 import type { DailyGuideAgentOutput, NextStepDecisionAgentOutput, SubmissionEvaluationAgentOutput } from '../../shared/schemas';
-import type { AppSettings, DailyGuideTask, DailyPlanBlock, GoalBrief, Id, RawImport, RoadmapStage, ShortPlanDay, StudySession, StudyWindow, TaskItem } from '../../shared/types';
+import type { AppSettings, DailyGuideTask, DailyPlanBlock, GoalBrief, Id, RoadmapStage, ShortPlanDay, StudySession } from '../../shared/types';
 import { AiClient } from '../ai/ai-client';
 import {
   DailyGuideAgent,
   GoalIntakeAgent,
-  ImportAgent,
-  PlannerAgent,
   ReflectionAgent,
   RoadmapAgent,
   ShortPlanAgent,
-  StageOutlineAgent,
   StepQuestionAgent,
   SubmissionEvaluationAgent,
   TeachStepAgent
@@ -20,17 +17,15 @@ import { ContextBuilder } from './context-builder';
 import { FocusMonitor } from './focus-monitor';
 import type { SettingsService } from './settings-service';
 import type { StudyStore } from './store';
+import { isPassingEvaluation } from '../domain/execution-state-machine';
 
 export class AppService {
   private readonly aiClient = new AiClient();
-  private readonly importAgent = new ImportAgent(this.aiClient);
-  private readonly plannerAgent = new PlannerAgent(this.aiClient);
   private readonly reflectionAgent = new ReflectionAgent(this.aiClient);
   private readonly goalIntakeAgent = new GoalIntakeAgent(this.aiClient);
   private readonly roadmapAgent = new RoadmapAgent(this.aiClient);
   private readonly shortPlanAgent = new ShortPlanAgent(this.aiClient);
   private readonly dailyGuideAgent = new DailyGuideAgent(this.aiClient);
-  private readonly stageOutlineAgent = new StageOutlineAgent(this.aiClient);
   private readonly teachStepAgent = new TeachStepAgent(this.aiClient);
   private readonly questionAgent = new StepQuestionAgent(this.aiClient);
   private readonly evaluationAgent = new SubmissionEvaluationAgent(this.aiClient);
@@ -40,8 +35,7 @@ export class AppService {
   constructor(
     private readonly store: StudyStore,
     private readonly settings: SettingsService,
-    private readonly getMainWindow: () => BrowserWindow | null,
-    private readonly getFloatWindow: () => BrowserWindow | null
+    private readonly getMainWindow: () => BrowserWindow | null
   ) {
     this.focusMonitor = new FocusMonitor(store);
     this.contextBuilder = new ContextBuilder(store);
@@ -224,7 +218,6 @@ export class AppService {
       shortPlan: shortPlanOutput,
       dailyGuide: dailyGuideOutput
     });
-    await this.store.confirmPlan(result.guide.planId);
     return result;
   }
 
@@ -246,223 +239,8 @@ export class AppService {
     return this.store.listTodayGuide(todayIso());
   }
 
-  createImport(rawText: string, source: RawImport['source']) {
-    if (!rawText.trim()) {
-      throw new Error('导入文本不能为空。');
-    }
-    return this.store.createRawImport(rawText, source);
-  }
-
-  async parseImport(importId: Id, promptProfileId?: Id) {
-    const [rawImport, profile, runtimeSettings] = await Promise.all([
-      this.store.getRawImport(importId),
-      this.store.getPromptProfile(promptProfileId),
-      this.settings.getRuntimeSettings()
-    ]);
-    try {
-      const output = await this.importAgent.run(rawImport.rawText, profile, runtimeSettings);
-      const tasks = await this.store.saveParsedImport(importId, output);
-      await this.store.saveAiReview({
-        kind: 'import',
-        provider: 'deepseek',
-        model: runtimeSettings.deepseekModel,
-        promptProfileId: profile.id,
-        promptVersionId: profile.activeVersionId,
-        inputSnapshot: {
-          importId,
-          rawText: rawImport.rawText
-        },
-        output,
-        outputSchemaVersion: 'import.v1',
-        status: 'success'
-      });
-      return {
-        importId,
-        goalsCreated: output.goals.length,
-        tasksCreated: tasks.length,
-        tasks
-      };
-    } catch (error) {
-      await this.store.saveAiReview({
-        kind: 'import',
-        provider: 'deepseek',
-        model: runtimeSettings.deepseekModel,
-        promptProfileId: profile.id,
-        promptVersionId: profile.activeVersionId,
-        inputSnapshot: { importId },
-        output: {},
-        outputSchemaVersion: 'import.v1',
-        status: 'failed',
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
-      throw error;
-    }
-  }
-
-  listTasks() {
-    return this.store.listTasks();
-  }
-
-  listGoals() {
-    return this.store.listGoals();
-  }
-
-  createGoal(title: string, description?: string) {
-    return this.store.createGoal(title, description);
-  }
-
-  listStages(goalId?: Id) {
-    return this.store.listStages(goalId);
-  }
-
-  async generateStageOutline(goalId?: Id, promptProfileId?: Id) {
-    const [goals, tasks, profile, runtimeSettings] = await Promise.all([
-      this.store.listGoals(),
-      this.store.listTasks(),
-      this.store.getPromptProfile(promptProfileId),
-      this.settings.getRuntimeSettings()
-    ]);
-    const goal = goalId ? goals.find((item) => item.id === goalId) : goals.find((item) => item.status === 'active') ?? goals[0];
-    if (!goal) {
-      throw new Error('请先创建或导入一个学习目标。');
-    }
-    const goalTasks = tasks.filter((task) => task.goalId === goal.id);
-    const output = await this.stageOutlineAgent.run({
-      goal,
-      tasks: goalTasks,
-      profile,
-      settings: runtimeSettings
-    });
-    await this.store.saveAiReview({
-      kind: 'stage_outline',
-      provider: 'deepseek',
-      model: runtimeSettings.deepseekModel,
-      promptProfileId: profile.id,
-      promptVersionId: profile.activeVersionId,
-      inputSnapshot: { goal, taskIds: goalTasks.map((task) => task.id) },
-      output,
-      outputSchemaVersion: 'stage-outline.v1',
-      status: 'success'
-    });
-    const stages = await this.store.saveStageOutline(goal.id, output);
-    return { goal, stages };
-  }
-
-  confirmStages(goalId: Id) {
-    return this.store.confirmStages(goalId);
-  }
-
-  updateTask(taskId: Id, patch: Partial<TaskItem>) {
-    return this.store.updateTask(taskId, patch);
-  }
-
-  listPlans(date?: string) {
-    return this.store.listPlans(date);
-  }
-
-  async generatePlan(date: string, availableWindows: StudyWindow[], promptProfileId?: Id) {
-    const [tasks, profile, runtimeSettings, planContext] = await Promise.all([
-      this.store.listTasks(),
-      this.store.getPromptProfile(promptProfileId),
-      this.settings.getRuntimeSettings(),
-      this.contextBuilder.build('generate_daily_plan', { date, availableWindows })
-    ]);
-    const learningState = planContext.snapshot;
-    let planningTasks = tasks;
-    let unresolvedTasks = planningTasks.filter((task) => {
-      if (['done', 'skipped'].includes(task.status)) return false;
-      if (learningState.goal?.id && task.goalId && task.goalId !== learningState.goal.id) return false;
-      return true;
-    });
-    if (unresolvedTasks.length === 0) {
-      const createdInitialTask = await this.store.ensureInitialTaskForCurrentStage(learningState.goal?.id ?? undefined);
-      if (createdInitialTask) {
-        planningTasks = [createdInitialTask, ...planningTasks];
-        unresolvedTasks = planningTasks.filter((task) => {
-          if (['done', 'skipped'].includes(task.status)) return false;
-          if (learningState.goal?.id && task.goalId && task.goalId !== learningState.goal.id) return false;
-          return true;
-        });
-      }
-    }
-    if (unresolvedTasks.length === 0) {
-      throw new Error('没有可用于规划的未完成任务。');
-    }
-    try {
-      const output = await this.plannerAgent.run({
-        date,
-        windows: availableWindows,
-        tasks: unresolvedTasks,
-        goal: learningState.goal,
-        stage: learningState.stage,
-        context: {
-          ...planContext.context,
-          unresolvedTaskIds: unresolvedTasks.map((task) => task.id)
-        },
-        profile,
-        settings: runtimeSettings
-      });
-      await this.store.saveAiReview({
-        kind: 'plan',
-        date,
-        provider: 'deepseek',
-        model: runtimeSettings.deepseekModel,
-        promptProfileId: profile.id,
-        promptVersionId: profile.activeVersionId,
-        inputSnapshot: {
-          date,
-          availableWindows,
-          contextSourceIds: planContext.contextSourceIds,
-          context: planContext.context,
-          currentGoal: learningState.goal,
-          currentStage: learningState.stage,
-          tasks: unresolvedTasks
-        },
-        output,
-        outputSchemaVersion: 'daily-plan.v1',
-        status: 'success'
-      });
-      return this.store.createPlanFromAgentOutput({
-        date,
-        availableWindowsJson: JSON.stringify(availableWindows),
-        output
-      });
-    } catch (error) {
-      await this.store.saveAiReview({
-        kind: 'plan',
-        date,
-        provider: 'deepseek',
-        model: runtimeSettings.deepseekModel,
-        promptProfileId: profile.id,
-        promptVersionId: profile.activeVersionId,
-        inputSnapshot: {
-          date,
-          availableWindows,
-          contextSourceIds: planContext.contextSourceIds,
-          context: planContext.context,
-          currentGoal: learningState.goal,
-          currentStage: learningState.stage,
-          tasks: unresolvedTasks
-        },
-        output: {},
-        outputSchemaVersion: 'daily-plan.v1',
-        status: 'failed',
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
-      if (error instanceof Error && error.message.includes('缺少 DeepSeek API Key')) {
-        throw error;
-      }
-      throw new Error('生成计划失败：AI 返回内容没有通过本地校验，已记录失败。请重试一次，或在设置里调低提示词复杂度。');
-    }
-  }
-
-  confirmPlan(planId: Id) {
-    return this.store.confirmPlan(planId);
-  }
-
   async startSession(blockId: Id) {
     const session = await this.store.startSession(blockId);
-    await this.store.initializeLearningForBlock(blockId, 'active');
     this.focusMonitor.start(session.id);
     this.getMainWindow()?.flashFrame(true);
     await this.pushSessionState(session);
@@ -472,19 +250,6 @@ export class AppService {
   async pauseSession(sessionId: Id) {
     this.focusMonitor.stop();
     const session = await this.store.pauseSession(sessionId);
-    if (session.blockId) {
-      await this.store.initializeLearningForBlock(session.blockId, 'paused');
-    }
-    await this.pushSessionState(session);
-    return session;
-  }
-
-  async completeSession(sessionId: Id, notes?: string) {
-    this.focusMonitor.stop();
-    const session = await this.store.completeSession(sessionId, notes);
-    if (session.blockId) {
-      await this.store.initializeLearningForBlock(session.blockId, 'completed');
-    }
     await this.pushSessionState(session);
     return session;
   }
@@ -529,8 +294,9 @@ export class AppService {
 
   async getActiveSession(): Promise<{ session: StudySession; block: DailyPlanBlock } | null> {
     const sessions = await this.store.listSessions();
-    // Only show float for truly active sessions (not paused — those can resume from main window)
-    const active = sessions.find((s) => s.status === 'active');
+    // "Current session" for UI recovery: active and paused sessions both belong to
+    // the same resumable Focus Session. Completed/skipped sessions are historical.
+    const active = sessions.find((s) => s.status === 'active' || s.status === 'paused');
     if (!active || !active.blockId) return null;
     const block = await this.store.getBlock(active.blockId);
     if (!block) return null;
@@ -682,12 +448,18 @@ export class AppService {
       });
     }
     const decisionOutput = buildLocalDecisionFromEvaluation(evaluationOutput);
-    return this.store.saveEvaluationAndDecision({
+    const result = await this.store.saveEvaluationAndDecision({
       submission,
       evaluationOutput,
       decisionOutput,
       evaluationAiReviewId
     });
+    if (result.decision.taskCompleted && active?.session) {
+      this.focusMonitor.stop();
+      const completedSession = await this.store.completeSession(active.session.id);
+      await this.pushSessionState(completedSession);
+    }
+    return result;
   }
 
   decidePlanAdjustment(proposalId: Id, status: 'accepted' | 'rejected') {
@@ -699,27 +471,10 @@ export class AppService {
     if (session.blockId) {
       block = await this.store.getBlock(session.blockId);
     }
-    const payload = { session, block };
-    const allWindows = [this.getMainWindow(), this.getFloatWindow()].filter(Boolean) as BrowserWindow[];
-    for (const win of allWindows) {
-      if (!win.isDestroyed()) {
-        win.webContents.send(ipcChannels.sessionStateChanged, payload);
-      }
+    const win = this.getMainWindow();
+    if (win && !win.isDestroyed()) {
+      win.webContents.send(ipcChannels.sessionStateChanged, { session, block });
     }
-  }
-
-  async getFloatPosition(): Promise<{ x: number; y: number } | null> {
-    const raw = await this.store.getSetting('floatWindowPosition');
-    if (!raw) return null;
-    try {
-      return JSON.parse(raw) as { x: number; y: number };
-    } catch {
-      return null;
-    }
-  }
-
-  async saveFloatPosition(x: number, y: number): Promise<void> {
-    await this.store.putSetting('floatWindowPosition', JSON.stringify({ x, y }));
   }
 
   listPrompts() {
@@ -736,8 +491,7 @@ function todayIso(): string {
 }
 
 function buildLocalDecisionFromEvaluation(evaluation: SubmissionEvaluationAgentOutput): NextStepDecisionAgentOutput {
-  const passed = evaluation.result === 'passed' || evaluation.recommendedAction === 'complete_task' || evaluation.recommendedAction === 'advance';
-  if (passed) {
+  if (isPassingEvaluation(evaluation)) {
     return {
       decision: 'complete_task',
       reason: evaluation.feedback,

@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-* 项目是本地优先 Windows 桌面 AI 学习系统，当前 MVP 已收敛为“主动访谈 -> 分层计划 -> 主任务制 Daily Guide -> Focus Session -> 主任务最终提交/评估 -> 日终复盘”的学习闭环。
+* 项目是本地优先 Windows 桌面 AI 学习系统，当前 MVP 已收敛为“主动访谈 -> 分层计划 -> 主任务制 Daily Guide -> Focus Session -> 主任务最终提交/评估 -> 按需复盘”的学习闭环。
 * 技术栈：Electron + React + TypeScript，SQLite/libSQL + Drizzle ORM，OpenAI-compatible DeepSeek client，Zod runtime validation，typed preload API + narrow IPC。
 * SQLite 是 durable source of truth。Drizzle schema 在 `src/main/db/schema.ts`，schema 变更必须使用迁移。
 * 默认自动回归使用 fake AI GUI smoke；真实 DeepSeek 合约测试是 opt-in，不作为默认自动 PASS 门槛。
@@ -15,14 +15,13 @@
 AI 主动访谈澄清目标
 → 用户确认目标理解
 → AI 生成长期大纲、前三天短期计划、第一天主任务执行稿
-→ 用户确认今日执行稿
-→ Today 聚焦当前主任务，其他主任务折叠
-→ 用户围绕主任务开启一个或多个 Focus Session
+→ 用户在 Today 查看进度、知识库并管理今日计划
+→ 用户在 Study 开始当前主任务并开启 Focus Session
 → Action / Checkpoint 本地记录执行进度
-→ 主任务最终提交
+→ 主任务最终提交并同步结束当前计时
 → local 任务走本地验证器，ai 任务最多调用一次 evaluate_submission
 → 本地状态机决定完成、继续修改、保存进度或进入下一任务
-→ 每天最多一次综合复盘，并由用户确认调整建议
+→ 用户进入 Review 复盘，并由用户确认调整建议
 ```
 
 当前新闭环使用 `goal_intakes`、`roadmap_stages`、`short_plan_days`、`daily_guides`、`daily_guide_tasks`、`daily_guide_actions` 保存访谈、长期大纲、短期计划、今日主任务和执行动作。`daily_plan_blocks` / `daily_guide_blocks` 暂时保留为旧版兼容和 session 锚点，不再代表固定 10 分钟任务块，不能直接删除。
@@ -38,21 +37,91 @@ AI 主动访谈澄清目标
 * AI 输出只是 proposal，验证并在必要时经用户确认后才能影响计划或持久状态。
 * Daily Guide 输出少量主任务，不输出固定 Time Block。主任务通常 2～4 个，默认优先 3 个；复杂或时间少时可以只有 1 个。
 * 当前实现为真实模型稳定性允许每个主任务至少 1 个 Action；prompt 鼓励 3～6 个 Action。
-* Focus Session 的开始、暂停、恢复、结束和超时只写本地记录，不触发 AI。
+* 当前 MVP 中 Focus Session 跟随主任务：Study 页开始任务时启动计时，暂停/恢复只改变当前任务计时状态，主任务提交评价通过后同步结束当前计时；不提供独立“结束计时/结束学习”主操作。
+* 当前 MVP 不提供独立学习浮窗、托盘学习入口、托盘复盘入口、页面内互跳按钮或 renderer 公开的 `sessions.complete` 控制；页面切换由全局导航负责。
 * 主任务是唯一最终提交和评估单位。`evaluationMode=local` 不调用模型；`evaluationMode=ai` 最多调用一次 `evaluate_submission`。
 * 当前主流程不再固定调用 `decide_next_step` / `next_step_decision`；本地状态机根据评估结果决定通过、继续修改、保存进度或进入下一任务。
-* 日终复盘按主任务汇总，每天最多一次；未完成任务可在复盘中建议继续、缩小、拆分、延后或放弃，但必须由用户确认。
+* 复盘按主任务汇总，由用户进入 Review 后生成或查看；同一天如进行综合复盘最多一次。未完成任务可在复盘中建议继续、缩小、拆分、延后或放弃，但必须由用户确认。
 * DeepSeek 真实合约测试为 opt-in：`RUN_DEEPSEEK_CONTRACT=1 npm.cmd test -- src/main/ai/deepseek-contract.test.ts`。
 
 ## 最近完成
 
+### 2026-07-05 删除独立浮窗与公开结束计时通道
+
+继续排查启动后弹出长时间计时条、复盘页疑似开始按钮和多页面互跳问题。删除独立学习浮窗的主进程窗口、renderer 入口、样式、preload `floatApp`、`float:*` IPC、浮窗位置持久化、托盘“开始当前学习块/生成今日复盘”入口，以及 `navigate:toPage` 强制导航通道。设置页删除浮窗、计时提醒、自动进入复盘等未落到真实主流程的假控制。
+
+主任务提交评价通过后，现在由 `AppService.submitLearningResult()` 在服务层同步结束当前 Focus Session；renderer 不再暴露或调用 `sessions.complete`。Review 页删除底部“返回总览/查看全部历史”按钮，Study 页删除“返回总览/回到今日”页面互跳按钮，页面内部只保留本页职责内操作。
+
+验证：本轮完成后已运行 typecheck、测试和 build，结果见最终回复。
+
+### 2026-07-05 收敛页面职责并移除独立结算/结束计时
+
+按最新要求重新划分页面职责：Today 只展示今日进度、知识库和计划管理，不再开始/暂停/继续学习，也不自动跳转 Study；Study 负责开始当前任务、暂停/继续、完成步骤、提问和提交结果；Review 只作为侧边导航中的复盘页，不再由学习流程强制弹出。
+
+移除非导航 `settlement` View、`SettlementView` 组件和 `LocalSettlement` 类型。Study 页删除“结束计时/结束学习”入口；主任务提交评价通过后同步结束当前 Focus Session，使计时跟随任务完成，而不是成为另一条流程。更新 `docs/MVP_SPEC.md` 和 `docs/UI_GUIDELINES.md`，撤销 Today 启动任务、主动结束学习触发复盘等旧口径。
+
+验证：本轮完成后已运行 typecheck 和相关测试，结果见最终回复。
+
+### 2026-07-05 收敛 Focus Session 与主任务流程状态
+
+排查并收敛主流程状态分叉：`getActiveSession()` 现在把 active 和 paused Focus Session 都视为当前可恢复会话，避免暂停后刷新或导航时主界面误判为“未开始”。主窗口收到任意 session 状态事件后都会刷新 Today Guide 与 Learning Runtime，确保状态同步到主界面。
+
+随后一轮已继续删除 Study 页的独立“结束计时/结束学习”入口，主任务完成仍必须走“完成当前步骤/提交当前结果/评价”的主流程。同时修复 StudyPage 在无 guide 早退前后 Hook 数量变化的风险。
+
+验证：`npm run typecheck` 通过；相关 AppService、Store、执行状态机与计时工具测试通过。
+
+### 2026-07-05 验证标准按变更风险分级，去除自动冒烟测试
+
+`AGENTS.md` 第 8 节验证标准从统一"跑全部检查"改为按变更类型分级的矩阵，避免改一个 CSS 也触发全量测试和冒烟。同时清除 `docs/PROJECT_MEMORY.md` 中所有 `scripts/electron-gui-smoke.mjs` 历史引用，并新增规则禁止 Agent 以历史模式自动执行已删除的脚本。
+
+验证：`npm.cmd run typecheck` 通过。
+
+### 2026-07-05 修复重新开始后访谈无响应
+
+修复“重新开始新计划”后点击“发送”或“直接开始”看起来无响应、页面又回到同一开场提示的问题。根因是 `getCurrentGoalIntake()` 的兼容逻辑会把只有一条开场白的新访谈误判为空，并回退到旧的 confirmed 目标访谈，导致用户消息和 AI 回复写入旧会话，刷新后当前页面仍显示新访谈开场白。
+
+关键决策：保留旧兼容逻辑，但只允许“更新时间不早于空访谈创建时间”的 confirmed 目标接管空访谈；显式重新开始创建的新访谈更新，必须保持为当前入口。补充 AppService 回归测试覆盖归档重启后继续发送消息。
+
+验证：`npm.cmd test -- src/main/services/app-service.test.ts -t "archives today guide"` 先复现失败后通过；`npm.cmd test -- src/main/services/app-service.test.ts`、`npm.cmd run typecheck`、`npm.cmd run build` 均通过。
+
+### 2026-07-05 Today 新增重新开始新计划入口
+
+在 Today 右侧“计划管理”中新增“重新开始新计划”入口，点击后先弹窗确认，再复用现有 `guides.archiveTodayAndRestart()` 能力：归档当前今日计划、暂停正在进行的 session，并回到新的目标访谈入口。学习历史保留，不删除用户数据。
+
+关键决策：本轮只补 UI 入口与确认弹窗，复用既有 IPC / AppService / Store 归档逻辑，不新增 schema、迁移或 AI 行为。
+
+验证：`npm.cmd run typecheck`、`npm.cmd test -- src/main/services/app-service.test.ts`、`npm.cmd run build` 均通过。
+
+### 2026-07-05 冗余文档与重复类型清理
+
+按 `docs/recovery/PRODUCT_TRUTH.md` 收敛产品口径：普通今日主任务可直接开始、修改或重新生成；复盘由主任务、阶段或用户主动结束学习触发，同一天综合复盘最多一次。删除被 Product Truth、Product Spec、Architecture、AI/Data、Security、UI Guidelines 吸收的旧 V1 范围、信息架构、用户流程、线框、UI demo、旧审计、旧基线和展示原型。
+
+代码侧删除 `schemas.ts` 中与 shared 类型重复的 `GoalBrief` 导出，把 renderer `Window` 全局声明统一到 `vite-env.d.ts`，并让 AppService 的本地提交决策复用领域状态机的 `isPassingEvaluation`。`StudyStore.completeCurrentAction` 和主任务提交后的 Daily Guide 任务推进已改为调用 `execution-state-machine`，删除 store 内重复的 Action 进度计算、Action 全完成判断和下一主任务激活函数。
+
+验证：`npm.cmd run typecheck`、`npm.cmd test`（41 passed, 1 skipped）、`npm.cmd run build` 均通过。按用户最新要求未运行 Electron 冒烟。
+
+### 2026-07-05 清理 renderer 层旧 block 数据结构依赖
+
+清除 renderer UI 层对 `DailyPlanBlock` / `DailyGuideBlock` 的直接依赖。`guide-selection.ts` 不再返回 block 对象、不再依赖 block 类型；`TodayPage.tsx` 移除 `guide.blocks` 回退计算和 `otherBlocks` 无用变量；`StudyPage.tsx` 移除 `getBlockSuccessCriteria`、block 查找逻辑和 `displayBlock` 回退，改用 `task.quickHint` 替代 block fallback；`App.tsx` 移除未使用的 block 类型导入；mock 数据中 `createGuideTasks` 不再依赖 `guideBlocks` 参数。
+
+底层 `daily_plan_blocks` 表、IPC 类型签名（`StudyAppApi.sessions.getActive` 等）和 `DailyGuide.blocks` 字段保留未动——它们是 session 锚点和 Store 数据映射的必需部分，不属于 renderer 依赖清理范围。
+
+修改文件：
+- `src/renderer/src/domain/guide-selection.ts` — 移除 block 类型、`getCurrentGuideBlock`、返回 type 中的 block
+- `src/renderer/src/pages/TodayPage.tsx` — 移除 block 回退进度/总数计算和无用变量
+- `src/renderer/src/pages/StudyPage.tsx` — 移除 block 查找、getBlockSuccessCriteria、displayBlock 回退
+- `src/renderer/src/App.tsx` — 移除未使用的 block 类型导入
+- `src/renderer/src/bridge/mock-data.ts` — createGuideTasks 改为不依赖 blocks
+
+验证：`npm.cmd run typecheck`、`npm.cmd test`（26 passed, 1 skipped）、`npm.cmd run build` 均通过。
+
 ### 2026-07-04 新参考图四页面 UI 复刻与 CSS 清理
 
-根据最新四张参考图，重绘 Today、Study、Review、Settings 四个页面的桌面布局。侧栏恢复品牌信息与底部学习者入口；Today 聚焦今日目标、任务列表、今日进度与最近学习；Study 聚焦会话条、当前步骤、右侧任务大纲/记录/进度与底部操作栏；Review 聚焦三项统计、学习总结、时间线、最近 7 天与问题建议；Settings 去掉已废弃的时间拆分/学习时间窗模块和提示词编辑卡，仅保留 AI 助手、学习偏好、账户版本、通知浮窗、数据记录。
+根据最新四张参考图，重绘 Today、Study、Review、Settings 四个页面的桌面布局。侧栏恢复品牌信息与底部学习者入口；Today 聚焦今日目标、任务列表、今日进度与最近学习；Study 聚焦会话条、当前步骤、右侧任务大纲/记录/进度与底部操作栏；Review 聚焦三项统计、学习总结、时间线、最近 7 天与问题建议；Settings 去掉已废弃的时间拆分/学习时间窗模块和提示词编辑卡。
 
 关键决策：本轮只调整 renderer UI、拆分 CSS 和 GUI smoke 脚本，不修改数据库 schema、IPC、AI schema 或业务状态机。通过重写 `tokens/layout/components/today/study/review/settings` 样式文件减少旧层叠覆盖，构建产物主 CSS 约 63.62KB。
 
-验证：`npm.cmd run typecheck`、`npm.cmd test`、`npm.cmd run build`、`node scripts/electron-gui-smoke.mjs` 均通过；修复浏览器预览初始路由后，分别截取并查看 Today、Study、Review、Settings 四页截图，确认不再重复截同一页面，截图位于 `output/playwright/*-redesign.png`。
+验证：`npm.cmd run typecheck`、`npm.cmd test`、`npm.cmd run build` 均通过；修复浏览器预览初始路由后，分别截取并查看 Today、Study、Review、Settings 四页截图，确认不再重复截同一页面，截图位于 `output/playwright/*-redesign.png`。
 
 ### 2026-07-04 Today/Study 页信息职责重构
 
@@ -104,7 +173,7 @@ StudyPage 只负责展示当前步骤：当前任务名称、步骤进度（如 
 
 关键决策：Study 页定位为 Focus Session 执行界面，不再承担今日计划概览；今日计划、其他任务和边界信息继续留在 Today 页。此次仅调整 renderer UI 与 GUI smoke 断言，不修改数据库、IPC、AI schema 或业务状态机。
 
-验证：`npm.cmd run typecheck`、`npm.cmd run build`、`npm.cmd test`、`node scripts/electron-gui-smoke.mjs` 均通过。
+验证：`npm.cmd run typecheck`、`npm.cmd run build`、`npm.cmd test` 均通过。
 
 ### 2026-07-04 UI 可读性与 Markdown 渲染优化
 
@@ -112,7 +181,7 @@ StudyPage 只负责展示当前步骤：当前任务名称、步骤进度（如 
 
 关键决策：AI 返回文本用 renderer 轻量 Markdown 渲染处理标题、段落、无序/有序列表和代码块，不新增 Markdown 依赖，不改变 AI 输出 schema、业务服务、IPC 或数据库结构。
 
-验证：`npm.cmd run typecheck`、`npm.cmd run build`、`npm.cmd test`、`node scripts/electron-gui-smoke.mjs` 均通过；Electron/CDP 在 1280px 窗口下截图检查 Today/Study 无横向溢出，Markdown 展开态能保留标题、列表和代码块。
+验证：`npm.cmd run typecheck`、`npm.cmd run build`、`npm.cmd test` 均通过；Electron/CDP 在 1280px 窗口下截图检查 Today/Study 无横向溢出，Markdown 展开态能保留标题、列表和代码块。
 
 ### 2026-07-04 CSS 技术债审计与拆分清理
 
@@ -141,25 +210,25 @@ StudyPage 只负责展示当前步骤：当前任务名称、步骤进度（如 
 
 更新 `AGENTS.md`，把旧“约 10 分钟粒度每日计划”规则替换为当前主任务制 Daily Guide、Focus Session、本地进度记录、一次提交评估和日终综合复盘口径。整理 docs 入口，压缩本文件，活跃专题文档统一当前流程；旧线框、旧审计、旧 UI demo 保留为历史参考。
 
-验证：文档关键词扫描和内容映射检查通过；本轮仅修改文档，未运行代码 typecheck/test/build。
+验证：文档关键词扫描和内容映射检查通过；本轮仅修改文档，未运行代码 typecheck/test/build。后续已删除被活跃文档吸收的旧线框、旧审计和旧 UI demo。
 
 ### 2026-07-04 修复主流程 dailyGuideAgent 持续失败
 
 真实 AI 在 `dailyGuideAgent` 阶段持续失败，根因是 prompt 上下文冗长且 schema 对 `actions` 硬性要求至少 3 个。已精简 `buildDailyGuidePrompt`，移除对 `docs/Example.md` 的隐式引用，给出完整 JSON 示例；`actions` schema 最小数量从 3 放宽到 1，`tasks` 最大数量收紧到 4，并增加 `estimatedMinutes.min <= target <= max` 校验；`DailyGuideAgent` 超时提升到 120 秒；失败写入 `ai_reviews`。
 
-验证：`npm.cmd run typecheck`、`npm.cmd test`、`npm.cmd run build`、`node scripts/electron-gui-smoke.mjs` 均通过。
+验证：`npm.cmd run typecheck`、`npm.cmd test`、`npm.cmd run build` 均通过。
 
 ### 2026-07-04 历史会话管理与按钮反馈增强
 
 新增历史会话浏览入口，可查看历史目标访谈记录、消息详情并据此重新生成计划。修复“重新生成当日计划”按钮无反馈问题，增加加载遮罩和醒目错误提示。
 
-验证：`npm.cmd run typecheck`、`npm.cmd test`、`npm.cmd run build`、`node scripts/electron-gui-smoke.mjs` 均通过。
+验证：`npm.cmd run typecheck`、`npm.cmd test`、`npm.cmd run build` 均通过。
 
 ### 2026-07-04 主任务制每日计划与计时流程
 
 每日执行稿从固定 10 分钟 block 改为“任务决定时长”的主任务结构。新增 `daily_guide_tasks`、`daily_guide_actions` 表和迁移；旧 block 表保留为兼容。Focus Session 不判定任务完成；主任务最终提交后只按 `evaluationMode` 走本地验证或一次 AI 评估。
 
-验证：`npm.cmd run typecheck`、`npm.cmd test`、`npm.cmd run build`、`node scripts/electron-gui-smoke.mjs` 均通过。
+验证：`npm.cmd run typecheck`、`npm.cmd test`、`npm.cmd run build` 均通过。
 
 ### 2026-07-04 四页面布局与视觉统一重构
 
@@ -172,8 +241,8 @@ StudyPage 只负责展示当前步骤：当前任务名称、步骤进度（如 
 - 普通卡片使用中性浅灰边框，青绿色仅用于当前状态、进度、选中导航和主要操作；降低装饰性阴影/渐变
 - Today 页：顶部总目标卡片 + 任务列表（序号、状态徽章、当前标识）+ 右侧今日进度环形图 + 最近学习
 - Study 页：顶部会话状态栏（任务名、步骤进度、计时器、暂停/继续）+ 当前步骤卡片（操作说明/完成标准/遇到问题）+ 右侧任务大纲/学习记录/当前进度 + 底部固定操作栏
-- Review 页：顶部三项统计卡片 + 本次总结 + 学习记录时间线 + 右侧最近 7 天柱状图 + 问题与改进 + 底部“开始下一次学习/查看全部历史”
-- Settings 页：改为三栏卡片网格（AI 助手、学习偏好、账户与版本、通知与浮窗、数据与记录、提示词档位），保留原有字段与保存逻辑
+- Review 页：顶部三项统计卡片 + 本次总结 + 学习记录时间线 + 右侧最近 7 天柱状图 + 问题与改进
+- Settings 页：改为三栏卡片网格（AI 助手、学习偏好、账户与版本、数据记录、提示词档位），保留原有字段与保存逻辑
 
 修改文件：
 - `src/renderer/src/main.tsx` - 重构 Sidebar/App（折叠状态、移除 TopBar）、TodayView、StudyView、ReviewView、SettingsView JSX
@@ -186,7 +255,7 @@ StudyPage 只负责展示当前步骤：当前任务名称、步骤进度（如 
 * 真实 DeepSeek 完整主流程仍需人工验收一次，确认当前 daily guide prompt 在真实模型下稳定。
 * 底层旧 plan/block 数据结构仍是 session 复用路径的一部分；后续清理必须先替换 `daily_guide_block -> daily_plan_block` 的执行映射。
 * 提问、主任务最终提交、复盘调整等入口已按新主任务制规划，但仍需持续检查是否还有旧 block/step 语义遗留。
-* `docs/` 中保留历史产品/UI 文档，可能包含旧“当前块”“10 分钟块”等表述；默认不作为当前规范。
+* Renderer 层已不直接依赖 block 类型；session 锚点仍使用 blockId，后续应继续收敛旧 block/step 语义。
 
 ## 推荐下一步
 
