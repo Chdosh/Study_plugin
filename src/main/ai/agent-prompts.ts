@@ -1,4 +1,4 @@
-import type { GoalBrief, GoalIntakeMessage, PromptProfile, RoadmapStage, ShortPlanDay, StudyWindow } from '../../shared/types';
+import type { GoalBrief, GoalIntakeMessage, KnowledgeItem, PromptProfile, RoadmapStage, ShortPlanDay, StudyWindow } from '../../shared/types';
 
 export function buildReviewPrompt(params: {
   date: string;
@@ -12,6 +12,10 @@ export function buildReviewPrompt(params: {
     '完成度和专注度都按 0 到 100 打分。',
     '用务实的语言解释今天的问题，并给出简洁的下一步动作。',
     '不要羞辱学习者，重点放在纠偏和重建计划。',
+    '如果今天的学习暴露了问题（基础不牢、进度偏慢、内容太难），可以在 planAdjustments 中给出对尚未执行的近期学习单元的调整建议。',
+    'planAdjustments 只应包含对未来尚未开始的单元的修改建议，不要修改已执行或正在执行的单元。',
+    '每个调整建议包含：dayIndex（要修改的单元序号）、title、focus、expectedOutput、successCriteria、reason（为什么这样调整）。',
+    '如果今天一切正常，planAdjustments 可以为空数组。',
     '所有自然语言内容使用中文。',
     '',
     `Snapshot: ${JSON.stringify(params.snapshot)}`
@@ -67,16 +71,63 @@ export function buildShortPlanPrompt(params: {
   return [
     params.profile.content,
     '',
-    '根据目标和长期大纲生成短期计划。只生成第一周重点和前三天安排，不要提前详细生成后续很多天。',
+    '根据目标、长期大纲和当前 learning stage，生成下一批近期学习任务。这不是固定三天的计划，而是滚动式的学习单元。',
+    '默认生成 3-5 个学习单元，每个单元是一个可独立完成的任务，不是按天切分的。用户可以一天完成多个单元，也可以多天完成一个单元。',
     '输出 JSON 字段：weekFocus、days。',
-    'days 只包含 dayIndex 1 到 3，每天包含 title、focus、tasks、expectedOutput、successCriteria。',
-    '任务要具体到打开电脑就能做，但第 2、3 天不要展开到分钟。',
+    'days 数组包含学习单元，每个单元包含 dayIndex（顺序编号，从 1 开始）、title、focus、tasks、expectedOutput、successCriteria。',
+    '任务要具体到打开电脑就能做，按复杂度和依赖关系排列，而不是按天展开。',
     '所有自然语言内容使用中文。',
     '',
     `目标：${JSON.stringify(params.goal)}`,
     `目标理解：${JSON.stringify(params.brief)}`,
     `长期大纲：${JSON.stringify(params.roadmap)}`
   ].join('\n');
+}
+
+export function buildRollingPlanPrompt(params: {
+  goal: unknown;
+  brief: GoalBrief | null;
+  activeStage: RoadmapStage;
+  completedSummary: string;
+  reviewSummary?: string;
+  profile: PromptProfile;
+  knowledgeItems?: KnowledgeItem[];
+  reviewKnowledgeItems?: KnowledgeItem[];
+}): string {
+  const reviewCtx = params.reviewSummary
+    ? [`最近复盘摘要：${params.reviewSummary}`, ''].join('\n')
+    : '';
+  const knowledgeCtx = (params.knowledgeItems && params.knowledgeItems.length > 0)
+    ? ['', '学习者当前的已知薄弱点和错误记录：',
+      ...params.knowledgeItems.filter((k) => k.status === 'active').slice(0, 5).map((k) => `- [${k.key}] ${k.summary}${k.occurrenceCount > 1 ? `（出现 ${k.occurrenceCount} 次）` : ''}`),
+      '请在设计学习单元时考虑这些薄弱点，帮助用户巩固或避免重复错误。'
+    ].join('\n')
+    : '';
+  const reviewQueueCtx = (params.reviewKnowledgeItems && params.reviewKnowledgeItems.length > 0)
+    ? ['', '以下知识点已经多次出错（>=2次），强烈建议在后续学习单元中安排复习：',
+      ...params.reviewKnowledgeItems.map((k) => `- [${k.key}] ${k.summary}（已出现 ${k.occurrenceCount} 次）`),
+      '请在滚动计划中适当安排复习任务，帮助学习者巩固这些易错点。'
+    ].join('\n')
+    : '';
+  return [
+    params.profile.content,
+    '',
+    '你正在为一个已经进行中的学习计划生成下一批学习任务。这不是全新计划，而是基于当前进度滚动续生。',
+    '禁止重新生成完整长期计划。禁止从头开始目标访谈。只生成当前阶段下的下一批学习单元。',
+    `默认生成 3-5 个学习单元，每个单元是一个可独立完成的任务，不是按天切分的。`,
+    '输出 JSON 字段：weekFocus、days。',
+    'days 数组包含学习单元，每个单元包含 dayIndex（顺序编号，从 1 开始）、title、focus、tasks、expectedOutput、successCriteria。',
+    '任务必须与当前 active stage 的 objective 对齐，要具体到打开电脑就能做。',
+    '所有自然语言内容使用中文。',
+    '',
+    `目标：${JSON.stringify(params.goal)}`,
+    `目标理解：${JSON.stringify(params.brief)}`,
+    `当前学习阶段：title="${params.activeStage.title}" objective="${params.activeStage.objective}" direction="${params.activeStage.direction}" successCriteria="${params.activeStage.successCriteria}"`,
+    `已完成学习摘要：${params.completedSummary}`,
+    reviewCtx,
+    knowledgeCtx,
+    reviewQueueCtx
+  ].filter(Boolean).join('\n');
 }
 
 export function buildDailyGuidePrompt(params: {
@@ -93,6 +144,8 @@ export function buildDailyGuidePrompt(params: {
     reviewSummary?: string;
   };
   profile: PromptProfile;
+  knowledgeItems?: KnowledgeItem[];
+  reviewKnowledgeItems?: KnowledgeItem[];
 }): string {
   const totalMinutes = params.windows.reduce((sum, window) => sum + clockWindowMinutes(window), 0);
   const relevantStages = params.roadmap.slice(0, 2);
@@ -116,10 +169,24 @@ export function buildDailyGuidePrompt(params: {
     params.previousDayResult.reviewSummary ? `复盘摘要：${params.previousDayResult.reviewSummary}` : ''
   ].filter(Boolean).join('\n') : '';
 
+  const knowledgeCtx = (params.knowledgeItems && params.knowledgeItems.length > 0)
+    ? ['', '学习者当前的已知薄弱点和错误记录：',
+      ...params.knowledgeItems.filter((k) => k.status === 'active').slice(0, 3).map((k) => `- [${k.key}] ${k.summary}${k.occurrenceCount > 1 ? `（出现 ${k.occurrenceCount} 次）` : ''}`),
+      '请在设计学习任务和步骤时主动考虑这些薄弱点。'
+    ].join('\n')
+    : '';
+
+  const reviewCtx = (params.reviewKnowledgeItems && params.reviewKnowledgeItems.length > 0)
+    ? ['', '以下知识点已经多次出错（>=2次），强烈建议在今天的学习中安排 5-10 分钟复习：',
+      ...params.reviewKnowledgeItems.map((k) => `- [${k.key}] ${k.summary}（已出现 ${k.occurrenceCount} 次）`),
+      '请在今日任务中增加一个Review任务（约5-10分钟），帮助学习者巩固该知识点。'
+    ].join('\n')
+    : '';
+
   return [
     params.profile.content,
     '',
-    `为 ${params.date} 生成目标学习日执行稿（第 ${params.targetDay.dayIndex} 天：${params.targetDay.title}）。核心原则：任务决定时长，不要先生成固定 ${params.blockMinutes} 分钟时间块。`,
+    `为 ${params.date} 生成当前学习单元执行稿（${params.targetDay.title}；内部顺序编号 ${params.targetDay.dayIndex}）。核心原则：任务决定时长，不要先生成固定 ${params.blockMinutes} 分钟时间块。`,
     `今日可用学习时间约 ${totalMinutes} 分钟。`,
     `本日重点：${params.targetDay.focus}`,
     `预期产出：${params.targetDay.expectedOutput}`,
@@ -139,6 +206,8 @@ export function buildDailyGuidePrompt(params: {
     '输出示例：',
     '{"date":"2026-07-04","todayGoal":"拿到今日核心产物","deliverables":["产物1"],"boundaries":["不做XXX"],"acceptanceCriteria":["能说明XXX"],"tomorrowActions":["明天先做YYY"],"tasks":[{"title":"完成核心任务","objective":"明确今天产出","scope":"只覆盖必要范围","estimatedMinutes":{"min":25,"target":35,"max":50},"actions":[{"title":"准备环境","instruction":"打开项目并确认可运行","checkpoint":"项目能启动"},{"title":"执行主路径","instruction":"按目标完成核心动作","checkpoint":"有可见产出"}],"deliverable":"可验收的产出","doneWhen":["产物可展示"],"quickHint":"卡住时先记录问题","evaluationMode":"ai","submissionPolicy":"once_after_task","carryoverAllowed":true}]}',
     previousContext,
+    knowledgeCtx,
+    reviewCtx,
     `可用学习时间段：${JSON.stringify(params.windows)}`,
     `目标：${JSON.stringify(params.goal)}`,
     `目标理解：${JSON.stringify(briefSummary)}`,
@@ -191,7 +260,15 @@ export function buildEvaluateSubmissionPrompt(params: {
   submission: string;
   context: unknown;
   profile: PromptProfile;
+  knowledgeItems?: KnowledgeItem[];
 }): string {
+  const knowledgeCtx = (params.knowledgeItems && params.knowledgeItems.length > 0)
+    ? ['',
+      '学习者历史上的相关错误和薄弱点：',
+      ...params.knowledgeItems.slice(0, 3).map((k) => `- [${k.key}] ${k.summary}${k.occurrenceCount > 1 ? `（已出现 ${k.occurrenceCount} 次）` : ''}`),
+      '如果本次提交暴露了上述问题，请在 feedback 中明确指出并关联。'
+    ].join('\n')
+    : '';
   return [
     params.profile.content,
     '',
@@ -203,25 +280,8 @@ export function buildEvaluateSubmissionPrompt(params: {
     '除 JSON 字段名和枚举值外，所有自然语言内容使用中文。',
     '',
     `用户提交：${params.submission}`,
-    `工作上下文：${JSON.stringify(params.context)}`
-  ].join('\n');
+    `工作上下文：${JSON.stringify(params.context)}`,
+    knowledgeCtx
+  ].filter(Boolean).join('\n');
 }
 
-export function buildDecideNextStepPrompt(params: {
-  evaluation: unknown;
-  context: unknown;
-  profile: PromptProfile;
-}): string {
-  return [
-    params.profile.content,
-    '',
-    '根据评估结果决定下一步。只能生成当前需要的下一步，不要展开完整路线。',
-    '输出 JSON 字段：decision、reason、taskCompleted、nextStep、remediation、carryForward。',
-    'decision 只能是 advance、explain_again、remediate、practice、simplify、complete_task、request_user_decision。',
-    'advance 时提供 nextStep；remediate/practice/simplify/explain_again 时优先提供 remediation；complete_task 时 nextStep 可以为 null。',
-    '除 JSON 字段名和枚举值外，所有自然语言内容使用中文。',
-    '',
-    `评估结果：${JSON.stringify(params.evaluation)}`,
-    `工作上下文：${JSON.stringify(params.context)}`
-  ].join('\n');
-}
