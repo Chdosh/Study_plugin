@@ -1,3 +1,42 @@
+/* Global notice bar */
+
+.global-notice-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--color-primary-surface, #e6f7f5);
+  border-bottom: 1px solid var(--color-primary, #07958c);
+  font-size: 13px;
+  color: var(--color-primary, #07958c);
+  font-weight: 500;
+}
+
+.global-notice-bar .notice-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-primary, #07958c);
+  animation: notice-pulse 1.2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.global-notice-bar.is-error {
+  background: #fff2f0;
+  border-bottom-color: #d93025;
+  color: #a8071a;
+}
+
+.global-notice-bar.is-error .notice-dot {
+  background: #d93025;
+  animation: none;
+}
+
+@keyframes notice-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
 /* App layout */
 
 .prototype-shell {

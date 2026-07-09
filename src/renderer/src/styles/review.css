@@ -136,6 +136,89 @@
   font-weight: var(--font-weight-bold);
 }
 
+.adjustment-items {
+  display: grid;
+  gap: 12px;
+}
+
+.adjustment-item {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+}
+
+.adjustment-item strong {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-base);
+}
+
+.adjustment-item span {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.review-knowledge-card {
+  display: grid;
+  gap: 12px;
+}
+
+.review-knowledge-card h3 {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+}
+
+.knowledge-items {
+  display: grid;
+  gap: 10px;
+}
+
+.knowledge-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+}
+
+.knowledge-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.knowledge-badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: var(--font-weight-medium);
+}
+
+.knowledge-badge.review-worthy {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.knowledge-badge.error {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+.knowledge-badge.warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.knowledge-item-summary {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
 .review-timeline {
   display: grid;
   gap: 0;
