@@ -2,23 +2,22 @@ import {
   answerStepQuestionAgentOutputSchema,
   dailyGuideAgentOutputSchema,
   goalIntakeAgentOutputSchema,
-  nextStepDecisionAgentOutputSchema,
   roadmapAgentOutputSchema,
   reviewAgentOutputSchema,
   shortPlanAgentOutputSchema,
   submissionEvaluationAgentOutputSchema,
   teachStepAgentOutputSchema
 } from '../../shared/schemas';
-import type { AppSettings, GoalBrief, GoalIntakeMessage, LearningGoal, PromptProfile, RoadmapStage, ShortPlanDay, StudyWindow } from '../../shared/types';
-import { AiClient } from './ai-client';
+import type { AppSettings, GoalBrief, GoalIntakeMessage, KnowledgeItem, LearningGoal, PromptProfile, RoadmapStage, ShortPlanDay, StudyWindow } from '../../shared/types';
+import { AiClient, type AiCallMetrics } from './ai-client';
 import {
   buildAnswerStepQuestionPrompt,
   buildDailyGuidePrompt,
-  buildDecideNextStepPrompt,
   buildEvaluateSubmissionPrompt,
   buildGoalIntakePrompt,
   buildRoadmapPrompt,
   buildReviewPrompt,
+  buildRollingPlanPrompt,
   buildShortPlanPrompt,
   buildTeachStepPrompt
 } from './agent-prompts';
@@ -27,10 +26,15 @@ export interface AgentRuntimeSettings extends AppSettings {
   deepseekApiKey: string | null;
 }
 
+export interface AgentRunExtras {
+  traceId?: string;
+  onMetrics?: (metrics: AiCallMetrics) => void;
+}
+
 export class ReflectionAgent {
   constructor(private readonly ai: AiClient) {}
 
-  run(params: { date: string; snapshot: unknown; profile: PromptProfile; settings: AgentRuntimeSettings }) {
+  run(params: { date: string; snapshot: unknown; profile: PromptProfile; settings: AgentRuntimeSettings } & AgentRunExtras) {
     return this.ai.generateJson({
       apiKey: params.settings.deepseekApiKey,
       baseUrl: params.settings.deepseekBaseUrl,
@@ -41,7 +45,9 @@ export class ReflectionAgent {
         date: params.date,
         snapshot: params.snapshot,
         profile: params.profile
-      })
+      }),
+      traceId: params.traceId,
+      onMetrics: params.onMetrics
     });
   }
 }
@@ -49,7 +55,7 @@ export class ReflectionAgent {
 export class GoalIntakeAgent {
   constructor(private readonly ai: AiClient) {}
 
-  run(params: { messages: GoalIntakeMessage[]; profile: PromptProfile; settings: AgentRuntimeSettings }) {
+  run(params: { messages: GoalIntakeMessage[]; profile: PromptProfile; settings: AgentRuntimeSettings } & AgentRunExtras) {
     return this.ai.generateJson({
       apiKey: params.settings.deepseekApiKey,
       baseUrl: params.settings.deepseekBaseUrl,
@@ -59,7 +65,9 @@ export class GoalIntakeAgent {
       user: buildGoalIntakePrompt({
         messages: params.messages,
         profile: params.profile
-      })
+      }),
+      traceId: params.traceId,
+      onMetrics: params.onMetrics
     });
   }
 }
@@ -67,7 +75,7 @@ export class GoalIntakeAgent {
 export class RoadmapAgent {
   constructor(private readonly ai: AiClient) {}
 
-  run(params: { goal: LearningGoal; brief: GoalBrief | null; profile: PromptProfile; settings: AgentRuntimeSettings }) {
+  run(params: { goal: LearningGoal; brief: GoalBrief | null; profile: PromptProfile; settings: AgentRuntimeSettings } & AgentRunExtras) {
     return this.ai.generateJson({
       apiKey: params.settings.deepseekApiKey,
       baseUrl: params.settings.deepseekBaseUrl,
@@ -78,7 +86,9 @@ export class RoadmapAgent {
         goal: params.goal,
         brief: params.brief,
         profile: params.profile
-      })
+      }),
+      traceId: params.traceId,
+      onMetrics: params.onMetrics
     });
   }
 }
@@ -92,7 +102,7 @@ export class ShortPlanAgent {
     roadmap: RoadmapStage[];
     profile: PromptProfile;
     settings: AgentRuntimeSettings;
-  }) {
+  } & AgentRunExtras) {
     return this.ai.generateJson({
       apiKey: params.settings.deepseekApiKey,
       baseUrl: params.settings.deepseekBaseUrl,
@@ -104,7 +114,41 @@ export class ShortPlanAgent {
         brief: params.brief,
         roadmap: params.roadmap,
         profile: params.profile
-      })
+      }),
+      traceId: params.traceId,
+      onMetrics: params.onMetrics
+    });
+  }
+
+  runRolling(params: {
+    goal: LearningGoal;
+    brief: GoalBrief | null;
+    activeStage: RoadmapStage;
+    completedSummary: string;
+    reviewSummary?: string;
+    profile: PromptProfile;
+    settings: AgentRuntimeSettings;
+    knowledgeItems?: KnowledgeItem[];
+    reviewKnowledgeItems?: KnowledgeItem[];
+  } & AgentRunExtras) {
+    return this.ai.generateJson({
+      apiKey: params.settings.deepseekApiKey,
+      baseUrl: params.settings.deepseekBaseUrl,
+      model: params.settings.deepseekModel,
+      schema: shortPlanAgentOutputSchema,
+      system: '你是本地优先 AI 学习管家的 rolling-plan-agent。只返回合法 JSON。',
+      user: buildRollingPlanPrompt({
+        goal: params.goal,
+        brief: params.brief,
+        activeStage: params.activeStage,
+        completedSummary: params.completedSummary,
+        reviewSummary: params.reviewSummary,
+        profile: params.profile,
+        knowledgeItems: params.knowledgeItems,
+        reviewKnowledgeItems: params.reviewKnowledgeItems
+      }),
+      traceId: params.traceId,
+      onMetrics: params.onMetrics
     });
   }
 }
@@ -126,7 +170,9 @@ export class DailyGuideAgent {
     };
     profile: PromptProfile;
     settings: AgentRuntimeSettings;
-  }) {
+    knowledgeItems?: KnowledgeItem[];
+    reviewKnowledgeItems?: KnowledgeItem[];
+  } & AgentRunExtras) {
     return this.ai.generateJson({
       apiKey: params.settings.deepseekApiKey,
       baseUrl: params.settings.deepseekBaseUrl,
@@ -143,8 +189,12 @@ export class DailyGuideAgent {
         roadmap: params.roadmap,
         targetDay: params.targetDay,
         previousDayResult: params.previousDayResult,
-        profile: params.profile
-      })
+        profile: params.profile,
+        knowledgeItems: params.knowledgeItems,
+        reviewKnowledgeItems: params.reviewKnowledgeItems
+      }),
+      traceId: params.traceId,
+      onMetrics: params.onMetrics
     });
   }
 }
@@ -152,7 +202,7 @@ export class DailyGuideAgent {
 export class TeachStepAgent {
   constructor(private readonly ai: AiClient) {}
 
-  run(params: { context: unknown; profile: PromptProfile; settings: AgentRuntimeSettings }) {
+  run(params: { context: unknown; profile: PromptProfile; settings: AgentRuntimeSettings } & AgentRunExtras) {
     return this.ai.generateJson({
       apiKey: params.settings.deepseekApiKey,
       baseUrl: params.settings.deepseekBaseUrl,
@@ -162,7 +212,9 @@ export class TeachStepAgent {
       user: buildTeachStepPrompt({
         context: params.context,
         profile: params.profile
-      })
+      }),
+      traceId: params.traceId,
+      onMetrics: params.onMetrics
     });
   }
 }
@@ -170,7 +222,7 @@ export class TeachStepAgent {
 export class StepQuestionAgent {
   constructor(private readonly ai: AiClient) {}
 
-  run(params: { question: string; context: unknown; profile: PromptProfile; settings: AgentRuntimeSettings }) {
+  run(params: { question: string; context: unknown; profile: PromptProfile; settings: AgentRuntimeSettings } & AgentRunExtras) {
     return this.ai.generateJson({
       apiKey: params.settings.deepseekApiKey,
       baseUrl: params.settings.deepseekBaseUrl,
@@ -181,7 +233,9 @@ export class StepQuestionAgent {
         question: params.question,
         context: params.context,
         profile: params.profile
-      })
+      }),
+      traceId: params.traceId,
+      onMetrics: params.onMetrics
     });
   }
 }
@@ -189,7 +243,7 @@ export class StepQuestionAgent {
 export class SubmissionEvaluationAgent {
   constructor(private readonly ai: AiClient) {}
 
-  run(params: { submission: string; context: unknown; profile: PromptProfile; settings: AgentRuntimeSettings }) {
+  run(params: { submission: string; context: unknown; profile: PromptProfile; settings: AgentRuntimeSettings; knowledgeItems?: KnowledgeItem[] } & AgentRunExtras) {
     return this.ai.generateJson({
       apiKey: params.settings.deepseekApiKey,
       baseUrl: params.settings.deepseekBaseUrl,
@@ -199,27 +253,13 @@ export class SubmissionEvaluationAgent {
       user: buildEvaluateSubmissionPrompt({
         submission: params.submission,
         context: params.context,
-        profile: params.profile
-      })
+        profile: params.profile,
+        knowledgeItems: params.knowledgeItems
+      }),
+      traceId: params.traceId,
+      onMetrics: params.onMetrics
     });
   }
 }
 
-export class NextStepDecisionAgent {
-  constructor(private readonly ai: AiClient) {}
 
-  run(params: { evaluation: unknown; context: unknown; profile: PromptProfile; settings: AgentRuntimeSettings }) {
-    return this.ai.generateJson({
-      apiKey: params.settings.deepseekApiKey,
-      baseUrl: params.settings.deepseekBaseUrl,
-      model: params.settings.deepseekModel,
-      schema: nextStepDecisionAgentOutputSchema,
-      system: '你是渐进式 AI 学习导师的 progression-service。只返回合法 JSON。',
-      user: buildDecideNextStepPrompt({
-        evaluation: params.evaluation,
-        context: params.context,
-        profile: params.profile
-      })
-    });
-  }
-}
