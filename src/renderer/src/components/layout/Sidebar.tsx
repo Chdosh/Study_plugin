@@ -13,7 +13,7 @@ export function Sidebar({
   onSelect: (view: ViewKey) => void;
 }): JSX.Element {
   const items: Array<{ key: ViewKey; label: string; icon: JSX.Element }> = [
-    { key: 'today', label: '今日', icon: <Home size={18} /> },
+    { key: 'overview', label: '概览', icon: <Home size={18} /> },
     { key: 'study', label: '学习', icon: <CheckCircle2 size={18} /> },
     { key: 'review', label: '复盘', icon: <FileText size={18} /> },
     { key: 'settings', label: '设置', icon: <Settings size={18} /> }

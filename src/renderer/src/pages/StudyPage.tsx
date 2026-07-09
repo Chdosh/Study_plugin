@@ -8,7 +8,8 @@ import {
   Clock3,
   HelpCircle,
   Pause,
-  Play
+  Play,
+  SkipForward
 } from 'lucide-react';
 import type {
   LearningRuntimeSnapshot,
@@ -51,10 +52,15 @@ export function StudyPage({
   onResumeSession,
   onTeachStep,
   onCompleteCurrentAction,
+  onSkipCurrentAction,
+  onSkipCurrentTask,
+  onStartNextSession,
+  onTerminateLearning,
   onAskQuestion,
   onResolveQuestion,
   onSubmitResult,
-  onOpenDrawer
+  onOpenDrawer,
+  onGenerateRollingPlan
 }: {
   todayGuide: TodayGuideState | null;
   activeSession: StudySession | null;
@@ -67,10 +73,15 @@ export function StudyPage({
   onResumeSession: () => Promise<void>;
   onTeachStep: () => Promise<void>;
   onCompleteCurrentAction: () => Promise<void>;
+  onSkipCurrentAction: () => Promise<void>;
+  onSkipCurrentTask: () => Promise<void>;
+  onStartNextSession: () => Promise<void>;
+  onTerminateLearning: () => Promise<void>;
   onAskQuestion: (question: string) => Promise<void>;
   onResolveQuestion: (threadId: string) => Promise<void>;
   onSubmitResult: (content: string) => Promise<void>;
   onOpenDrawer: (tab?: 'question' | 'submission') => void;
+  onGenerateRollingPlan: () => Promise<void>;
 }): JSX.Element {
   const guide = todayGuide?.guide ?? null;
   const currentSelection = guide ? getCurrentGuideTaskSelection(guide.tasks, activeSession, learningState) : null;
@@ -107,7 +118,7 @@ export function StudyPage({
       ? '等待提交当前结果'
     : currentAction?.title ?? '当前步骤';
   const stepInstruction = allTasksDone && !currentTask
-    ? '今天的所有任务都已完成。可以前往复盘页查看学习总结，或开启下一天任务。'
+    ? '当前批次学习任务已全部完成。请前往复盘页查看学习总结，复盘后可根据当前学习路径生成下一批任务。'
     : taskDone
       ? nextPlannedTask
         ? `当前主任务已经通过评价。下一任务：${nextPlannedTask.title}`
@@ -191,13 +202,22 @@ export function StudyPage({
               <span className="session-step-label">步骤 {stepPosition}/{totalSteps}</span>
               <span className="session-timer"><Clock3 size={16} />{(isActive || isPaused) ? formatElapsedTime(elapsedSeconds) : '00:00'}</span>
               {isActive || isPaused ? (
-                <button
-                  className="session-pause-button"
-                  type="button"
-                  onClick={() => void (isPaused ? onResumeSession() : onPauseSession())}
-                >
-                  {isPaused ? <><Play size={14} />继续</> : <><Pause size={14} />暂停</>}
-                </button>
+                <>
+                  <button
+                    className="session-pause-button"
+                    type="button"
+                    onClick={() => void (isPaused ? onResumeSession() : onPauseSession())}
+                  >
+                    {isPaused ? <><Play size={14} />继续</> : <><Pause size={14} />暂停</>}
+                  </button>
+                  <button
+                    className="session-terminate-button"
+                    type="button"
+                    onClick={() => void onTerminateLearning()}
+                  >
+                    终止
+                  </button>
+                </>
               ) : (
                 <span className={`focus-state-pill ${sessionStatusClass}`}>{sessionStatusText}</span>
               )}
@@ -311,37 +331,42 @@ export function StudyPage({
         <div className="bar-left" />
         <div className="bar-right">
           {allTasksDone ? (
-            <span className="micro-hint" style={{ margin: 0 }}>
-              <CheckCircle2 size={14} />
-              今日任务已全部完成，可以复盘或开启下一天。
-            </span>
+            <div className="bar-right-group">
+              <span className="micro-hint" style={{ margin: 0 }}>
+                <CheckCircle2 size={14} />
+                当前批次任务已全部完成，请前往复盘页查看总结。
+              </span>
+              <button className="primary-action" type="button" onClick={() => void onGenerateRollingPlan()}>
+                <Play size={16} />
+                生成下一批任务
+              </button>
+            </div>
           ) : taskDone ? (
             <span className="micro-hint" style={{ margin: 0 }}>
               <CheckCircle2 size={14} />
               {nextPlannedTask ? `当前任务已完成，下一任务：${toCompactTitle(nextPlannedTask.title)}` : '当前任务已完成。'}
             </span>
           ) : (
-            <>
-              {isNotStarted && currentTaskId ? (
-                <button className="primary-action" type="button" onClick={() => void onStartSession(currentTaskId)}>
-                  <Play size={16} />
-                  开始学习
-                </button>
-              ) : null}
-              {isActive && (
-                allActionsDone ? (
-                  <button className="primary-action" type="button" onClick={() => void onOpenDrawer('submission')}>
-                    <CheckCircle2 size={16} />
-                    提交当前结果
-                  </button>
-                ) : (
-                  <button className="primary-action" type="button" onClick={() => void onCompleteCurrentAction()}>
-                    <CheckCircle2 size={16} />
-                    完成当前步骤
-                  </button>
-                )
+            <div className="bar-right-group">
+              {isNotStarted && currentTaskId
+                ? <button className="primary-action" type="button" onClick={() => void onStartSession(currentTaskId)}><Play size={16} />开始学习</button>
+                : null}
+              {isActive && allActionsDone && (
+                <button className="secondary-action" type="button" onClick={() => void onSkipCurrentAction()}><SkipForward size={16} />跳过并提交</button>
               )}
-            </>
+              {isActive && allActionsDone && (
+                <button className="primary-action" type="button" onClick={() => void onOpenDrawer('submission')}><CheckCircle2 size={16} />提交当前结果</button>
+              )}
+              {isActive && !allActionsDone && (
+                <button className="secondary-action" type="button" onClick={() => void onSkipCurrentAction()}><SkipForward size={16} />跳过步骤</button>
+              )}
+              {isActive && !allActionsDone && (
+                <button className="secondary-action" type="button" onClick={() => void onSkipCurrentTask()}><SkipForward size={16} />跳过此任务</button>
+              )}
+              {isActive && !allActionsDone && (
+                <button className="primary-action" type="button" onClick={() => void onCompleteCurrentAction()}><CheckCircle2 size={16} />完成当前步骤</button>
+              )}
+            </div>
           )}
           <button className="secondary-action" type="button" onClick={() => void onOpenDrawer()}>
             <HelpCircle size={16} />
