@@ -29,6 +29,14 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
-    plugins: [react()]
+    plugins: [react()],
+    build: {
+      rollupOptions: {
+        input: {
+          main: resolve(__dirname, 'src/renderer/index.html'),
+          float: resolve(__dirname, 'src/renderer/float-index.html')
+        }
+      }
+    }
   }
 });

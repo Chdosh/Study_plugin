@@ -1,0 +1,35 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["AGENTS.md", "docs/PROJECT_MEMORY.md"],
+  "permission": {
+    "task": "allow",
+    "external_directory": "allow",
+    "doom_loop": "allow"
+  },
+  "agent": {
+    "planner": {
+      "description": "Plans tasks, reviews execution results, suggests next steps. Use /plan-and-build to invoke.",
+      "mode": "primary",
+      "permission": {
+        "edit": "deny",
+        "bash": {
+          "*": "allow"
+        },
+        "task": "allow"
+      }
+    },
+    "executor": {
+      "description": "Implements code changes per a task plan. Invoked by planner via the task tool.",
+      "mode": "subagent",
+      "permission": {
+        "edit": "allow",
+        "bash": {
+          "git *": "allow",
+          "npm *": "allow",
+          "cmd /c *": "allow",
+          "*": "allow"
+        }
+      }
+    }
+  }
+}
