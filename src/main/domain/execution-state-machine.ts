@@ -118,22 +118,105 @@ export function completeAction(
     });
   }
 
-  if (action.status === 'done') {
-    return { ok: true, state: selectTask(tasks, task.id, task.currentAction?.id ?? nextOpenAction(task)?.id ?? null) };
+  if (action.status !== 'done' && action.status !== 'skipped') {
+    action.status = 'done';
+    action.completedAt = action.completedAt ?? null;
   }
 
-  action.status = 'done';
-  action.completedAt = action.completedAt ?? null;
-  const nextAction = task.actions.find((item) => item.position > action.position && item.status !== 'done' && item.status !== 'skipped') ?? null;
-  const completedCount = task.actions.filter((item) => item.status === 'done').length;
-  task.status = 'active';
+  task.remainingActions = task.actions.filter((item) => item.status !== 'done' && item.status !== 'skipped').map((item) => item.id);
+  task.completedActions = task.actions.filter((item) => item.status === 'done' || item.status === 'skipped').map((item) => item.id);
+  const completedCount = task.completedActions.length;
   task.progressPercent = task.actions.length > 0 ? Math.round((completedCount / task.actions.length) * 100) : 100;
-  task.currentAction = nextAction;
-  task.remainingActions = task.actions.filter((item) => item.status !== 'done').map((item) => item.id);
-  task.completedActions = task.actions.filter((item) => item.status === 'done').map((item) => item.id);
-  task.nextStartPoint = nextAction?.title ?? '行动步骤已完成，可以提交主任务成果。';
 
-  return { ok: true, state: stateFromSelection(tasks, task.id, nextAction?.id ?? null) };
+  const nextAction = task.actions.find((item) => item.status !== 'done' && item.status !== 'skipped') ?? null;
+  task.currentAction = nextAction;
+  task.nextStartPoint = nextAction?.title ?? '行动步骤已完成，可以提交当前成果。';
+
+  if (!nextAction) {
+    return advanceOnTaskCompletion(tasks, task);
+  }
+
+  task.status = 'active';
+  return { ok: true, state: stateFromSelection(tasks, task.id, nextAction.id) };
+}
+
+function advanceOnTaskCompletion(tasks: DailyGuideTask[], currentTask: DailyGuideTask): ExecutionResult {
+  currentTask.status = 'done';
+  currentTask.currentAction = null;
+  currentTask.nextStartPoint = null;
+
+  const nextTask = tasks.find((item) => item.position > currentTask.position && !isTaskDone(item) && item.status !== 'skipped' && item.status !== 'deferred') ?? null;
+  if (!nextTask) {
+    return { ok: true, state: stateFromSelection(tasks, null, null) };
+  }
+
+  const nextAction = nextOpenAction(nextTask);
+  nextTask.status = 'active';
+  nextTask.currentAction = nextAction;
+  nextTask.nextStartPoint = nextAction?.title ?? nextTask.nextStartPoint;
+  return { ok: true, state: stateFromSelection(tasks, nextTask.id, nextAction?.id ?? null), };
+}
+
+export function skipAction(
+  state: Pick<ExecutionState, 'tasks' | 'activeDailyTaskId' | 'activeStepId'>
+): ExecutionResult {
+  const tasks = cloneTasks(state.tasks);
+  const task = state.activeDailyTaskId ? findTask(tasks, state.activeDailyTaskId) : null;
+  if (!task || isTaskDone(task)) {
+    return conflict(stateFromSelection(tasks, state.activeDailyTaskId, state.activeStepId), {
+      code: task ? 'active_task_points_to_done_task' : 'active_task_points_to_missing_task',
+      message: task ? '当前主任务已完成，不能跳过。' : '当前主任务不存在。',
+      taskId: state.activeDailyTaskId ?? undefined
+    });
+  }
+
+  const currentActionId = state.activeStepId ?? task.currentAction?.id ?? null;
+  if (currentActionId) {
+    const action = task.actions.find((item) => item.id === currentActionId);
+    if (action && action.status !== 'done' && action.status !== 'skipped') {
+      action.status = 'skipped';
+    }
+  }
+
+  const nextAction = task.actions.find((item) => item.status !== 'done' && item.status !== 'skipped') ?? null;
+  task.currentAction = nextAction;
+  task.remainingActions = task.actions.filter((item) => item.status !== 'done' && item.status !== 'skipped').map((item) => item.id);
+  task.completedActions = task.actions.filter((item) => item.status === 'done' || item.status === 'skipped').map((item) => item.id);
+  task.nextStartPoint = nextAction?.title ?? '行动步骤已完成，可以提交当前成果。';
+
+  if (!nextAction) {
+    return advanceOnTaskCompletion(tasks, task);
+  }
+
+  task.status = 'active';
+  return { ok: true, state: stateFromSelection(tasks, task.id, nextAction.id) };
+}
+
+export function skipTask(
+  state: Pick<ExecutionState, 'tasks' | 'activeDailyTaskId' | 'activeStepId'>
+): ExecutionResult {
+  const tasks = cloneTasks(state.tasks);
+  const task = state.activeDailyTaskId ? findTask(tasks, state.activeDailyTaskId) : null;
+  if (!task || isTaskDone(task)) {
+    return conflict(stateFromSelection(tasks, state.activeDailyTaskId, state.activeStepId), {
+      code: task ? 'active_task_points_to_done_task' : 'active_task_points_to_missing_task',
+      message: task ? '当前主任务已完成，不能跳过。' : '当前主任务不存在。',
+      taskId: state.activeDailyTaskId ?? undefined
+    });
+  }
+
+  for (const action of task.actions) {
+    if (action.status !== 'done' && action.status !== 'skipped') {
+      action.status = 'skipped';
+    }
+  }
+  task.remainingActions = [];
+  task.completedActions = task.actions.map((a) => a.id);
+  task.progressPercent = 100;
+  task.currentAction = null;
+  task.nextStartPoint = null;
+
+  return advanceOnTaskCompletion(tasks, task);
 }
 
 export function applyEvaluationResult(
@@ -157,21 +240,10 @@ export function applyEvaluationResult(
 
   task.status = 'done';
   task.progressPercent = 100;
-  task.currentAction = null;
-  task.nextStartPoint = null;
   task.completedActions = task.actions.map((action) => action.id);
   task.remainingActions = [];
 
-  const nextTask = tasks.find((item) => item.position > task.position && !isTaskDone(item) && item.status !== 'skipped' && item.status !== 'deferred') ?? null;
-  if (!nextTask) {
-    return { ok: true, state: stateFromSelection(tasks, null, null) };
-  }
-
-  const nextAction = nextOpenAction(nextTask);
-  nextTask.status = 'active';
-  nextTask.currentAction = nextAction;
-  nextTask.nextStartPoint = nextAction?.title ?? nextTask.nextStartPoint;
-  return { ok: true, state: stateFromSelection(tasks, nextTask.id, nextAction?.id ?? null) };
+  return advanceOnTaskCompletion(tasks, task);
 }
 
 export function isPassingEvaluation(evaluation: EvaluationDecisionLike): boolean {

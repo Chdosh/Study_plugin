@@ -51,6 +51,7 @@ export async function bootstrapDatabase(client: Client): Promise<void> {
       objective TEXT NOT NULL,
       direction TEXT NOT NULL,
       success_criteria TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
       position INTEGER NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -59,13 +60,16 @@ export async function bootstrapDatabase(client: Client): Promise<void> {
     CREATE TABLE IF NOT EXISTS short_plan_days (
       id TEXT PRIMARY KEY,
       goal_id TEXT NOT NULL REFERENCES goals(id),
+      roadmap_stage_id TEXT REFERENCES roadmap_stages(id),
       day_index INTEGER NOT NULL,
       date TEXT,
+      session_status TEXT NOT NULL DEFAULT 'pending',
       title TEXT NOT NULL,
       focus TEXT NOT NULL,
       tasks_json TEXT NOT NULL,
       expected_output TEXT NOT NULL,
       success_criteria TEXT NOT NULL,
+      locked INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL
     );
 
@@ -92,6 +96,21 @@ export async function bootstrapDatabase(client: Client): Promise<void> {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS task_dependencies_unique
       ON task_dependencies(task_id, depends_on_task_id);
+
+    CREATE TABLE IF NOT EXISTS knowledge_items (
+      id TEXT PRIMARY KEY,
+      goal_id TEXT REFERENCES goals(id),
+      key TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      detail TEXT,
+      source_type TEXT NOT NULL,
+      source_id TEXT,
+      occurrence_count INTEGER NOT NULL DEFAULT 1,
+      last_seen_at TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
 
     CREATE TABLE IF NOT EXISTS daily_plans (
       id TEXT PRIMARY KEY,
@@ -136,6 +155,7 @@ export async function bootstrapDatabase(client: Client): Promise<void> {
       boundaries_json TEXT NOT NULL,
       acceptance_criteria_json TEXT NOT NULL,
       tomorrow_actions_json TEXT NOT NULL,
+      session_status TEXT NOT NULL DEFAULT 'active',
       created_at TEXT NOT NULL,
       confirmed_at TEXT
     );
@@ -151,6 +171,7 @@ export async function bootstrapDatabase(client: Client): Promise<void> {
     CREATE TABLE IF NOT EXISTS daily_guide_tasks (
       id TEXT PRIMARY KEY,
       guide_id TEXT NOT NULL REFERENCES daily_guides(id),
+      roadmap_stage_id TEXT REFERENCES roadmap_stages(id),
       legacy_plan_block_id TEXT REFERENCES daily_plan_blocks(id),
       title TEXT NOT NULL,
       objective TEXT NOT NULL,
@@ -230,6 +251,11 @@ export async function bootstrapDatabase(client: Client): Promise<void> {
       output_schema_version TEXT NOT NULL,
       status TEXT NOT NULL,
       error_message TEXT,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      latency_ms INTEGER,
+      error_category TEXT,
+      trace_id TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -266,8 +292,6 @@ export async function bootstrapDatabase(client: Client): Promise<void> {
       updated_at TEXT NOT NULL
     );
 
-    CREATE UNIQUE INDEX IF NOT EXISTS short_plan_days_goal_date_not_null_idx
-      ON short_plan_days(goal_id, date) WHERE date IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS daily_guides_short_plan_day_unique
       ON daily_guides(short_plan_day_id);
   `);
