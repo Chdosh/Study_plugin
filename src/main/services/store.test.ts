@@ -2,10 +2,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { eq, sql } from 'drizzle-orm';
+import { asc, desc, eq, sql } from 'drizzle-orm';
 import { createDatabase, type DatabaseClient } from '../db/client';
 import type { Database } from '../db/client';
 import {
+  aiReviews,
   dailyGuideActions,
   dailyGuideTasks,
   dailyGuides,
@@ -16,6 +17,7 @@ import {
   learningSubmissions,
   planStages,
   roadmapStages,
+  shortPlanDays,
   studySessions
 } from '../db/schema';
 import { ContextBuilder } from './context-builder';
@@ -98,7 +100,8 @@ describe('StudyStore', () => {
         misconceptions: [],
         missingRequirements: [],
         feedback: '当前主任务达到提交标准。',
-        recommendedAction: 'complete_task'
+        recommendedAction: 'complete_task',
+        decision: 'advance'
       },
       decisionOutput: {
         decision: 'complete_task',
@@ -286,7 +289,7 @@ describe('Runtime convergence', () => {
       evaluationOutput: {
         result: 'passed', mastery: 90, evidence: ['ok'],
         correctParts: ['ok'], misconceptions: [], missingRequirements: [],
-        feedback: 'Good.', recommendedAction: 'complete_task'
+        feedback: 'Good.', recommendedAction: 'complete_task', decision: 'advance'
       },
       decisionOutput: {
         decision: 'complete_task', reason: 'Done.',
@@ -295,7 +298,7 @@ describe('Runtime convergence', () => {
     });
 
     // After passing evaluation on the last action of task 1, task 1 is done
-    const guideAfter = await store.listTodayGuide('2026-07-05');
+    const guideAfter = await store.getActiveGuide();
     expect(guideAfter.guide).toBeTruthy();
     expect(guideAfter.guide!.tasks[0].status).toBe('done');
 
@@ -422,6 +425,282 @@ describe('Runtime convergence', () => {
     expect(guideCount).toBe(1);
     expect(taskCount).toBe(2);
     expect(roadmapCount).toBe(1);
+  });
+
+  it('findActiveOrActivateStage dedupes multiple active stages', async () => {
+    const goal = await store.createGoal('test', 'test');
+    const stage1Id = 'stage-1';
+    const stage2Id = 'stage-2';
+    await store.db.insert(roadmapStages).values([
+      { id: stage1Id, goalId: goal.id, title: 'S1', objective: 'O1', direction: 'D1', successCriteria: 'SC1', position: 0, status: 'active', createdAt: 'now', updatedAt: 'now' },
+      { id: stage2Id, goalId: goal.id, title: 'S2', objective: 'O2', direction: 'D2', successCriteria: 'SC2', position: 1, status: 'active', createdAt: 'now', updatedAt: 'now' }
+    ]);
+
+    const result = await store.findActiveOrActivateStage(goal.id);
+    expect(result).not.toBeNull();
+    expect(result).not.toBe('goal_completed');
+    if (result && typeof result !== 'string') {
+      expect(result.id).toBe(stage1Id);
+    }
+
+    const stages = await store.db.select().from(roadmapStages).where(eq(roadmapStages.goalId, goal.id));
+    const activeStages = stages.filter((s) => s.status === 'active');
+    expect(activeStages.length).toBe(1);
+    expect(activeStages[0].id).toBe(stage1Id);
+  });
+
+  it('findActiveOrActivateStage activates first pending when no active', async () => {
+    const goal = await store.createGoal('test', 'test');
+    await store.db.insert(roadmapStages).values([
+      { id: 's1', goalId: goal.id, title: 'S1', objective: 'O1', direction: 'D1', successCriteria: 'SC1', position: 0, status: 'completed', createdAt: 'now', updatedAt: 'now' },
+      { id: 's2', goalId: goal.id, title: 'S2', objective: 'O2', direction: 'D2', successCriteria: 'SC2', position: 1, status: 'pending', createdAt: 'now', updatedAt: 'now' }
+    ]);
+
+    const result = await store.findActiveOrActivateStage(goal.id);
+    expect(result).not.toBeNull();
+    expect(result).not.toBe('goal_completed');
+    if (result && typeof result !== 'string') {
+      expect(result.id).toBe('s2');
+      expect(result.status).toBe('active');
+    }
+  });
+
+  it('findActiveOrActivateStage returns goal_completed when all done', async () => {
+    const goal = await store.createGoal('test', 'test');
+    await store.db.insert(roadmapStages).values([
+      { id: 's1', goalId: goal.id, title: 'S1', objective: 'O1', direction: 'D1', successCriteria: 'SC1', position: 0, status: 'completed', createdAt: 'now', updatedAt: 'now' },
+      { id: 's2', goalId: goal.id, title: 'S2', objective: 'O2', direction: 'D2', successCriteria: 'SC2', position: 1, status: 'completed', createdAt: 'now', updatedAt: 'now' }
+    ]);
+
+    const result = await store.findActiveOrActivateStage(goal.id);
+    expect(result).toBe('goal_completed');
+  });
+
+  it('applyReviewPlanAdjustments only updates active-stage pending days and preserves task list', async () => {
+    const goal = await store.createGoal('test', 'test');
+    const now = '2026-07-07T00:00:00.000Z';
+    await store.db.insert(roadmapStages).values([
+      { id: 's1', goalId: goal.id, title: 'S1', objective: 'O1', direction: 'D1', successCriteria: 'SC1', position: 0, status: 'active', createdAt: now, updatedAt: now },
+      { id: 's2', goalId: goal.id, title: 'S2', objective: 'O2', direction: 'D2', successCriteria: 'SC2', position: 1, status: 'pending', createdAt: now, updatedAt: now }
+    ]);
+    await store.db.insert(shortPlanDays).values([
+      {
+        id: 'day-active-stage',
+        goalId: goal.id,
+        roadmapStageId: 's1',
+        dayIndex: 2,
+        date: null,
+        sessionStatus: 'pending',
+        title: '当前阶段原单元',
+        focus: '原重点',
+        tasksJson: JSON.stringify(['保留任务 A', '保留任务 B']),
+        expectedOutput: '原产出',
+        successCriteria: '原标准',
+        createdAt: now
+      },
+      {
+        id: 'day-next-stage',
+        goalId: goal.id,
+        roadmapStageId: 's2',
+        dayIndex: 2,
+        date: null,
+        sessionStatus: 'pending',
+        title: '后续阶段原单元',
+        focus: '后续重点',
+        tasksJson: JSON.stringify(['不能被改']),
+        expectedOutput: '后续产出',
+        successCriteria: '后续标准',
+        createdAt: now
+      }
+    ]);
+
+    const updated = await store.applyReviewPlanAdjustments({
+      goalId: goal.id,
+      adjustments: [{
+        dayIndex: 2,
+        title: '调整后的当前阶段单元',
+        focus: '调整后的重点',
+        expectedOutput: '调整后的产出',
+        successCriteria: '调整后的标准',
+        reason: '基础不牢需要回炉'
+      }]
+    });
+
+    expect(updated).toHaveLength(1);
+    expect(updated[0].id).toBe('day-active-stage');
+    expect(updated[0].tasks).toEqual(['保留任务 A', '保留任务 B']);
+
+    const rows = await store.db.select().from(shortPlanDays).where(eq(shortPlanDays.goalId, goal.id));
+    const activeDay = rows.find((row) => row.id === 'day-active-stage')!;
+    const nextStageDay = rows.find((row) => row.id === 'day-next-stage')!;
+    expect(JSON.parse(activeDay.tasksJson)).toEqual(['保留任务 A', '保留任务 B']);
+    expect(nextStageDay.title).toBe('后续阶段原单元');
+    expect(JSON.parse(nextStageDay.tasksJson)).toEqual(['不能被改']);
+  });
+
+  it('applyEvaluationDecisionToRoadmap is idempotent', async () => {
+    const goal = await store.createGoal('test', 'test');
+    const result = await store.saveLayeredPlan({
+      goal,
+      brief: null,
+      date: '2026-07-05',
+      windows: [{ start: '10:00', end: '12:00' }],
+      roadmap: {
+        goalSummary: 'test',
+        stages: [
+          { title: '项目接管基础', objective: '能跑通项目并讲清主流程', direction: '先理解已有项目', successCriteria: '能讲清' },
+          { title: '功能演示', objective: '能演示核心功能', direction: '做演示', successCriteria: '能演示' }
+        ]
+      },
+      shortPlan: { weekFocus: 'test', days: [{ dayIndex: 1, title: 'T1', focus: 'F1', tasks: ['task1'], expectedOutput: 'EO1', successCriteria: 'SC1' }] },
+      dailyGuide: { date: '2026-07-05', todayGoal: 'test', deliverables: [], boundaries: [], acceptanceCriteria: [], tomorrowActions: [], tasks: [{ title: 'Task1', objective: 'Obj1', scope: 'Scope1', estimatedMinutes: { min: 30, target: 45, max: 60 }, actions: [{ title: 'A1', instruction: 'Do A1', checkpoint: 'Done' }], deliverable: 'Del1', doneWhen: ['Done'], quickHint: 'Hint', evaluationMode: 'local', submissionPolicy: 'once_after_task', carryoverAllowed: true }] }
+    });
+
+    const guideRows = await store.db.select({ id: dailyGuides.id }).from(dailyGuides).where(eq(dailyGuides.goalId, goal.id)).orderBy(desc(dailyGuides.createdAt)).limit(1);
+    const taskRows = await store.db.select({ id: dailyGuideTasks.id }).from(dailyGuideTasks).where(eq(dailyGuideTasks.guideId, guideRows[0].id)).limit(1);
+    const taskId = taskRows[0].id;
+    const stages = await store.db.select().from(roadmapStages).where(eq(roadmapStages.goalId, goal.id)).orderBy(asc(roadmapStages.position));
+    expect(stages.length).toBe(2);
+    expect(stages[0].status).toBe('active');
+    expect(stages[1].status).toBe('pending');
+
+    await store.applyEvaluationDecisionToRoadmap({ goalId: goal.id, taskId, decision: 'advance', taskCompleted: true });
+    const afterFirst = await store.db.select().from(roadmapStages).where(eq(roadmapStages.goalId, goal.id));
+    expect(afterFirst.find((s) => s.id === stages[0].id)?.status).toBe('completed');
+    expect(afterFirst.find((s) => s.id === stages[1].id)?.status).toBe('active');
+
+    await store.applyEvaluationDecisionToRoadmap({ goalId: goal.id, taskId, decision: 'advance', taskCompleted: true });
+    const afterSecond = await store.db.select().from(roadmapStages).where(eq(roadmapStages.goalId, goal.id));
+    expect(afterSecond.find((s) => s.id === stages[0].id)?.status).toBe('completed');
+    const activeCount = afterSecond.filter((s) => s.status === 'active').length;
+    expect(activeCount).toBe(1);
+  });
+
+  it('getLatestReview excludes rolling_plan records', async () => {
+    await store.db.insert(aiReviews).values({
+      id: 'r-rolling',
+      kind: 'rolling_plan',
+      date: '2026-07-05',
+      provider: 'deepseek',
+      model: 'test',
+      inputSnapshotJson: '{}',
+      outputJson: JSON.stringify({ weekFocus: 'test', days: [] }),
+      outputSchemaVersion: 'rolling-plan.v1',
+      status: 'success',
+      createdAt: '2026-07-05T00:00:00Z'
+    });
+    await store.db.insert(aiReviews).values({
+      id: 'r-real',
+      kind: 'reflection',
+      date: '2026-07-05',
+      provider: 'deepseek',
+      model: 'test',
+      inputSnapshotJson: '{}',
+      outputJson: JSON.stringify({ completionScore: 80, focusScore: 75, summary: '复盘内容', nextActions: ['下一步'] }),
+      outputSchemaVersion: 'review.v1',
+      status: 'success',
+      createdAt: '2026-07-05T01:00:00Z'
+    });
+
+    const latest = await store.getLatestReview();
+    expect(latest).not.toBeNull();
+    expect(latest?.reviewId).toBe('r-real');
+    expect(latest?.summary).toBe('复盘内容');
+  });
+
+  it('saveRollingPlanDays continues dayIndex cumulatively without upper limit', async () => {
+    const goal = await store.createGoal('test', 'test');
+    await store.db.insert(roadmapStages).values([
+      { id: 's1', goalId: goal.id, title: 'S1', objective: 'O1', direction: 'D1', successCriteria: 'SC1', position: 0, status: 'active', createdAt: 'now', updatedAt: 'now' }
+    ]);
+
+    await store.saveRollingPlanDays({
+      goalId: goal.id,
+      roadmapStageId: 's1',
+      items: [
+        { dayIndex: 1, title: 'T1', focus: 'F1', tasks: ['a'], expectedOutput: 'EO1', successCriteria: 'SC1' },
+        { dayIndex: 2, title: 'T2', focus: 'F2', tasks: ['b'], expectedOutput: 'EO2', successCriteria: 'SC2' },
+        { dayIndex: 3, title: 'T3', focus: 'F3', tasks: ['c'], expectedOutput: 'EO3', successCriteria: 'SC3' }
+      ]
+    });
+
+    await store.saveRollingPlanDays({
+      goalId: goal.id,
+      roadmapStageId: 's1',
+      items: [
+        { dayIndex: 1, title: 'T4', focus: 'F4', tasks: ['d'], expectedOutput: 'EO4', successCriteria: 'SC4' },
+        { dayIndex: 2, title: 'T5', focus: 'F5', tasks: ['e'], expectedOutput: 'EO5', successCriteria: 'SC5' }
+      ]
+    });
+
+    const allDays = await store.db.select().from(shortPlanDays).where(eq(shortPlanDays.goalId, goal.id));
+    const dayIndexes = allDays.map((d) => d.dayIndex).sort((a, b) => a - b);
+    expect(dayIndexes).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it('recordKnowledgeItems inserts new and increments existing', async () => {
+    const goal = await store.createGoal('test', 'test');
+
+    const first = await store.recordKnowledgeItems({
+      goalId: goal.id,
+      items: [{ key: 'hooks', summary: 'React Hooks 概念混淆', sourceType: 'misconception' }]
+    });
+    expect(first.length).toBe(1);
+    expect(first[0].occurrenceCount).toBe(1);
+
+    const second = await store.recordKnowledgeItems({
+      goalId: goal.id,
+      items: [{ key: 'hooks', summary: 'React Hooks 概念混淆', sourceType: 'misconception' }]
+    });
+    expect(second.length).toBe(1);
+    expect(second[0].occurrenceCount).toBe(2);
+
+    const items = await store.getKnowledgeItemsForGoal({ goalId: goal.id });
+    expect(items.length).toBe(1);
+    expect(items[0].key).toBe('hooks');
+  });
+
+  it('getReviewWorthyKnowledgeItems returns only items with >= 2 occurrences', async () => {
+    const goal = await store.createGoal('test', 'test');
+
+    await store.recordKnowledgeItems({
+      goalId: goal.id,
+      items: [
+        { key: 'hooks', summary: 'React Hooks 概念混淆', sourceType: 'misconception' },
+        { key: 'state', summary: 'State 管理薄弱', sourceType: 'weakness' }
+      ]
+    });
+    await store.recordKnowledgeItems({
+      goalId: goal.id,
+      items: [{ key: 'hooks', summary: 'React Hooks 概念混淆', sourceType: 'misconception' }]
+    });
+
+    const reviewWorthy = await store.getReviewWorthyKnowledgeItems(goal.id);
+    expect(reviewWorthy.length).toBe(1);
+    expect(reviewWorthy[0].key).toBe('hooks');
+    expect(reviewWorthy[0].occurrenceCount).toBe(2);
+  });
+
+  it('applyReviewPlanAdjustments skips locked days', async () => {
+    const goal = await store.createGoal('test', 'test');
+    const result = await store.saveLayeredPlan({
+      goal,
+      brief: null,
+      date: '2026-07-05',
+      windows: [{ start: '10:00', end: '12:00' }],
+      roadmap: { goalSummary: 'test', stages: [{ title: 'S1', objective: 'O1', direction: 'D1', successCriteria: 'SC1' }] },
+      shortPlan: { weekFocus: 'test', days: [{ dayIndex: 1, title: 'T1', focus: 'F1', tasks: ['task1'], expectedOutput: 'EO1', successCriteria: 'SC1' }] },
+      dailyGuide: { date: '2026-07-05', todayGoal: 'test', deliverables: [], boundaries: [], acceptanceCriteria: [], tomorrowActions: [], tasks: [{ title: 'Task1', objective: 'Obj1', scope: 'Scope1', estimatedMinutes: { min: 30, target: 45, max: 60 }, actions: [{ title: 'A1', instruction: 'Do A1', checkpoint: 'Done' }], deliverable: 'Del1', doneWhen: ['Done'], quickHint: 'Hint', evaluationMode: 'local', submissionPolicy: 'once_after_task', carryoverAllowed: true }] }
+    });
+
+    const dayId = result.shortPlan[0].id;
+    await store.db.update(shortPlanDays).set({ locked: true }).where(eq(shortPlanDays.id, dayId));
+
+    const updated = await store.applyReviewPlanAdjustments({
+      goalId: goal.id,
+      adjustments: [{ dayIndex: 1, title: '新标题', focus: '新重点', expectedOutput: '新产出', successCriteria: '新标准', reason: '原因' }]
+    });
+    expect(updated.length).toBe(0);
   });
 });
 

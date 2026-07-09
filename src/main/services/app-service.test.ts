@@ -4,13 +4,21 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { AiClient } from '../ai/ai-client';
-import { aiReviews } from '../db/schema';
+import { aiReviews, dailyGuides, goals, shortPlanDays } from '../db/schema';
 import { createDatabase, type DatabaseClient } from '../db/client';
 import type { Database } from '../db/client';
 import type { InferSelectModel } from 'drizzle-orm';
 import { AppService } from './app-service';
 import type { SettingsService } from './settings-service';
 import { StudyStore } from './store';
+
+function todayIso(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 vi.mock('./windows-foreground', () => ({
   getForegroundWindowInfo: vi.fn(async () => ({
@@ -62,6 +70,8 @@ describe('AppService progressive AI flow', () => {
     const layered = await appService.generateLayeredPlan(confirmed.goal.id);
     expect(layered.roadmap[0].title).toBe('项目接管基础');
     expect(layered.shortPlan[0].title).toBe('跑通并梳理项目');
+    expect(layered.shortPlan).toHaveLength(3);
+    expect(layered.shortPlan.every((day) => day.roadmapStageId === layered.roadmap[0].id)).toBe(true);
     expect(layered.guide.weekFocus).toBe('把项目变成可讲、可演示的资产');
     expect(layered.guide.tasks[0].title).toBe('锁定今天边界');
     expect(layered.guide.tasks[0].actions).toHaveLength(3);
@@ -92,12 +102,40 @@ describe('AppService progressive AI flow', () => {
     const nextIntake = await appService.archiveTodayAndRestart();
     expect(nextIntake.intake.status).toBe('collecting');
     expect(nextIntake.messages[0].content).toContain('归档');
-    expect((await appService.listTodayGuide()).guide).toBeNull();
+    const afterArchive = await appService.listTodayGuide();
+    expect(afterArchive.goal).toBeNull();
+    expect(afterArchive.guide).toBeNull();
+    const goalRows = await db.select().from(goals).where(eq(goals.id, confirmed.goal.id));
+    expect(goalRows[0].status).toBe('archived');
 
     await appService.sendOnboardingMessage('直接开始，先生成计划。');
     const afterRestartMessage = await appService.getCurrentOnboarding();
     expect(afterRestartMessage.intake.id).toBe(nextIntake.intake.id);
     expect(afterRestartMessage.messages.map((message) => message.content)).toContain('直接开始，先生成计划。');
+  });
+
+  it('archives every guide for the active goal before reopening intake', async () => {
+    installDeterministicAi();
+
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+    await store.completeLearningDay(layered.guide.id);
+
+    const nextDay = await appService.startNextSession();
+    expect(nextDay.todayState).toBe('active');
+    await store.completeLearningDay(nextDay.result!.guide.id);
+
+    const intake = await appService.archiveTodayAndRestart();
+    expect(intake.intake.status).toBe('collecting');
+
+    const guideRows = await db.select().from(dailyGuides).where(eq(dailyGuides.goalId, confirmed.goal.id));
+    expect(guideRows).toHaveLength(2);
+    expect(guideRows.every((guide) => guide.status === 'archived')).toBe(true);
+    const afterArchive = await appService.listTodayGuide();
+    expect(afterArchive.goal).toBeNull();
+    expect(afterArchive.guide).toBeNull();
   });
 
   it('keeps the confirmed Daily Guide as the execution spine through questions, actions, and submission', async () => {
@@ -211,6 +249,76 @@ describe('AppService progressive AI flow', () => {
     expect(review.date).toBe(date);
   });
 
+  it('starts the next learning session from a closed guide and keeps the generated review readable', async () => {
+    const aiCalls = installDeterministicAi();
+
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+    await store.completeLearningDay(layered.guide.id);
+
+    const result = await appService.startNextSession();
+
+    expect(result.todayState).toBe('active');
+    expect(result.review?.summary).toContain('今天完成了两个主任务');
+    expect(result.result?.guide.id).not.toBe(layered.guide.id);
+    expect(result.result?.guide.sessionStatus).toBe('active');
+
+    const today = await appService.listTodayGuide();
+    expect(today.todayState).toBe('active');
+    expect(today.guide?.id).toBe(result.result?.guide.id);
+
+    const latestReview = await appService.getLatestReview(result.review!.date);
+    expect(latestReview?.reviewId).toBe(result.review?.reviewId);
+    expect(aiCalls.map((call) => call.operation)).toEqual([
+      'goal_intake',
+      'roadmap',
+      'short_plan',
+      'daily_guide',
+      'reflection',
+      'daily_guide'
+    ]);
+  });
+
+  it('rejects advancing an active guide before all tasks are done', async () => {
+    installDeterministicAi();
+
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+
+    await expect(appService.startNextSession()).rejects.toThrow('当前学习日还有未完成任务');
+
+    const today = await appService.listTodayGuide();
+    expect(today.guide?.id).toBe(layered.guide.id);
+    expect(today.guide?.sessionStatus).toBe('active');
+  });
+
+  it('returns a clear exhausted result when every short plan day has already been used', async () => {
+    installDeterministicAi();
+
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+    await store.completeLearningDay(layered.guide.id);
+
+    const day2 = await appService.startNextSession();
+    expect(day2.todayState).toBe('active');
+    await store.completeLearningDay(day2.result!.guide.id);
+
+    const day3 = await appService.startNextSession();
+    expect(day3.todayState).toBe('active');
+    await store.completeLearningDay(day3.result!.guide.id);
+
+    const exhausted = await appService.startNextSession();
+    expect(exhausted.todayState).toBe('plan_exhausted');
+    expect(exhausted.errorMessage).toContain('复盘');
+    expect(exhausted.result).toBeUndefined();
+  });
+
   it('records daily_guide failure to ai_reviews when schema validation fails', async () => {
     const aiCalls = installDeterministicAiWithDailyGuideFailure();
 
@@ -309,13 +417,90 @@ describe('AppService progressive AI flow', () => {
     expect(result.result).toBeUndefined();
   });
 
-  it('prepareCurrentLearningDay returns short_plan_exhausted when no shortPlanDays', async () => {
+  it('prepareCurrentLearningDay returns plan_exhausted when no shortPlanDays', async () => {
     installDeterministicAi();
     await appService.sendOnboardingMessage('我想学 React。');
     await appService.confirmOnboardingGoal();
 
     const result = await appService.prepareCurrentLearningDay();
-    expect(result.todayState).toBe('short_plan_exhausted');
+    expect(result.todayState).toBe('plan_exhausted');
+  });
+
+  it('generateRollingPlan reuses the next pending stage day before asking AI for more items', async () => {
+    const aiCalls = installDeterministicAi();
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+
+    for (const task of layered.guide.tasks) {
+      await appService.startSession(task.id);
+      await appService.completeCurrentAction();
+      await appService.completeCurrentAction();
+      await appService.submitLearningResult('已完成');
+    }
+
+    const shortPlanCallsBeforeRolling = aiCalls.filter((call) => call.operation === 'short_plan').length;
+    const rolling = await appService.generateRollingPlan(confirmed.goal.id);
+    expect(rolling.guide).toBeTruthy();
+    expect(rolling.guide.shortPlanDayId).toBe(layered.shortPlan[1].id);
+    expect(rolling.activatedStage).toBeTruthy();
+    expect(rolling.shortPlan).toHaveLength(layered.shortPlan.length);
+    expect(aiCalls.filter((call) => call.operation === 'short_plan')).toHaveLength(shortPlanCallsBeforeRolling);
+    expect(aiCalls.at(-1)?.operation).toBe('daily_guide');
+
+    const afterState = await appService.getTodayState();
+    expect(afterState).toBe('active');
+  });
+
+  it('generateRollingPlan asks AI for more items only after current stage days are exhausted', async () => {
+    const aiCalls = installDeterministicAi();
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+
+    for (const task of layered.guide.tasks) {
+      await appService.startSession(task.id);
+      await appService.completeCurrentAction();
+      await appService.completeCurrentAction();
+      await appService.submitLearningResult('已完成');
+    }
+    await db
+      .update(shortPlanDays)
+      .set({ sessionStatus: 'completed' })
+      .where(eq(shortPlanDays.goalId, confirmed.goal.id));
+
+    const shortPlanCallsBeforeRolling = aiCalls.filter((call) => call.operation === 'short_plan').length;
+    const rolling = await appService.generateRollingPlan(confirmed.goal.id);
+
+    expect(aiCalls.filter((call) => call.operation === 'short_plan')).toHaveLength(shortPlanCallsBeforeRolling + 1);
+    expect(rolling.shortPlan.length).toBeGreaterThan(layered.shortPlan.length);
+    expect(rolling.guide.shortPlanDayId).not.toBe(layered.shortPlan[1].id);
+  });
+
+  it('applyReviewPlanAdjustments updates only pending plan days', async () => {
+    installDeterministicAi();
+    await appService.sendOnboardingMessage('我想学 React。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    await appService.generateLayeredPlan(confirmed.goal.id);
+
+    const result = await appService.applyReviewPlanAdjustments({
+      goalId: confirmed.goal.id,
+      adjustments: [
+        {
+          dayIndex: 1,
+          title: '调整后的标题',
+          focus: '调整后的重点',
+          expectedOutput: '调整后的产出',
+          successCriteria: '调整后的标准',
+          reason: '基础不牢需要回炉'
+        }
+      ]
+    });
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0].title).toBe('调整后的标题');
+    expect(result[0].focus).toBe('调整后的重点');
   });
 
   it('completeLearningDay is triggered when all tasks are done', async () => {
@@ -338,6 +523,66 @@ describe('AppService progressive AI flow', () => {
     expect(today.guide!.status).toBe('completed');
     expect(today.guide!.tasks.every((t) => t.status === 'done')).toBe(true);
   });
+
+  it('deduplicates concurrent sendOnboardingMessage calls with the same content', async () => {
+    const aiCalls = installDeterministicAi();
+
+    const [first, second] = await Promise.all([
+      appService.sendOnboardingMessage('我想学前端。'),
+      appService.sendOnboardingMessage('我想学前端。')
+    ]);
+
+    expect(first).toBe(second);
+    expect(aiCalls.filter((c) => c.operation === 'goal_intake')).toHaveLength(1);
+  });
+
+  it('deduplicates concurrent askStepQuestion calls with the same content', async () => {
+    const aiCalls = installDeterministicAi();
+
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+    await appService.startSession(layered.guide.tasks[0].id);
+
+    const [first, second] = await Promise.all([
+      appService.askStepQuestion('入口在哪？'),
+      appService.askStepQuestion('入口在哪？')
+    ]);
+
+    expect(first).toBe(second);
+    expect(aiCalls.filter((c) => c.operation === 'question')).toHaveLength(1);
+  });
+
+  it('deduplicates concurrent submitLearningResult calls with the same content', async () => {
+    const aiCalls = installDeterministicAi();
+
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+    await appService.startSession(layered.guide.tasks[0].id);
+    await appService.completeCurrentAction();
+
+    const [first, second] = await Promise.all([
+      appService.submitLearningResult('已完成第一个任务的最终产出。'),
+      appService.submitLearningResult('已完成第一个任务的最终产出。')
+    ]);
+
+    expect(first).toBe(second);
+    expect(aiCalls.filter((c) => c.operation === 'submission_evaluation')).toHaveLength(1);
+  });
+
+  it('allows the same onboarding content again after the dedup window expires', async () => {
+    installDeterministicAi();
+
+    await appService.sendOnboardingMessage('我想学前端。');
+    await new Promise((resolve) => setTimeout(resolve, 6_000));
+    await appService.sendOnboardingMessage('我想学前端。');
+
+    const intake = await appService.getCurrentOnboarding();
+    expect(intake.messages.filter((m) => m.role === 'user')).toHaveLength(2);
+  }, 10_000);
 
   it('startSession rejects completed block after task done', async () => {
     installDeterministicAi();
@@ -681,7 +926,7 @@ function installDeterministicAiWithDailyGuideFailure(): Array<{ operation: strin
 function operationFromSystem(system: string): string {
   if (system.includes('goal-intake-agent')) return 'goal_intake';
   if (system.includes('generate-roadmap-agent')) return 'roadmap';
-  if (system.includes('generate-short-plan-agent')) return 'short_plan';
+  if (system.includes('generate-short-plan-agent') || system.includes('rolling-plan-agent')) return 'short_plan';
   if (system.includes('generate-daily-guide-agent')) return 'daily_guide';
   if (system.includes('tutoring-service')) return 'teach_step';
   if (system.includes('question-branch')) return 'question';
