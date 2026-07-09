@@ -1,5 +1,8 @@
 ﻿# 开发基线：UI 和产品流程重构前状态
 
+> **过时声明（2026-06-29）**：本基线以 2026-06-20 的代码为基准（HEAD `552747f`，单页"学习工作台"架构）。
+> 此后代码已发生重大变更：六页面架构、学习浮窗、Bug 修复等。当前以代码和 `docs/PROJECT_MEMORY.md` 为准。
+
 日期：2026-06-20
 工作目录：`D:\work\study_plugin`
 
@@ -99,7 +102,13 @@ npm.cmd run db:generate
 - 测试：Vitest
 - 打包：electron-builder
 
-## 页面入口和主要文件
+## 页面入口和主要文件（过时，缺少浮窗文件）
+
+> **2026-06-29 补充**：当前代码已新增以下文件：
+> - 浮窗入口：`src/renderer/float-index.html`
+> - 浮窗 React 组件：`src/renderer/src/float-main.tsx`
+> - 浮窗样式：`src/renderer/src/float-styles.css`
+> - 构建配置已注册 float 为独立 Vite 入口
 
 - Electron 主进程入口：`src/main/index.ts`
 - Preload 安全桥：`src/preload/index.ts`
@@ -133,12 +142,14 @@ C:\Users\cc\AppData\Roaming\study-supervisor\study-supervisor.db
 
 注意：不要通过删除本地数据库来解决迁移或数据问题，除非用户明确要求。
 
-## 当前主要页面
+## 当前主要页面（单页架构，已过时）
 
 - 学习工作台：导入计划、生成今日草稿、查看今日历史、确认草稿、开始/跳过/完成学习块。
 - 任务清单：查看任务，手动更新任务状态。
 - 复盘：基于本地执行数据生成每日评分和下一步动作。
 - 设置：配置 DeepSeek base URL、模型、API Key、学习块分钟数和 prompt profile。
+
+**注意**：当前代码已重构为六页面架构（Today/Plan/Study/Knowledge/Review/Settings + Settlement 过渡页），详见 `docs/PRODUCT_SCOPE_V1.md`。
 
 ## 当前可用测试
 

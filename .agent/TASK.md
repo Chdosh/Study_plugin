@@ -1,83 +1,63 @@
-# Task
+# 当前任务
 
 ## Task ID
-TASK-000-R2
+FLOAT-003
 
-## Objective
-修复 TASK-000-R1 审核发现的协议审计缺陷，使 Agent 交接证据、报告和最终 Git 状态一致，并补齐 build 验证证据。
+## 任务名称
+实现浮窗位置持久化、应用重启恢复、主窗口跳转联动
 
-## Background
-TASK-000-R1 的审核结论为 CHANGES_REQUESTED。主要问题：
-1. `.gitignore` 被修改，但不在 TASK-000-R1 Allowed Scope 中。
-2. REPORT.md 声称任务开始前工作区干净，但 `pre-status.txt` 显示 `M AGENTS.md`。
-3. post 状态捕获早于部分 evidence 文件创建，不能代表最终状态。
-4. REPORT.md 声称修改 AGENTS 和 `.opencode` 文件，但当前 diff 未显示这些变更。
-5. 缺少 `npm run build` 的原始日志和退出码证据。
+## 背景
 
-## Allowed Scope
-- `.gitignore`（仅允许处理 `.agent/evidence/**/*.log` 审计证据跟踪规则，并必须在 REPORT.md 中说明原因）
-- `AGENTS.md`
-- `.agent/TASK.md`
-- `.agent/REPORT.md`
-- `.agent/REVIEW.md`
-- `.agent/STATUS.json`
-- `.agent/history/`
-- `.agent/evidence/`
-- `.opencode/agents/`
-- `.opencode/commands/`
+FLOAT-002 已实现浮窗完整 UI。还需要：
+1. 浮窗位置持久化（记住最后位置）
+2. 应用重启后如果存在未结束会话，浮窗自动恢复
+3. "打开主程序"按钮跳转到 Study 页面
+4. 主窗口 Study 页面的会话控制与浮窗同步
 
-## Forbidden Scope
-- 不得修改任何业务代码（`src/`、`scripts/`、`design-prototype/`、`docs/` 等）
-- 不得修改 `package.json`、`package-lock.json`、`tsconfig*.json`、`drizzle.config.ts`、`electron.vite.config.ts`、`vitest.config.ts`
-- 不得安装、升级或删除依赖
-- 不得提交或推送 Git
-- 不得删除现有文件
-- 不得伪造、改写或虚构命令结果
+## 本次目标
 
-## Requirements
-1. 重新读取 AGENTS.md、TASK.md、REVIEW.md、STATUS.json 和 R1 evidence，确认 R2 的修复范围。
-2. 创建 `.agent/evidence/TASK-000-R2/`，保存 R2 的完整证据。
-3. 在执行前保存：
-   - `pre-status.txt`：`git status --short --untracked-files=all`
-   - `pre-untracked.txt`：`git ls-files --others --exclude-standard`
-4. 准确识别并在 REPORT.md 中列出 pre-existing changes，不能把已有修改写成工作区干净。
-5. 修复协议文档中的证据顺序要求：最终 `post-status.txt`、`post-untracked.txt`、`diff-name-status.txt`、`diff-stat.txt` 必须在所有修改、验证命令和 manifest 准备完成后捕获；如 manifest 创建后会改变最终未跟踪文件列表，需再次捕获最终状态或在报告中明确说明。
-6. 处理 `.gitignore` 的 evidence log 跟踪规则：保留或调整均可，但必须在 Allowed Scope 内说明必要性，并确保最终 `git status` 能审计 `.log` 文件。
-7. 运行并保存以下命令的完整 stdout/stderr 与 exit code：
-   - `npm run typecheck`
-   - `npm test`
-   - `npm run build`
-8. 创建或更新 `evidence-manifest.json`，必须包含 taskId、startedAt、finishedAt、workingDirectory、commands、evidenceFiles、executor，并与实际 evidence 文件一致。
-9. 更新 `.agent/REPORT.md`，必须逐项引用 R2 evidence，且内容不得与 evidence 冲突。
-10. 更新 `.agent/STATUS.json`：
-   - `taskId` 为 `TASK-000-R2`
-   - `phase` 为 `waiting_review`
-   - `updatedBy` 为 `executor`
-   - `needsHumanDecision` 根据实际情况设置
+1. 浮窗拖动结束后保存位置到 `app_settings`（key=`floatWindowPosition`）。
+2. 浮窗启动时读取保存的位置。
+3. 浮窗启动时检查是否有 active session，有则自动显示。
+4. 主窗口"打开主程序"时跳转到 Study 页面。
+5. 确保主窗口和浮窗的会话状态完全同步。
 
-## Acceptance Criteria
-- 没有业务代码修改。
-- `.gitignore` 如有修改，已在 R2 Allowed Scope 和 REPORT.md 中明确说明。
-- REPORT.md 中的 pre/post Git 状态与 `.agent/evidence/TASK-000-R2/` 文件一致。
-- 未跟踪文件在 REPORT.md、post-status、post-untracked 中完整记录。
-- `npm run typecheck`、`npm test`、`npm run build` 均有 `.log` 和 `.exitcode` 证据；任何失败都不得报告为通过。
-- `evidence-manifest.json` 与实际 evidence 文件清单一致。
-- STATUS.json 正确处于 `waiting_review`。
-- 不提交 Git，不推送 GitHub。
+## 修改范围
 
-## Required Tests
-- `npm run typecheck`
-- `npm test`
-- `npm run build`
+- `src/renderer/src/float-main.tsx` — 添加位置保存/恢复逻辑
+- `src/main/index.ts` — 浮窗启动时恢复位置，应用重启时检查活跃会话
+- `src/main/services/app-service.ts` — 可能需要调整 pushSessionState 的触发时机
 
-每个命令必须保存原始输出和退出码到 `.agent/evidence/TASK-000-R2/`。
+## 禁止修改
 
-## Required Report
-按照修订后的 `.agent/REPORT.md` 结构输出。报告必须明确：
-- R2 执行前 Git 状态
-- R2 执行后最终 Git 状态
-- pre-existing changes
-- 本轮实际修改文件
-- 未跟踪文件列表
-- 三个验证命令的日志文件、退出码和结果
-- R1 审核问题如何逐项处理
+- `src/main/db/schema.ts`、`src/renderer/src/main.tsx`、`src/shared/`、`src/preload/`、`design-prototype/`、`package.json`
+
+## 实施要求
+
+### 位置持久化
+- 浮窗拖动结束（mouseup）后，调用 `window.floatApp.float.savePosition(x, y)`
+- 浮窗启动时调用 `window.floatApp.float.getPosition()` 恢复位置
+- 位置存储在 `app_settings` 表，key=`floatWindowPosition`，value=`{"x":100,"y":50}`
+
+### 应用重启恢复
+- 浮窗 Renderer 启动时调用 `window.floatApp.session.getActive()`
+- 如果有 active session，自动显示浮窗并加载会话数据
+- 如果没有 active session，浮窗保持隐藏
+
+### 主窗口跳转
+- `float:openMain` IPC handler 已存在，需要确保主窗口跳转到 Study 页面
+- 可以通过 `mainWindow.webContents.send('navigate', 'study')` 实现
+- 主窗口 Renderer 监听 `navigate` 事件并切换 view
+
+## 验收标准
+
+1. typecheck 通过。
+2. test 8/8 通过。
+3. build 通过。
+4. 浮窗位置在重启后保持。
+5. 应用重启后有活跃会话时浮窗自动出现。
+6. 打开主程序按钮正确跳转到 Study 页。
+7. 主窗口和浮窗会话状态同步。
+
+## 交付证据
+`.agent/DELIVERY.md`

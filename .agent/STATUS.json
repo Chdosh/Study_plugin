@@ -1,8 +1,14 @@
 {
-  "taskId": "TASK-000-R1",
-  "phase": "waiting_review",
-  "revision": 2,
-  "maxRevisions": 2,
-  "updatedBy": "executor",
-  "needsHumanDecision": false
+  "taskId": "TASK-20260629-float-window-sync",
+  "status": "completed",
+  "needsHumanDecision": false,
+  "summary": "Fixed float window drag activation and synchronized main/float study timer state.",
+  "evidenceDir": ".agent/evidence/TASK-20260629-float-window-sync",
+  "verification": {
+    "floatBehaviorRegression": "passed",
+    "unitTests": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "manualSmoke": "not_run"
+  }
 }

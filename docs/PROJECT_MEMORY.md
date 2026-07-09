@@ -1,122 +1,190 @@
 # 项目记忆
 
+本文件是新对话的短交接入口。完整历史已归档到 `docs/archive/PROJECT_MEMORY_FULL_2026-07-03.md`，除非需要追溯旧决策，否则不要读取归档文件。
+
 ## 当前状态
-- 仓库已经初始化，主系统已搭建为 `Electron + React + TypeScript` 桌面应用。
-- `AGENTS.md` 是架构契约；本文件是跨对话迁移的主记录文件。
-- 第一版核心纵向切片已存在：本地数据库 schema/bootstrap、默认提示词档位、DeepSeek 兼容 AI 客户端、导入/规划/复盘 agent、IPC bridge、托盘和窗口壳、前台应用监控、React 工作台 UI、基础测试。
-- 已修复启动空白问题：Electron preload 路径必须指向 `out/preload/index.mjs`，自动 smoke 已确认 `window.studyApp` 成功注入且主界面可以渲染。
-- 用户可见软件文案已切换为中文：主界面、托盘菜单、通知、启动错误、默认提示词、AI prompt 都已改为中文；内部类型名和数据库字段名仍保持英文。
-- 已修复真实 DeepSeek 生成计划失败路径：planner 先宽松接收 AI JSON，再本地补齐时间、时长、难度等字段；如果 AI 返回空 blocks，会按未完成任务生成保守草稿；界面不再展示整屏 Zod 调试错误。
-- 主流程已改为“学习工作台”：导入计划、选择提示词、生成今日草稿、查看每日计划历史、确认计划和开始执行集中在第一屏；生成计划后会自动选中新草稿，今日历史保留同一天的多次生成记录。
-- 已完成验证：`npm run typecheck`、`npm test`、`npm run build`、`npm audit --omit=dev`、短时 Electron smoke 启动。
 
-## 设计思路
-- 产品不是普通待办清单，而是“本地优先的 AI 学习管家”：导入计划、拆解任务、生成十分钟计划、记录执行、监控专注、复盘评分、建议重排。
-- SQLite 是唯一事实源；AI 输出只是建议，必须经过用户确认才变成正式计划。
-- Prompt profile 是可编辑、可版本化的数据，不写死在 UI 里。
-- v1 监管只做低侵入行为记录：前台应用、窗口标题、学习 session、跳过/推迟原因；不做截图、键盘记录、浏览器历史读取、强制锁屏。
-- RAG、知识库、向量索引留作后续阶段，未来索引必须能从 SQLite 和源文件重建。
+* 项目是本地优先 Windows 桌面 AI 学习系统，当前 MVP 已收敛到“主动访谈 + 分层计划 + 主任务制今日执行稿”的渐进式 AI 学习导师闭环。
+* 当前实现使用 Electron + React + TypeScript，主进程服务编排业务，Renderer 通过 typed preload API 调用 IPC。
+* 持久化使用本地 SQLite/libSQL 文件：`app.getPath('userData')/study-supervisor.db`，Drizzle schema 在 `src/main/db/schema.ts`。
+* AI 调用使用 OpenAI-compatible DeepSeek 配置，所有结构化输出必须经过 Zod/schema 校验。
+* 默认自动回归使用 fake AI GUI smoke；完整真实 `--real-ai` GUI 流程是非阻塞人工验收，不作为自动 PASS 门槛。
 
-## 迭代过程
-- 第一步：创建 `AGENTS.md`，明确产品目标、非目标、技术栈、数据边界、AI 上下文策略和 RAG 预留方向。
-- 第二步：初始化 Git，建立 `docs/PROJECT_MEMORY.md` 和 `scripts/dev-log.mjs`，把跨对话迁移能力作为工程约束。
-- 第三步：搭建 Electron/Vite/React/TypeScript 基础工程，区分 main、preload、renderer、shared。
-- 第四步：建立 SQLite-compatible libSQL + Drizzle 数据层，覆盖导入原文、目标、任务、依赖、日计划、计划块、学习 session、专注事件、跳过记录、AI 记录、prompt profile、计划版本、设置。
-- 第五步：实现 DeepSeek 兼容 AI 客户端和导入/规划/复盘 agent，所有输出通过 Zod schema 校验。
-- 第六步：实现主进程窗口、托盘、通知、开机自启设置入口、IPC 注册和 Windows 前台应用监控。
-- 第七步：实现 React 工作台 UI，包括今日计划、导入计划、任务列表、复盘、设置、prompt profile 编辑。
-- 第八步：移除 `active-win` 依赖链，改用 Windows API PowerShell 探测前台应用，生产依赖审计归零。
-- 第九步：修复 preload 文件扩展名错误导致的启动空白，并增加启动失败可见错误提示。
-- 第十步：根据真实 DeepSeek 返回内容修复计划生成容错，增加计划输出归一化、空 blocks 兜底、中文错误提示和回归测试。
-- 第十一步：重构主流程页面，把导入和生成计划合并到“学习工作台”，增加每日计划历史选择，并压缩布局和窗口尺寸。
+## 当前主流程
 
-## 主计划
-- 当前阶段目标：让本地应用可以稳定打开，用中文在“学习工作台”完成导入、规划、确认、执行的最小闭环。
-- 下一阶段目标：继续使用真实 DeepSeek API Key 做端到端测试，重点验证确认计划、开始学习、跳过/完成、生成复盘这些后续路径。
-- 后续增强：提醒调度、独立置顶提醒窗口、重排 diff 审核、Playwright/Electron UI 测试、知识库/RAG 原型。
+```text
+AI 主动访谈澄清目标
+→ 用户确认目标理解
+→ AI 依次生成长期大纲、前三天短期计划、第一天主任务执行稿
+→ 用户确认今日执行稿
+→ Today 聚焦当前主任务，其他主任务默认折叠
+→ 开始 Focus Session
+→ 后续接入提问、主任务最终提交、一次评估、复盘调整
+```
 
-## 活跃决策
-- 先支持 Windows。
-- 技术栈保持 `Electron + React + TypeScript + SQLite/Drizzle`。
-- 开发过程、设计思路、迭代记录、计划和迁移提示都用中文写入本文件。
-- 软件用户界面也使用中文；技术内部类型名和数据库字段名可以保持英文，保证工程可维护。
-- 开发记录以本文件为主，Git commit 为辅助。
-- 每完成一个小开发步骤，都要运行 `npm run devlog -- step "中文说明"` 或手动更新本文件。
-- 使用本地 Windows API PowerShell 探测前台应用，不引入有漏洞的 `active-win` 依赖链。
+当前新闭环使用 `goal_intakes`、`roadmap_stages`、`short_plan_days`、`daily_guides`、`daily_guide_tasks`、`daily_guide_actions` 保存访谈、长期大纲、短期计划、今日主任务和执行动作。`daily_plan_blocks` / `daily_guide_blocks` 暂时保留为旧版兼容和 session 锚点，不再代表固定 10 分钟任务块。
 
-## 近期开发记录
-- 2026-06-20T14:01:45+08:00 [步骤] 基于用户提供的三张参考图继续完善 `design-prototype`：Today 保留当前重点与时间线，并新增可点击切换的 AI 教师展开态；Study 页面重构为参考图式任务标题、专注计时、三段进度、笔记编辑器和右侧 AI 学习助手；仍使用假数据，不调用数据库、DeepSeek 或真实监控。已运行 `npm.cmd --prefix design-prototype run build` 通过，并确认 `http://127.0.0.1:5174` 本地服务响应；因当前未暴露浏览器控制工具，未做自动截图视觉 QA。
-- 2026-06-20T05:12:30.962Z [步骤] 按用户提供的三张参考图再次重设计 design-prototype Today：补齐浅色桌面三栏结构、顶部搜索/通知/日期区、参考图式当前重点卡、分段圆形进度、带状态标签的今日时间线，以及右侧 AI 学习建议卡和快捷操作；保持假数据和原点击流程，不修改正式业务逻辑。
-- 2026-06-20T04:58:25.281Z [步骤] 重构 design-prototype 的 Today 页面视觉结构：移除正式页状态切换器和状态样例，将状态演示移动到 #/dev/states；Today 改为当前任务高权重区、简洁时间线和低权重 AI 窄栏；侧边栏收窄并改为浅色导航；未修改数据库、AI 调用或学习会话逻辑。
-- 2026-06-20T04:23:36.289Z [步骤] 审查 design-prototype 当前页面，新增 docs/UI_SYSTEM.md；将原型颜色、字体、间距、圆角、控件尺寸和状态变量集中到 design-prototype/src/design-tokens.css，styles.css 改为引用统一 token；未修改正式业务代码。
-- 2026-06-20T04:13:21.225Z [步骤] 创建 design-prototype 隔离 UI 原型，使用假数据实现今日到学习、学习结算、复盘的可点击流程，并验证原型构建和本地服务可访问。
-- 2026-06-20T04:06:32.517Z [步骤] 基于 PRODUCT_SCOPE_V1 和 USER_FLOWS 重新创建 V1 信息架构与低保真线框文档，明确六个一级页面、AI 教师面板、确认节点和页面状态。
-- 2026-06-19T09:01:39.396Z [步骤] 创建学习监督工作台 UI v1 设计说明和高保真 HTML mockup；Figma 文件已创建，但因 Starter 计划 MCP 调用上限暂未写入画布。
-- 2026-06-19T08:44:32.850Z [步骤] 重构学习工作台：合并导入和生成计划入口，增加每日计划历史选择，生成草稿后自动选中新计划，并压缩页面布局和窗口尺寸。
-- 2026-06-18T18:44:06.223Z [步骤] 修复 DeepSeek 计划输出字段不完整导致生成计划失败的问题，增加宽松解析、本地归一化、空计划兜底和中文错误提示。
-- 2026-06-18T18:30:23.430Z [步骤] 将 React 工作台文案切换为中文，并增加默认提示词中文迁移逻辑。
-- 2026-06-18T18:28:58.967Z [步骤] 将应用标题、托盘菜单、通知、默认提示词和 AI 提示词改为中文。
-- 2026-06-18T18:28:09.563Z [步骤] 将项目记忆文件改为中文，加入设计思路、迭代过程、主计划和中文记录规范。
-- 2026-06-18T18:23:39.000Z [步骤] 修复 Electron preload 路径为 `index.mjs`，增加启动失败显示，smoke 测试确认主界面渲染。
-- 2026-06-18T18:15:15.318Z [步骤] 移除 active-win，改为 Windows API PowerShell 前台窗口探测，升级 drizzle-orm，生产依赖审计清零。
-- 2026-06-18T18:11:59.417Z [步骤] 完成类型检查、单元测试、构建和短时 Electron preview smoke。
-- 2026-06-18T18:09:07.827Z [步骤] 实现 React 工作台 UI，并补齐 React runtime/type 依赖。
-- 2026-06-18T18:04:44.056Z [步骤] 添加 DeepSeek 兼容 AI 客户端、agent prompt、应用服务、专注监控、IPC 注册和 Electron 主进程。
-- 2026-06-18T18:01:48.340Z [步骤] 添加 SQLite-compatible Drizzle schema、bootstrap SQL、默认 prompt profiles 和 StudyStore 服务。
-- 2026-06-18T17:58:46.708Z [步骤] 搭建 Electron/Vite/React/TypeScript 配置并安装依赖。
-- 2026-06-18T17:53:51.641Z [步骤] 创建项目记忆、开发日志脚本和 AGENTS 阅读要求。
-- 2026-06-19 01:19 [步骤] 创建 `AGENTS.md`，记录产品、数据、AI、RAG 和监控边界。
-- 2026-06-19 [步骤] 初始化 Git 仓库。
+## 上下文管理
 
-## 未决问题
-- DeepSeek 模型名需要保持可配置，因为供应商模型名会变化。
-- 打包图标、安装器品牌、应用正式名称可以在核心闭环稳定后决定。
-- 已用真实 DeepSeek 暴露并修复计划生成字段缺失问题；仍需继续跑完整确认计划、执行、复盘流程。
+`src/main/services/context-builder.ts` 是 AI 上下文入口。它按操作类型读取当前快照，只包含当前 goal/stage/task/block/step、最近最多 3 条步骤摘要、当前问题分支最后几条消息、最新提交/评估/决策和 pending adjustment。
 
-## 下一步
-- 重启 `npm run dev` 中的 Electron 应用，验证“学习工作台”第一屏是否符合导入、生成、历史、执行集中操作的预期。
-- 继续手动验证：确认计划 -> 开始学习 -> 跳过/完成 -> 生成复盘。
-- 添加提醒调度和独立置顶提醒窗口。
-- 增强重排建议的 diff 审核视图。
-- 在手动流程稳定后补 Playwright/Electron UI 测试。
+不得退回到“把完整聊天历史发送给模型”的实现。完整历史可以存在数据库中，但模型只接收当前操作需要的工作上下文。
 
-## 已知风险
-- AI 返回 JSON 可能不稳定，所有 agent 输出必须继续做 schema 校验和失败恢复。
-- Windows 前台应用探测可能受权限、系统语言、PowerShell 策略影响；该能力必须保持可选、非阻塞。
-- 现有数据库里已经写入过英文默认 prompt 的用户，需要后续迁移或覆盖为中文版本。
+## 关键决策
 
-## 迁移提示
-继续开发 `D:\work\study_plugin`。新对话开始后先读 `AGENTS.md` 和 `docs/PROJECT_MEMORY.md`。保持本地优先架构；每完成一个小开发步骤都更新本文件；开发记录和用户可见软件文案使用中文；AI 对正式计划的修改必须经过用户确认。
-## 2026-06-20 Agent Runner 真实运行前加固
+* SQLite 是 durable source of truth；schema 变更必须使用迁移。
+* AI 输出只是 proposal，验证并在必要时经用户确认后才能影响计划或持久状态。
+* 问题分支不能替换当前学习步骤；解决后必须能回到原步骤。
+* 用户提交主任务最终结果后必须先评估；当前主流程不再固定调用 `next_step_decision`，而是由本地状态机根据一次 `evaluate_submission` 输出决定通过、继续修改、保存进度或进入下一任务。
+* DeepSeek 真实合约测试为 opt-in：`RUN_DEEPSEEK_CONTRACT=1 npm.cmd test -- src/main/ai/deepseek-contract.test.ts`。
+* 不根据单次真实模型输出继续修改测试答案、schema 或业务 prompt。
 
-* 日期
-  2026-06-20
-* 本次完成
-  为 `tools/agent-runner/` 增加 `agent:doctor` 诊断命令和真实模式 preflight；新增 Codex CLI Windows 解析器，支持 `CODEX_CLI_PATH`、npm 全局 `codex.cmd`、PATH 搜索，并拒绝 WindowsApps 内置 Codex 路径；修正 OpenCode SDK 本地服务/provider 检查；新增 `.agent/state.example.json`，将 `.agent/state.json` 与具体 `.agent/runs/*` 运行产物改为 Git 忽略。
-* 关键决策
-  普通 doctor 只做本地检查，不发模型请求；`--online` 才允许最小 Codex 和 MiMo JSON 请求。真实 `agent:runner -- --request` 在模型调用和 OpenCode 开发任务发送前必须通过 Codex、OpenCode、MiMo 和命令配置检查，否则直接进入 BLOCKED。
-* 修改范围
-  修改 `tools/agent-runner/codex.mjs`、`codex-cli.mjs`、`doctor.mjs`、`index.mjs`、`opencode.mjs`、`.gitignore`、`package.json`、`package-lock.json`；新增 `.agent/state.example.json`。
-* 验证结果
-  已运行 `npm run agent:doctor`，本地检查完成：Node/npm、Git、写权限、workflow、命令配置、OpenCode 服务、MiMo 配置、Electron capture 通过；Codex CLI 检查失败且明确识别为 WindowsApps 内置路径。已运行 `npm run agent:runner:mock -- --request "验证调度器回归，不修改业务代码"`、`npm run typecheck`、`npm test`、`npm run build`，均通过。
-* 尚未解决
-  真实 Codex CLI 仍需安装 npm 版 `@openai/codex` 并设置 `CODEX_CLI_PATH`，避开 WindowsApps 内置可执行文件。未运行 `agent:doctor -- --online`，避免本轮自动发起真实模型请求。
-* 推荐下一步
-  用户安装并配置 npm 版 Codex CLI 后，先运行 `npm run agent:doctor -- --online` 验证真实 Codex 和 MiMo 最小 JSON 链路，再运行真实 `agent:runner`。
+## 最近完成
 
-## 2026-06-20 双 Agent 自动开发调度器
+### 2026-07-04 主任务制每日计划与计时流程
 
-* 日期
-  2026-06-20
-* 本次完成
-  新增 `tools/agent-runner/` 最小可运行双 Agent 调度器，包含 Codex 规划/验收封装、OpenCode SDK 执行封装、独立验证命令执行、Electron capture 截图适配、JSON Schema、workflow 配置、Windows 双击入口，以及 `.agent/PROJECT_BRIEF.md`、`.agent/state.json`、`.agent/runs/` 运行目录。
-* 关键决策
-  新调度器不继续扩展 legacy 的 `.agent/TASK.md`、`.agent/REPORT.md`、`.agent/REVIEW.md` 审计协议；默认提供 `--mock` 模式以便在无真实模型凭据或 CLI 不可用时验证完整状态机；真实模式通过 Codex CLI 非交互调用和 `@opencode-ai/sdk` 接入，不在代码中硬编码 API Key。
-* 修改范围
-  新增 `tools/agent-runner/`、`.agent/PROJECT_BRIEF.md`、`.agent/state.json`、`.agent/runs/.gitkeep`；更新 `package.json` 和 `package-lock.json` 加入 `@opencode-ai/sdk` 与 runner 脚本；更新 `.gitignore` 忽略具体 run 产物但保留 `.agent/runs/.gitkeep`。
-* 验证结果
-  已运行 `npm run agent:runner:mock -- --request ...`，mock 流程完成 PLANNING -> EXECUTING -> VERIFYING -> EVALUATING -> REWORK -> EXECUTING -> VERIFYING -> EVALUATING -> PASS；调度器独立执行 `typecheck`、`test`、`build` 并保存日志；Electron capture 通过 CDP 生成主窗口截图。已运行 `npm run typecheck`、`npm test`、`npm run build`，均通过。
-* 尚未解决
-  当前本机直接执行 `codex exec --help` 返回 Access denied，因此真实 Codex CLI 调用路径未完成端到端验证；真实 OpenCode SDK 会话需要本机已有 OpenCode/MiMo 配置和可用凭据后再验证。`npm install @opencode-ai/sdk` 后 `npm audit` 报告 16 个漏洞，未自动修复。
-* 推荐下一步
-  在确认 Codex CLI 权限和 OpenCode MiMo 配置可用后，用非 mock 模式跑一个小型真实任务；根据真实 SDK 返回结构再收紧 `execution.json` 提取逻辑；为 capture 增加更细的交互脚本配置。
+每日执行稿从固定 10 分钟 block 改为“任务决定时长”的主任务结构。`daily_guide` 现在输出 2～4 个主任务，每个任务包含动态 `estimatedMinutes.min/target/max`、3～6 个 Action、本地 Checkpoint、最终 deliverable、doneWhen、evaluationMode、submissionPolicy 和 carryoverAllowed。新增 `daily_guide_tasks`、`daily_guide_actions` 表和迁移；旧 `daily_plan_blocks` / `daily_guide_blocks` 不删除，作为 legacy session 锚点继续兼容悬浮窗和现有计时路径。
+
+关键决策：Focus Session 的开始、暂停、恢复、结束和超时只写本地记录，不触发 AI。主任务最终提交后，`evaluationMode=ai` 只调用一次 `evaluate_submission`，`evaluationMode=local` 走本地验证器；不再固定调用 `decide_next_step`。评估通过时本地状态机标记任务完成，未通过时保留当前任务为 needs_revision 并保存 nextStartPoint。
+
+验证：
+
+* `npm.cmd run typecheck` 通过。
+* `npm.cmd test` 通过：29 passed，1 skipped。
+* `npm.cmd run build` 通过。
+* `node scripts/electron-gui-smoke.mjs` 通过：fake AI 主闭环完成主动访谈、生成主任务执行稿、确认并开始、结束 Focus Session 和重启恢复；结束 Focus Session 后任务保持 active，不自动完成。
+
+### 2026-07-04 窗口化响应式排版修复
+
+修复窗口化应用中左侧导航文字与图标挤压、栏目不能随窗口宽度调整、主动访谈对话框占比过大的问题。新增 renderer 末尾窗口化稳定覆盖层：1439px 以下侧栏固定为窄图标栏并强制隐藏品牌/导航文字；1280px 以下主动访谈从主区 + 摘要双列切换为单列；访谈聊天面板高度和气泡宽度改为 viewport clamp，避免空对话框占据整屏。
+
+关键决策：本轮只修改 `src/renderer/src/styles.css` 的响应式覆盖，不修改 React 组件结构、业务逻辑、IPC、SQLite schema 或 AI 数据流。保留参考图视觉语言，但优先保证窗口化可读性和无横向溢出。
+
+验证：
+
+* `npm.cmd run build` 通过。
+* `npm.cmd test` 通过：29 passed，1 skipped。
+* `node scripts/electron-gui-smoke.mjs` 通过。
+* Electron/CDP 临时检查：1418px 宽度下侧栏 82px、品牌文字 `display: none`、导航文字 `font-size: 0px`、无横向溢出；主动访谈为 908px + 320px 双列，聊天面板高约 520px；1180px 和 900px 下自动单列且无横向溢出。
+
+### 2026-07-04 参考图 UI 全方位复刻
+
+基于用户最新提供的 Today、主动访谈、学习、复盘和悬浮窗 5 张参考图，对当前业务 UI 做进一步视觉复刻和交互对齐。Today 强化“当前任务”唯一视觉中心，右侧辅助栏聚焦进度、验收、边界；主动访谈改为更接近参考图的对话工作区、底部固定输入和右侧目标理解摘要；学习页收敛为顶部 session bar、当前步骤主面板、步骤列表和右侧 AI 助手；复盘页按“完成情况 -> 结果概览 -> AI 评估 -> 调整建议 -> 明日预告”组织；悬浮窗按约 420x56 / 420x300 复刻并持久化展开状态。
+
+关键决策：参考图中的说明箭头、虚线和标注属于设计讲解，不进入生产 UI。用户可见界面复用现有真实数据流和 typed preload API，不创建静态 mock，不修改 SQLite schema、AI schema、IPC 通道或底层学习流程。本轮仅为 smoke 补充等待“确认并开始”按钮实际渲染的条件，避免 React 刷新时序造成误报。
+
+验证：
+
+* `npm.cmd run typecheck` 通过。
+* `npm.cmd test` 通过：29 passed，1 skipped。
+* `npm.cmd run build` 通过。
+* `node scripts/electron-gui-smoke.mjs` 通过：fake AI 主闭环完成主动访谈、生成执行稿、确认并开始、进入学习、结束当前块和重启恢复。
+* 已新增 `design-qa.md` 记录参考图、实现截图路径、视觉差异和 QA 结论。
+
+### 2026-07-04 字体层级与窗口适配修复
+
+针对窗口化后左侧导航栏品牌文案被挤压成竖排、全局字号偏大、字重层级不统一、学习页长文本在中窄窗口下显得拥挤的问题，新增 renderer 末尾覆盖样式。统一将基础字号收敛到 11/12/13/15/17/21/28px 层级，字重收敛到 500/600/650/700；中窄窗口下侧栏只保留图标并隐藏品牌文字，主内容与右侧辅助栏在 1180px 以下改为单列，任务详情在 960px 以下自动堆叠，避免文本强行挤在三列中。
+
+关键决策：本轮只修改 CSS 响应式和 typography token，不修改 React 业务逻辑、IPC、SQLite schema、AI schema 或计划/session 数据流。`docs/UI_GUIDELINES.md` 继续作为当前业务 UI 和交互重构的活跃专题文档。
+
+验证：
+
+* `npm.cmd run typecheck` 通过。
+* `npm.cmd test` 通过：29 passed，1 skipped。
+* `npm.cmd run build` 通过。
+* `node scripts/electron-gui-smoke.mjs` 通过。
+* 临时 Electron viewport 检查 1080px：侧栏品牌文字 `display: none`，导航文字字号 `0px`，页面标题 `28px`，无水平溢出。
+
+### 2026-07-04 主界面 UI 重绘落地
+
+基于 `docs/UI_GUIDELINES.md` 和 5 张参考图，重绘了当前业务 UI：主动访谈改为左侧聊天工作区 + 右侧目标理解摘要；Today 改为“今日目标 / 当前任务 / 右侧辅助栏”的主辅结构，并将“确认今日执行稿 + 开始”合并为“确认并开始”；学习页改为顶部固定 Session Bar、当前步骤主面板、纵向步骤进度和右侧 AI 提问/提交侧栏；复盘页改为完成情况、AI 评估、调整 proposal、明日预告的流程式布局；悬浮窗改为默认约 420×56 的紧凑状态，展开后显示当前步骤、操作摘要、完成标准和快捷操作。
+
+关键决策：本轮只改 UI 结构、交互入口和 smoke 断言，不修改 SQLite schema、IPC 通道、AI schema 或底层业务服务。`确认并开始` 会先进入学习页再启动 session，避免用户确认计划后停留在无关页面。
+
+验证：
+
+* `npm.cmd run typecheck` 通过。
+* `npm.cmd test` 通过：29 passed，1 skipped。
+* `npm.cmd run build` 通过。
+* `node scripts/electron-gui-smoke.mjs` 通过：fake AI 主闭环完成主动访谈、生成执行稿、确认并开始、进入学习、结束当前块和重启恢复。
+
+### 2026-07-04 UI 指南结构化更新
+
+`docs/UI_GUIDELINES.md` 已整理为当前业务 UI 和交互重构的活跃专题文档，明确其优先级高于历史参考性质的 `docs/UI_SYSTEM.md`。本轮将新的 UI 修改意见合并为正式规范，覆盖当前任务视觉中心、全局布局断点、今日页、学习页、悬浮窗、主动访谈页、Design Token 和 P0/P1/P2 实施顺序。
+
+关键决策：UI 重构优先解决信息层级、页面职责和用户下一步行动，不优先通过配色、圆角、阴影或装饰提升来掩盖结构问题。
+
+验证：已读取 `docs/README.md`、`docs/UI_SYSTEM.md`、`docs/UI_GUIDELINES.md` 和本文件，确认 `UI_GUIDELINES.md` 是活跃专题文档，`UI_SYSTEM.md` 是历史参考文档。本轮未修改产品代码、配置、依赖、数据库、测试代码或业务行为。
+
+### 2026-07-04 今日中途结束与归档重开
+
+Today 当前任务增加“结束本次”按钮，语义为结束本次专注但不判定任务完成，底层复用现有 `pauseSession`，保留当前任务主线。Today 侧栏增加“归档计划，重新开始”，通过新增 `guides.archiveTodayAndRestart()` 将当天 `daily_guides` 和 `daily_plans` 标记为 `archived`，不删除用户数据，并创建新的主动访谈 intake。`listTodayGuide` 现在跳过 archived guide，避免归档后继续显示旧执行稿。
+
+关键决策：本轮不做“硬删除所有计划”，只做可恢复归档；旧 `daily_plan_blocks` 仍被 session 执行映射依赖，不能直接删除。
+
+验证：
+
+* `npm.cmd run typecheck` 通过。
+* `npm.cmd test -- src/main/services/app-service.test.ts` 通过：新增归档重开服务测试。
+* `npm.cmd test` 通过：29 passed，1 skipped（真实 DeepSeek 合约测试默认跳过）。
+* `npm.cmd run build` 通过。
+* `node scripts/electron-gui-smoke.mjs` 通过：fake AI 主闭环未被新增按钮打断。
+
+### 2026-07-04 复盘回流与访谈可读性优化
+
+复盘页不再跳转到旧 Plan 页面，底部行动统一回到 Today 执行稿。Renderer 中已移除可访问的 `plan` / `knowledge` 视图、旧 `PlanView` 和旧 `KnowledgeView` 组件；但底层 `plans.*` IPC、旧 `daily_plans` / `daily_plan_blocks` 表和相关服务仍保留，因为当前 `daily_guide_blocks` 仍映射到旧 plan block 来复用 session 计时和完成状态。
+
+主动访谈消息改为对话气泡展示，AI 回复支持逐字出现，等待模型返回时显示三点加载动画；消息内容只做轻量段落和列表排版，不引入完整 Markdown 渲染器或新依赖。
+
+验证：
+
+* `npm.cmd run typecheck` 通过。
+* `npm.cmd test` 通过：28 passed，1 skipped（真实 DeepSeek 合约测试默认跳过）。
+* `npm.cmd run build` 通过。
+* `node scripts/electron-gui-smoke.mjs` 通过：fake AI 下完成主动访谈、生成执行稿、折叠预览、开始/完成当前块和重启恢复。
+
+### 2026-07-03 主动访谈到今日执行稿闭环
+
+新增主动目标访谈、目标理解确认、分层计划生成和 Today 聚焦执行稿。AI 操作拆分为 `goal_intake`、`roadmap`、`short_plan`、`daily_guide`，每一步都有 Zod schema 校验和 `ai_reviews` 记录。新增 `onboarding.*` 与 `guides.*` typed preload API。Today 首屏在没有执行稿时展示自然对话访谈；有执行稿时顶部显示“目标 → 当前阶段 → 本周重点 → 今天 → 当前任务”，当前任务完整展开，其他任务默认只显示时间、标题、状态和预计时长，点击仅临时预览，不切换当前任务。旧 Plan 和 Knowledge 已从主导航移除，但旧代码和旧表本轮未破坏性删除。
+
+验证：
+
+* `npm.cmd run typecheck` 通过。
+* `npm.cmd test` 通过：28 passed，1 skipped（真实 DeepSeek 合约测试默认跳过）。
+* `npm.cmd run build` 通过。
+* `node scripts/electron-gui-smoke.mjs` 通过：fake AI 下完成主动访谈、目标确认、分层计划、今日执行稿确认、折叠预览、开始/完成当前块和重启恢复。
+
+### 2026-07-03 文档交接精简
+
+将 `docs/PROJECT_MEMORY.md` 从完整历史日志压缩为当前交接摘要，并把原完整内容归档到 `docs/archive/PROJECT_MEMORY_FULL_2026-07-03.md`。新增 `docs/README.md` 作为文档地图，区分活跃专题文档、轻量索引和历史参考文档。`docs/CONTEXT_AND_MEMORY.md` 改为索引，详细上下文规则统一指向 `docs/AI_AND_DATA_RULES.md`。`docs/ARCHITECTURE.md` 中重复的学习运行态字段改为引用 AI/data 文档。
+
+验证：文档结构、文件存在性、行数和 diff stat 已检查；本轮未修改产品代码、配置、依赖、数据库、测试代码或业务行为。
+
+### 2026-07-03 真实 AI 验证边界调整
+
+停止将完整 `--real-ai` Electron 两轮流程作为自动验收门槛。`scripts/electron-gui-smoke.mjs` 保持确定性 fake AI 主回归，并删除针对具体题目和具体答案的硬编码分支。新增独立 DeepSeek 合约测试，默认跳过，只在显式环境变量下调用一次真实 evaluation。
+
+验证：
+
+* `npm.cmd test -- src/main/ai/ai-client.test.ts src/main/ai/deepseek-contract.test.ts src/main/ai/normalize-plan.test.ts src/shared/schemas.test.ts` 通过，真实合约测试默认跳过。
+* `npm.cmd run build` 通过。
+* `node scripts/electron-gui-smoke.mjs` 通过：两轮 fake AI GUI smoke、完成状态和重启恢复均通过。
+
+### 2026-07-03 两轮 GUI 主流程与重启恢复
+
+默认 fake GUI smoke 覆盖真实 Electron renderer、preload、IPC、AppService、ContextBuilder 和 SQLite 路径：创建目标、生成阶段、确认计划、学习、提问、提交、评估、结算、Review 接受调整、第二轮计划和 session、重启恢复。
+
+## 当前风险
+
+* 真实 DeepSeek 完整两轮 GUI 流程尚未作为自动测试运行；当前策略是先跑单次合约测试，再人工验收完整流程。
+* Today 新闭环已接入开始/完成 session，但提问、提交评估、下一步建议、复盘调整和长文本切割尚未接回新 `daily_guide_block` 主流程。
+* 旧 Plan 页面 UI 已从 renderer 删除，但底层旧 plan 数据结构仍是 session 复用路径的一部分；后续清理必须先替换 `daily_guide_block -> daily_plan_block` 的执行映射。
+* `docs/` 中仍保留若干旧产品/UI设计文档，作为历史参考而非当前默认规范。新任务优先读取 `AGENTS.md` 映射的专题文档。
+* `docs/archive/PROJECT_MEMORY_FULL_2026-07-03.md` 是完整历史归档，内容可能包含过时测试输出和旧 UI 状态。
+
+## 推荐下一步
+
+1. 下一步优先把提问、提交评估、下一步建议接到当前 `daily_guide_block`，注意问题分支不能替代当前主线。
+2. 再接入复盘调整和长文本切割保存。
+3. 新功能开发前读取 `AGENTS.md`、本文件和对应专题文档。
+4. 完成有意义任务后，只把新的当前事实和关键决策追加到本文件；大段日志放入归档或具体报告，不再膨胀本入口文件。

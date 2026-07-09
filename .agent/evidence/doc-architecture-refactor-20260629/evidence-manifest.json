@@ -1,0 +1,36 @@
+﻿{
+    "taskId":  "doc-architecture-refactor-20260629",
+    "startedAt":  "2026-06-29T00:00:00+08:00",
+    "finishedAt":  "2026-06-29T22:03:13+08:00",
+    "workingDirectory":  "D:\\work\\study_plugin",
+    "executor":  "Codex",
+    "commands":  [
+                     {
+                         "name":  "doc-structure-check",
+                         "exitCode":  0
+                     },
+                     {
+                         "name":  "routing-check",
+                         "exitCode":  0
+                     },
+                     {
+                         "name":  "git-diff-check",
+                         "exitCode":  0
+                     }
+                 ],
+    "evidenceFiles":  [
+                          "changed-during-task.txt",
+                          "diff-name-status.txt",
+                          "diff-stat.txt",
+                          "doc-structure-check.exitcode",
+                          "doc-structure-check.log",
+                          "git-diff-check.exitcode",
+                          "git-diff-check.log",
+                          "post-status.txt",
+                          "post-untracked.txt",
+                          "pre-status.txt",
+                          "pre-untracked.txt",
+                          "routing-check.exitcode",
+                          "routing-check.log"
+                      ]
+}

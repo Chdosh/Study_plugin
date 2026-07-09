@@ -6,8 +6,6 @@ release/
 .idea/
 .vscode/
 *.log
-# Evidence logs must be tracked for agent workflow auditability
-!.agent/evidence/**/*.log
 *.db
 *.db-shm
 *.db-wal
@@ -15,7 +13,3 @@ release/
 .env.*
 coverage/
 *.tsbuildinfo
-.agent/runs/*
-!.agent/runs/.gitkeep
-.agent/state.json
-.agent/doctor/

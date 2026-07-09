@@ -1,4 +1,5 @@
 import type { Client } from '@libsql/client';
+import { runDatabaseMigrations } from './migrations';
 
 export async function bootstrapDatabase(client: Client): Promise<void> {
   await client.executeMultiple(`
@@ -23,6 +24,49 @@ export async function bootstrapDatabase(client: Client): Promise<void> {
       due_date TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS goal_intakes (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'collecting',
+      goal_id TEXT REFERENCES goals(id),
+      brief_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      confirmed_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS goal_intake_messages (
+      id TEXT PRIMARY KEY,
+      intake_id TEXT NOT NULL REFERENCES goal_intakes(id),
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS roadmap_stages (
+      id TEXT PRIMARY KEY,
+      goal_id TEXT NOT NULL REFERENCES goals(id),
+      title TEXT NOT NULL,
+      objective TEXT NOT NULL,
+      direction TEXT NOT NULL,
+      success_criteria TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS short_plan_days (
+      id TEXT PRIMARY KEY,
+      goal_id TEXT NOT NULL REFERENCES goals(id),
+      day_index INTEGER NOT NULL,
+      date TEXT,
+      title TEXT NOT NULL,
+      focus TEXT NOT NULL,
+      tasks_json TEXT NOT NULL,
+      expected_output TEXT NOT NULL,
+      success_criteria TEXT NOT NULL,
+      created_at TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS task_items (
@@ -75,6 +119,68 @@ export async function bootstrapDatabase(client: Client): Promise<void> {
       success_check TEXT NOT NULL,
       fallback TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'planned',
+      position INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS daily_guides (
+      id TEXT PRIMARY KEY,
+      goal_id TEXT NOT NULL REFERENCES goals(id),
+      plan_id TEXT NOT NULL REFERENCES daily_plans(id),
+      date TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      week_focus TEXT NOT NULL DEFAULT '',
+      today_goal TEXT NOT NULL,
+      deliverables_json TEXT NOT NULL,
+      boundaries_json TEXT NOT NULL,
+      acceptance_criteria_json TEXT NOT NULL,
+      tomorrow_actions_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      confirmed_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS daily_guide_blocks (
+      id TEXT PRIMARY KEY,
+      guide_id TEXT NOT NULL REFERENCES daily_guides(id),
+      plan_block_id TEXT NOT NULL REFERENCES daily_plan_blocks(id),
+      title TEXT NOT NULL,
+      position INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS daily_guide_tasks (
+      id TEXT PRIMARY KEY,
+      guide_id TEXT NOT NULL REFERENCES daily_guides(id),
+      legacy_plan_block_id TEXT REFERENCES daily_plan_blocks(id),
+      title TEXT NOT NULL,
+      objective TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      estimated_min_minutes INTEGER NOT NULL,
+      estimated_target_minutes INTEGER NOT NULL,
+      estimated_max_minutes INTEGER NOT NULL,
+      deliverable TEXT NOT NULL,
+      done_when_json TEXT NOT NULL,
+      quick_hint TEXT NOT NULL,
+      evaluation_mode TEXT NOT NULL DEFAULT 'ai',
+      submission_policy TEXT NOT NULL DEFAULT 'once_after_task',
+      carryover_allowed INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'planned',
+      progress_percent INTEGER NOT NULL DEFAULT 0,
+      current_action_id TEXT,
+      next_start_point TEXT,
+      total_elapsed_minutes INTEGER NOT NULL DEFAULT 0,
+      position INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS daily_guide_actions (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES daily_guide_tasks(id),
+      title TEXT NOT NULL,
+      instruction TEXT NOT NULL,
+      checkpoint TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'planned',
+      progress_note TEXT,
+      completed_at TEXT,
       position INTEGER NOT NULL
     );
 
@@ -158,4 +264,6 @@ export async function bootstrapDatabase(client: Client): Promise<void> {
       updated_at TEXT NOT NULL
     );
   `);
+
+  await runDatabaseMigrations(client);
 }

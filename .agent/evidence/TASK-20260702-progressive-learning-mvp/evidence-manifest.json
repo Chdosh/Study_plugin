@@ -1,0 +1,80 @@
+﻿{
+    "taskId":  "TASK-20260702-progressive-learning-mvp",
+    "startedAt":  "2026-07-02T20:00:00+08:00",
+    "finishedAt":  "2026-07-02T20:41:44+08:00",
+    "workingDirectory":  "D:\\work\\study_plugin",
+    "executor":  "Codex",
+    "commands":  [
+                     {
+                         "name":  "build-1",
+                         "exitCode":  0
+                     },
+                     {
+                         "name":  "electron-dev-smoke",
+                         "exitCode":  1
+                     },
+                     {
+                         "name":  "electron-dev-smoke-2",
+                         "exitCode":  0
+                     },
+                     {
+                         "name":  "git-diff-check-1",
+                         "exitCode":  0
+                     },
+                     {
+                         "name":  "store-test-1",
+                         "exitCode":  0
+                     },
+                     {
+                         "name":  "test-all-1",
+                         "exitCode":  0
+                     },
+                     {
+                         "name":  "typecheck-1",
+                         "exitCode":  2
+                     },
+                     {
+                         "name":  "typecheck-2",
+                         "exitCode":  2
+                     },
+                     {
+                         "name":  "typecheck-3",
+                         "exitCode":  0
+                     },
+                     {
+                         "name":  "typecheck-final",
+                         "exitCode":  0
+                     }
+                 ],
+    "evidenceFiles":  [
+                          "build-1.exitcode",
+                          "build-1.log",
+                          "changed-during-task.txt",
+                          "diff-name-status.txt",
+                          "diff-stat.txt",
+                          "electron-dev-smoke.exitcode",
+                          "electron-dev-smoke.log",
+                          "electron-dev-smoke-2.exitcode",
+                          "electron-dev-smoke-2.log",
+                          "electron-dev-smoke-2.stderr.log",
+                          "electron-dev-smoke-2.stdout.log",
+                          "git-diff-check-1.exitcode",
+                          "git-diff-check-1.log",
+                          "post-status.txt",
+                          "post-untracked.txt",
+                          "pre-status.txt",
+                          "pre-untracked.txt",
+                          "store-test-1.exitcode",
+                          "store-test-1.log",
+                          "test-all-1.exitcode",
+                          "test-all-1.log",
+                          "typecheck-1.exitcode",
+                          "typecheck-1.log",
+                          "typecheck-2.exitcode",
+                          "typecheck-2.log",
+                          "typecheck-3.exitcode",
+                          "typecheck-3.log",
+                          "typecheck-final.exitcode",
+                          "typecheck-final.log"
+                      ]
+}

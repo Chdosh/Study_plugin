@@ -1,0 +1,73 @@
+﻿{
+    "taskId":  "TASK-20260629-float-window-sync",
+    "startedAt":  "2026-06-29T21:01:58.8741466+08:00",
+    "finishedAt":  "2026-06-29T21:14:31.6631308+08:00",
+    "workingDirectory":  "D:\\work\\study_plugin",
+    "executor":  "Codex",
+    "commands":  [
+                     {
+                         "exitCode":  1,
+                         "command":  "npm.cmd test -- src/renderer/src/float-behavior.test.ts",
+                         "name":  "red float behavior test (sandbox)"
+                     },
+                     {
+                         "exitCode":  1,
+                         "command":  "npm.cmd test -- src/renderer/src/float-behavior.test.ts",
+                         "name":  "red float behavior test (escalated)"
+                     },
+                     {
+                         "exitCode":  0,
+                         "command":  "npm.cmd test -- src/renderer/src/float-behavior.test.ts",
+                         "name":  "green float behavior test"
+                     },
+                     {
+                         "exitCode":  0,
+                         "command":  "npm.cmd run typecheck",
+                         "name":  "typecheck"
+                     },
+                     {
+                         "exitCode":  0,
+                         "command":  "npm.cmd test",
+                         "name":  "all tests"
+                     },
+                     {
+                         "exitCode":  0,
+                         "command":  "npm.cmd run build",
+                         "name":  "build"
+                     },
+                     {
+                         "exitCode":  1,
+                         "command":  "rg -n \"DEBUG-\" src",
+                         "name":  "debug marker check",
+                         "note":  "Exit code 1 means no matches for ripgrep."
+                     }
+                 ],
+    "evidenceFiles":  [
+                          "build.exitcode",
+                          "build.log",
+                          "changed-during-task.txt",
+                          "debug-marker-check.exitcode",
+                          "debug-marker-check.log",
+                          "diff-name-status.exitcode",
+                          "diff-name-status.txt",
+                          "diff-stat.exitcode",
+                          "diff-stat.txt",
+                          "green-float-behavior.exitcode",
+                          "green-float-behavior.log",
+                          "post-status.exitcode",
+                          "post-status.txt",
+                          "post-untracked.exitcode",
+                          "post-untracked.txt",
+                          "pre-status.txt",
+                          "pre-untracked.txt",
+                          "red-float-behavior.exitcode",
+                          "red-float-behavior.log",
+                          "red-float-behavior-escalated.exitcode",
+                          "red-float-behavior-escalated.log",
+                          "started-at.txt",
+                          "test-all.exitcode",
+                          "test-all.log",
+                          "typecheck.exitcode",
+                          "typecheck.log"
+                      ]
+}

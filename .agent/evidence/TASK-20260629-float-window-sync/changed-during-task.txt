@@ -1,0 +1,14 @@
+﻿本任务实际改动范围：
+- src/renderer/src/float-behavior.ts
+- src/renderer/src/float-behavior.test.ts
+- src/renderer/src/float-main.tsx
+- src/renderer/src/main.tsx
+- src/shared/types.ts
+- src/preload/index.ts
+- src/main/ipc.ts
+- docs/PROJECT_MEMORY.md
+- .agent/DELIVERY.md
+- .agent/STATUS.json
+- .agent/evidence/TASK-20260629-float-window-sync/
+
+说明：任务开始前工作区已存在大量 modified/deleted/untracked 文件，pre-status.txt 和 pre-untracked.txt 已记录基线。本任务没有执行 reset、restore、checkout、clean、stash 或 commit。

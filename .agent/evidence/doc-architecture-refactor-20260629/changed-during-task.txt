@@ -1,0 +1,13 @@
+﻿=> ?? .agent/WORKFLOW.md
+=> ?? .agent/evidence/doc-architecture-refactor-20260629/doc-structure-check.exitcode
+=> ?? .agent/evidence/doc-architecture-refactor-20260629/git-diff-check.exitcode
+=> ?? .agent/evidence/doc-architecture-refactor-20260629/pre-status.txt
+=> ?? .agent/evidence/doc-architecture-refactor-20260629/pre-untracked.txt
+=> ?? .agent/evidence/doc-architecture-refactor-20260629/routing-check.exitcode
+=> ?? docs/AI_AND_DATA_RULES.md
+=> ?? docs/ARCHITECTURE.md
+=> ?? docs/PRODUCT_SPEC.md
+=> ?? docs/REFERENCES.md
+=> ?? docs/SECURITY_AND_PRIVACY.md
+=> ?? docs/TESTING_AND_MIGRATIONS.md
+=> ?? docs/UI_GUIDELINES.md
