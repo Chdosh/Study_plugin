@@ -108,6 +108,29 @@ describe('normalizeDailyPlanOutput', () => {
     });
   });
 
+  it('binds the only available task when the model rewrites the task title', () => {
+    const output = normalizeDailyPlanOutput({
+      raw: {
+        blocks: [
+          {
+            taskTitle: '继续练习响应头配置',
+            objective: '选择合适缓存响应头',
+            action: '写出 HTML 和带 hash 静态资源的缓存策略'
+          }
+        ]
+      },
+      windows: [{ start: '20:00', end: '20:30' }],
+      tasks: [tasks[0]],
+      blockMinutes: 10
+    });
+
+    expect(output.blocks[0]).toMatchObject({
+      taskTitle: '学习 TypeScript 泛型',
+      expectedOutput: '能解释 extends 约束并写出一个函数示例',
+      difficulty: 'foundation'
+    });
+  });
+
   it('falls back to local task slices when the model omits blocks', () => {
     const output = normalizeDailyPlanOutput({
       raw: {

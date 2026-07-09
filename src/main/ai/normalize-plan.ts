@@ -38,7 +38,9 @@ export function normalizeDailyPlanOutput(params: NormalizePlanParams): DailyPlan
       '任务',
       '任务标题'
     ]);
-    const matchedTask = taskTitle ? taskByTitle.get(taskTitle) : undefined;
+    const matchedTask = (taskTitle ? taskByTitle.get(taskTitle) : undefined) ?? (
+      params.tasks.length === 1 ? params.tasks[0] : undefined
+    );
     const durationMinutes =
       pickNumber(rawBlock, ['durationMinutes', 'duration_minutes', 'duration', 'minutes', '时长', '分钟']) ??
       params.blockMinutes;
