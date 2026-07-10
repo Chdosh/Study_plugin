@@ -834,6 +834,69 @@ export class StudyStore {
     return rows.map(mapKnowledgeItem);
   }
 
+  async auditRuntimeConsistency(): Promise<{
+    consistent: boolean;
+    fixed: string[];
+    conflicts: Array<{ field: string; expected: string; actual: string }>;
+  }> {
+    const fixed: string[] = [];
+    const conflicts: Array<{ field: string; expected: string; actual: string }> = [];
+    const stateRows = await this.db.select().from(learningRuntimeStates).limit(1);
+    if (stateRows.length === 0) return { consistent: true, fixed, conflicts };
+    const state = stateRows[0];
+    const now = nowIso();
+
+    if (state.activeGoalId) {
+      const goalRows = await this.db.select({ id: goals.id, status: goals.status }).from(goals).where(eq(goals.id, state.activeGoalId)).limit(1);
+      if (goalRows.length === 0 || goalRows[0].status !== 'active') {
+        const activeGoalRows = await this.db.select({ id: goals.id }).from(goals).where(eq(goals.status, 'active')).limit(1);
+        if (activeGoalRows.length === 1) {
+          await this.db.update(learningRuntimeStates).set({ activeGoalId: activeGoalRows[0].id, updatedAt: now });
+          fixed.push(`activeGoalId → ${activeGoalRows[0].id}`);
+        } else {
+          conflicts.push({ field: 'activeGoalId', expected: 'an active goal', actual: state.activeGoalId });
+        }
+      }
+    }
+
+    if (state.activeStageId && state.activeGoalId) {
+      const stageRows = await this.db.select({ id: roadmapStages.id, goalId: roadmapStages.goalId, status: roadmapStages.status })
+        .from(roadmapStages).where(eq(roadmapStages.id, state.activeStageId)).limit(1);
+      if (stageRows.length === 0 || stageRows[0].goalId !== state.activeGoalId || stageRows[0].status !== 'active') {
+        const activeStageRows = await this.db.select({ id: roadmapStages.id })
+          .from(roadmapStages).where(and(eq(roadmapStages.goalId, state.activeGoalId), eq(roadmapStages.status, 'active'))).limit(1);
+        if (activeStageRows.length === 1) {
+          await this.db.update(learningRuntimeStates).set({ activeStageId: activeStageRows[0].id, updatedAt: now });
+          fixed.push(`activeStageId → ${activeStageRows[0].id}`);
+        } else {
+          conflicts.push({ field: 'activeStageId', expected: 'active stage for goal', actual: state.activeStageId });
+        }
+      }
+    }
+
+    if (state.activeDailyTaskId) {
+      const taskRows = await this.db.select({ id: dailyGuideTasks.id }).from(dailyGuideTasks).where(eq(dailyGuideTasks.id, state.activeDailyTaskId)).limit(1);
+      if (taskRows.length === 0) {
+        await this.db.update(learningRuntimeStates).set({ activeDailyTaskId: null, updatedAt: now });
+        fixed.push('activeDailyTaskId → null');
+      }
+    }
+
+    if (state.activeStepId) {
+      const actionRows = await this.db.select({ id: dailyGuideActions.id, taskId: dailyGuideActions.taskId })
+        .from(dailyGuideActions).where(eq(dailyGuideActions.id, state.activeStepId)).limit(1);
+      if (actionRows.length === 0) {
+        await this.db.update(learningRuntimeStates).set({ activeStepId: null, updatedAt: now });
+        fixed.push('activeStepId → null');
+      } else if (state.activeDailyTaskId && actionRows[0].taskId !== state.activeDailyTaskId) {
+        await this.db.update(learningRuntimeStates).set({ activeStepId: null, updatedAt: now });
+        fixed.push('activeStepId → null (task mismatch)');
+      }
+    }
+
+    return { consistent: conflicts.length === 0, fixed, conflicts };
+  }
+
   async getReviewWorthyKnowledgeItems(goalId: string, minOccurrences = 2): Promise<KnowledgeItem[]> {
     const rows = await this.db
       .select()
