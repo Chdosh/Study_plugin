@@ -19,7 +19,9 @@ export function registerIpcHandlers(appService: AppService): void {
     appService.confirmDailyGuide(payload.guideId)
   );
   ipcMain.handle(ipcChannels.guidesArchiveTodayAndRestart, () => appService.archiveTodayAndRestart());
-  ipcMain.handle(ipcChannels.guidesPrepareCurrentLearningDay, () => appService.prepareCurrentLearningDay());
+  ipcMain.handle(ipcChannels.guidesPrepareCurrentLearningDay, (_event, payload) =>
+    appService.prepareCurrentLearningDay(payload?.forceRetry)
+  );
   ipcMain.handle(ipcChannels.guidesStartNextSession, (_event, payload) => appService.startNextSession(payload?.goalId));
   ipcMain.handle(ipcChannels.guidesGenerateRollingPlan, (_event, payload) =>
     appService.generateRollingPlan(payload.goalId)
@@ -50,6 +52,9 @@ export function registerIpcHandlers(appService: AppService): void {
   );
   ipcMain.handle(ipcChannels.learningSubmitResult, (_event, payload) =>
     appService.submitLearningResult(payload.content, payload?.promptProfileId)
+  );
+  ipcMain.handle(ipcChannels.learningRetrySubmissionEvaluation, (_event, payload) =>
+    appService.retrySubmissionEvaluation(payload.submissionId, payload?.promptProfileId)
   );
   ipcMain.handle(ipcChannels.learningDecideAdjustment, (_event, payload) =>
     appService.decidePlanAdjustment(payload.proposalId, payload.status)

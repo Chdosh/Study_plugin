@@ -25,6 +25,7 @@ export const ipcChannels = {
   learningAskQuestion: 'learning:askQuestion',
   learningResolveQuestion: 'learning:resolveQuestion',
   learningSubmitResult: 'learning:submitResult',
+  learningRetrySubmissionEvaluation: 'learning:retrySubmissionEvaluation',
   learningDecideAdjustment: 'learning:decideAdjustment',
   reviewsGenerate: 'reviews:generate',
   reviewsGetLatest: 'reviews:getLatest',
