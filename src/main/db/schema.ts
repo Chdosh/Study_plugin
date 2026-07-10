@@ -367,6 +367,26 @@ export const learningEvaluations = sqliteTable('learning_evaluations', {
   createdAt: text('created_at').notNull()
 });
 
+export const knowledgeItemEvidence = sqliteTable(
+  'knowledge_item_evidence',
+  {
+    id: text('id').primaryKey(),
+    knowledgeItemId: text('knowledge_item_id')
+      .notNull()
+      .references(() => knowledgeItems.id),
+    sourceType: text('source_type', { enum: ['misconception', 'weakness', 'insight', 'correction'] }).notNull(),
+    sourceId: text('source_id'),
+    submissionId: text('submission_id').references(() => learningSubmissions.id),
+    evaluationId: text('evaluation_id').references(() => learningEvaluations.id),
+    taskId: text('task_id').references(() => dailyGuideTasks.id),
+    createdAt: text('created_at').notNull()
+  },
+  (table) => ({
+    uniqueEvaluationEvidence: uniqueIndex('knowledge_item_evidence_evaluation_unique')
+      .on(table.knowledgeItemId, table.evaluationId)
+  })
+);
+
 export const nextStepDecisions = sqliteTable('next_step_decisions', {
   id: text('id').primaryKey(),
   evaluationId: text('evaluation_id')
