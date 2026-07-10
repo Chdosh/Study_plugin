@@ -33,15 +33,15 @@ export function ReviewPage({
   hasApiKey: boolean;
   onDecideAdjustment: (proposalId: string, status: 'accepted' | 'rejected') => Promise<void>;
   onGenerateRollingPlan?: () => Promise<void>;
-  onApplyPlanAdjustments?: (adjustments: ReviewResult['planAdjustments']) => Promise<void>;
+  onApplyPlanAdjustments?: (adjustments: ReviewResult['planAdjustments']) => Promise<number>;
 }): JSX.Element {
   const [generating, setGenerating] = useState(false);
   const [applying, setApplying] = useState(false);
-  const [adjustmentsApplied, setAdjustmentsApplied] = useState(false);
+  const [adjustmentApplyResult, setAdjustmentApplyResult] = useState<'idle' | 'applied' | 'none'>('idle');
   const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
 
   useEffect(() => {
-    setAdjustmentsApplied(false);
+    setAdjustmentApplyResult('idle');
   }, [review?.reviewId]);
 
   useEffect(() => {
@@ -213,7 +213,11 @@ export function ReviewPage({
           <section className="surface review-adjustment-card">
             <h3><Lightbulb size={16} /> 计划调整建议</h3>
             <p className="muted">
-              {adjustmentsApplied ? '调整建议已应用到尚未执行的学习单元。' : 'AI 建议对尚未执行的学习单元做以下调整：'}
+              {adjustmentApplyResult === 'applied'
+                ? '调整建议已应用到尚未执行的学习单元。'
+                : adjustmentApplyResult === 'none'
+                  ? '没有可应用的学习单元；目标单元可能已锁定、已执行或不再存在。'
+                  : 'AI 建议对尚未执行的学习单元做以下调整：'}
             </p>
             <div className="adjustment-items">
               {review.planAdjustments.map((adj, idx) => (
@@ -229,16 +233,21 @@ export function ReviewPage({
               <button
                 className="primary-action"
                 type="button"
-                disabled={applying || adjustmentsApplied}
+                disabled={applying || adjustmentApplyResult !== 'idle'}
                 onClick={() => {
                   setApplying(true);
                   void onApplyPlanAdjustments(review.planAdjustments)
-                    .then(() => setAdjustmentsApplied(true))
+                    .then((updatedCount) => setAdjustmentApplyResult(updatedCount > 0 ? 'applied' : 'none'))
+                    .catch(() => setAdjustmentApplyResult('idle'))
                     .finally(() => setApplying(false));
                 }}
               >
                 <CheckCircle2 size={16} />
-                {adjustmentsApplied ? '已应用调整' : '采纳调整建议'}
+                {adjustmentApplyResult === 'applied'
+                  ? '已应用调整'
+                  : adjustmentApplyResult === 'none'
+                    ? '没有可应用项'
+                    : '采纳调整建议'}
               </button>
             </div>
           </section>

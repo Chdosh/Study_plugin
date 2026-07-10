@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, SendHorizontal, Sparkles, Upload, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, RefreshCw, SendHorizontal, Sparkles, Upload, X } from 'lucide-react';
 import type {
   AppSettings,
   LearningRuntimeSnapshot,
@@ -38,7 +38,8 @@ export function AiDrawer({
   onTeachStep,
   onAskQuestion,
   onResolveQuestion,
-  onSubmitResult
+  onSubmitResult,
+  onRetrySubmissionEvaluation
 }: {
   show: boolean;
   initialTab: 'question' | 'submission';
@@ -51,6 +52,7 @@ export function AiDrawer({
   onAskQuestion: (question: string) => Promise<void>;
   onResolveQuestion: (threadId: string) => Promise<void>;
   onSubmitResult: (content: string) => Promise<void>;
+  onRetrySubmissionEvaluation: (submissionId: string) => Promise<void>;
 }): JSX.Element | null {
   const [question, setQuestion] = useState('');
   const [submission, setSubmission] = useState('');
@@ -60,6 +62,9 @@ export function AiDrawer({
   const activeThread = learningState?.questionThread ?? null;
   const latestEvaluation = submissionResult?.evaluation ?? learningState?.latestEvaluation ?? null;
   const latestDecision = submissionResult?.decision ?? learningState?.latestDecision ?? null;
+  const pendingSubmission = learningState?.latestSubmission?.evaluationStatus !== 'completed'
+    ? learningState?.latestSubmission ?? null
+    : null;
 
   useEffect(() => {
     if (show) {
@@ -152,7 +157,21 @@ export function AiDrawer({
 
             {activeTab === 'submission' && (
               <div className="submission-panel">
-                {submitted && latestEvaluation ? (
+                {pendingSubmission ? (
+                  <div className="submission-complete-state">
+                    <AlertCircle size={24} />
+                    <strong>{pendingSubmission.evaluationStatus === 'failed' ? '提交已保存，评价失败' : '提交已保存，等待评价'}</strong>
+                    <p>你的提交内容仍保存在本地。重新评价会复用原提交，不会创建重复记录。</p>
+                    <button
+                      className="primary-action full"
+                      type="button"
+                      onClick={() => void onRetrySubmissionEvaluation(pendingSubmission.id)}
+                    >
+                      <RefreshCw size={16} />
+                      重新评价
+                    </button>
+                  </div>
+                ) : submitted && latestEvaluation ? (
                   <div className="submission-complete-state">
                     <CheckCircle2 size={24} />
                     <strong>已提交并完成评估</strong>
