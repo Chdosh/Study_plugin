@@ -9,6 +9,7 @@ import {
   HelpCircle,
   Pause,
   Play,
+  RefreshCw,
   SkipForward
 } from 'lucide-react';
 import type {
@@ -59,6 +60,7 @@ export function StudyPage({
   onAskQuestion,
   onResolveQuestion,
   onSubmitResult,
+  onRetrySubmissionEvaluation,
   onOpenDrawer,
   onGenerateRollingPlan
 }: {
@@ -80,6 +82,7 @@ export function StudyPage({
   onAskQuestion: (question: string) => Promise<void>;
   onResolveQuestion: (threadId: string) => Promise<void>;
   onSubmitResult: (content: string) => Promise<void>;
+  onRetrySubmissionEvaluation: (submissionId: string) => Promise<void>;
   onOpenDrawer: (tab?: 'question' | 'submission') => void;
   onGenerateRollingPlan: () => Promise<void>;
 }): JSX.Element {
@@ -90,6 +93,9 @@ export function StudyPage({
   const currentTask = currentSelection?.task ?? null;
   const taskActions = currentTask?.actions ?? [];
   const currentStep = learningState?.dailyGuideAction ?? null;
+  const pendingSubmission = learningState?.latestSubmission?.evaluationStatus !== 'completed'
+    ? learningState?.latestSubmission ?? null
+    : null;
   const activeActionIndex = taskActions.findIndex((a) =>
     a.status !== 'done' && a.status !== 'skipped'
   );
@@ -112,6 +118,8 @@ export function StudyPage({
   const taskObjective = currentTask?.objective ?? '';
   const stepTitle = allTasksDone && !currentTask
     ? '今日任务已全部完成'
+    : pendingSubmission
+      ? '当前提交尚未完成评价'
     : taskDone
       ? '主任务已完成'
     : allActionsDone
@@ -119,6 +127,8 @@ export function StudyPage({
     : currentAction?.title ?? '当前步骤';
   const stepInstruction = allTasksDone && !currentTask
     ? '当前批次学习任务已全部完成。请前往复盘页查看学习总结，复盘后可根据当前学习路径生成下一批任务。'
+    : pendingSubmission
+      ? '你的提交已经保存在本地，但评价尚未完成。可以重新评价，系统会复用原提交记录。'
     : taskDone
       ? nextPlannedTask
         ? `当前主任务已经通过评价。下一任务：${nextPlannedTask.title}`
@@ -128,6 +138,8 @@ export function StudyPage({
     : currentAction?.instruction ?? '按当前步骤说明推进。';
   const stepCriteria = taskDone
     ? submissionResult?.evaluation.feedback ?? learningState?.latestEvaluation?.feedback ?? currentTask?.doneWhen.join('\n') ?? ''
+    : pendingSubmission
+      ? currentTask?.doneWhen.join('\n') ?? ''
     : allActionsDone
       ? currentTask?.doneWhen.join('\n') ?? ''
     : currentAction?.checkpoint ?? '';
@@ -330,7 +342,17 @@ export function StudyPage({
       <div className="study-fixed-action-bar">
         <div className="bar-left" />
         <div className="bar-right">
-          {allTasksDone ? (
+          {pendingSubmission ? (
+            <div className="bar-right-group">
+              <span className="micro-hint" style={{ margin: 0 }}>
+                提交已保存，评价未完成。
+              </span>
+              <button className="primary-action" type="button" onClick={() => void onRetrySubmissionEvaluation(pendingSubmission.id)}>
+                <RefreshCw size={16} />
+                重新评价
+              </button>
+            </div>
+          ) : allTasksDone ? (
             <div className="bar-right-group">
               <span className="micro-hint" style={{ margin: 0 }}>
                 <CheckCircle2 size={14} />

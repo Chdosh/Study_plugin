@@ -7,6 +7,7 @@ import {
   Clock3,
   FileText,
   ListChecks,
+  Lock,
   Play,
   RotateCcw,
   SendHorizontal,
@@ -38,7 +39,8 @@ export function OverviewPage({
   onGenerateLayeredPlan,
   onConfirmGuide,
   onArchiveTodayAndRestart,
-  onGenerateRollingPlan
+  onGenerateRollingPlan,
+  onPrepareCurrentLearningDay
 }: {
   settings: AppSettings;
   onboarding: GoalIntakeState | null;
@@ -52,6 +54,7 @@ export function OverviewPage({
   onConfirmGuide: (guideId: string) => Promise<void>;
   onArchiveTodayAndRestart: () => Promise<void>;
   onGenerateRollingPlan: () => Promise<void>;
+  onPrepareCurrentLearningDay: () => Promise<void>;
 }): JSX.Element {
   const [message, setMessage] = useState('');
   const [briefDraft, setBriefDraft] = useState<GoalBrief | null>(null);
@@ -222,9 +225,20 @@ export function OverviewPage({
           )}
           {goal && !guide && !(onboarding?.intake.status === 'ready' && briefDraft) && (
             hasApiKey ? (
-              <button className="primary-action full" type="button" disabled={!hasApiKey} onClick={() => void onGenerateLayeredPlan(goal.id)}>
+              <button
+                className="primary-action full"
+                type="button"
+                disabled={!hasApiKey}
+                onClick={() => void (todayGuide?.todayState === 'generation_failed'
+                  ? onPrepareCurrentLearningDay()
+                  : onGenerateLayeredPlan(goal.id))}
+              >
                 <Sparkles size={16} />
-                {onboarding?.intake.status === 'confirmed' ? '重新生成当日计划' : '确认并生成计划'}
+                {todayGuide?.todayState === 'generation_failed'
+                  ? '重新生成当前学习单元'
+                  : onboarding?.intake.status === 'confirmed'
+                    ? '重新生成当日计划'
+                    : '确认并生成计划'}
               </button>
             ) : (
               <p className="micro-hint" style={{ margin: '0 0 8px', textAlign: 'center' }}>
@@ -269,8 +283,24 @@ export function OverviewPage({
       <div className="overview-main">
         <header className="page-title-block">
           <h1>{goal?.title ?? '学习概览'}</h1>
-          <p>{currentUnitLabel ? `${currentUnitLabel} · ${currentUnitTitle}` : guide.todayGoal}</p>
+          <p>
+            {currentUnitLabel ? `${currentUnitLabel} · ${currentUnitTitle}` : guide.todayGoal}
+            {currentShortPlanDay?.locked && <span className="locked-badge"><Lock size={12} /> 已锁定</span>}
+          </p>
         </header>
+
+        {todayGuide?.todayState === 'generation_failed' && (
+          <section className="surface generation-retry-card" aria-live="polite">
+            <div>
+              <strong>当前学习单元尚未生成成功</strong>
+              <p>已保留原学习单元和日期，可以安全重试，不会跳过或覆盖历史记录。</p>
+            </div>
+            <button className="primary-action" type="button" onClick={() => void onPrepareCurrentLearningDay()}>
+              <RotateCcw size={16} />
+              重新生成执行稿
+            </button>
+          </section>
+        )}
 
         {/* 学习路径 */}
         {roadmap.length > 0 && (
