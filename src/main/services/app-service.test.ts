@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { AiClient } from '../ai/ai-client';
-import { aiReviews, dailyGuides, goals, shortPlanDays } from '../db/schema';
+import { aiReviews, dailyGuides, goals, learningEvaluations, learningSubmissions, shortPlanDays } from '../db/schema';
 import { createDatabase, type DatabaseClient } from '../db/client';
 import type { Database } from '../db/client';
 import type { InferSelectModel } from 'drizzle-orm';
@@ -48,6 +48,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   client.close();
   await removeTempDir(tmpPath);
@@ -233,7 +234,7 @@ describe('AppService progressive AI flow', () => {
   });
 
   it('generates a daily review via ReflectionAgent', async () => {
-    const date = new Date().toISOString().slice(0, 10);
+    const date = todayIso();
     installDeterministicAi();
 
     await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
@@ -573,6 +574,121 @@ describe('AppService progressive AI flow', () => {
     expect(aiCalls.filter((c) => c.operation === 'submission_evaluation')).toHaveLength(1);
   });
 
+  it('keeps a failed next-day guide recoverable across restart and orphaned lock', async () => {
+    installDeterministicAi({ failDailyGuideAttempts: [2] });
+
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+    await store.completeLearningDay(layered.guide.id);
+
+    const failed = await appService.startNextSession();
+    expect(failed.todayState).toBe('generation_failed');
+    expect(await appService.getTodayState()).toBe('generation_failed');
+
+    const failedDay = (await appService.listTodayGuide()).shortPlan.find((day) => day.sessionStatus === 'active');
+    expect(failedDay).toBeTruthy();
+    expect(await store.acquireGenerationLock(`daily_guide:${confirmed.goal.id}`)).toBe(true);
+
+    appService = new AppService(store, createFakeSettingsService(), () => null);
+    const retried = await appService.prepareCurrentLearningDay(true);
+    expect(retried.todayState).toBe('active');
+    expect(retried.result?.guide.shortPlanDayId).toBe(failedDay!.id);
+  });
+
+  it('uses the local calendar date for generated guides near UTC midnight', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-10T16:30:00.000Z'));
+    installDeterministicAi();
+
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+
+    expect(layered.guide.date).toBe('2026-07-11');
+    expect(layered.shortPlan[0].date).toBe('2026-07-11');
+
+    await store.completeLearningDay(layered.guide.id);
+    const next = await appService.startNextSession();
+    expect(next.result?.guide.date).toBe('2026-07-11');
+  });
+
+  it('recovers a failed evaluation by reusing the saved submission', async () => {
+    const aiCalls = installDeterministicAi({ failEvaluationAttempts: 1 });
+
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+    await appService.startSession(layered.guide.tasks[0].id);
+
+    await expect(appService.submitLearningResult('这份提交必须先保存。')).rejects.toThrow('请重试评价');
+
+    const failedState = await appService.getLearningState();
+    expect(failedState.latestSubmission?.evaluationStatus).toBe('failed');
+    const failedSubmissionId = failedState.latestSubmission!.id;
+
+    // Simulate an application restart with an orphaned persistent evaluation lock.
+    expect(await store.acquireGenerationLock(`evaluation:${failedSubmissionId}`)).toBe(true);
+    appService = new AppService(store, createFakeSettingsService(), () => null);
+
+    const retried = await appService.retrySubmissionEvaluation(failedSubmissionId);
+    expect(retried.submission.id).toBe(failedSubmissionId);
+    expect(retried.submission.evaluationStatus).toBe('completed');
+    expect(aiCalls.filter((c) => c.operation === 'submission_evaluation')).toHaveLength(2);
+
+    const submissionRows = await db.select().from(learningSubmissions);
+    const evaluationRows = await db.select().from(learningEvaluations);
+    expect(submissionRows).toHaveLength(1);
+    expect(evaluationRows).toHaveLength(1);
+  });
+
+  it('deduplicates concurrent retries for the same failed submission', async () => {
+    const aiCalls = installDeterministicAi({ failEvaluationAttempts: 1 });
+
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+    await appService.startSession(layered.guide.tasks[0].id);
+
+    await expect(appService.submitLearningResult('并发重试也只能复用这一条提交。')).rejects.toThrow('请重试评价');
+    const failedSubmission = (await appService.getLearningState()).latestSubmission!;
+
+    const [first, second] = await Promise.all([
+      appService.retrySubmissionEvaluation(failedSubmission.id),
+      appService.retrySubmissionEvaluation(failedSubmission.id)
+    ]);
+
+    expect(first).toBe(second);
+    expect(first.submission.id).toBe(failedSubmission.id);
+    expect(aiCalls.filter((c) => c.operation === 'submission_evaluation')).toHaveLength(2);
+    expect(await db.select().from(learningSubmissions)).toHaveLength(1);
+    expect(await db.select().from(learningEvaluations)).toHaveLength(1);
+  });
+
+  it('resolves knowledge against the evaluated task before advancing to the next task', async () => {
+    installDeterministicAi();
+
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+    await appService.startSession(layered.guide.tasks[0].id);
+    await store.recordKnowledgeItems({
+      goalId: confirmed.goal.id,
+      items: [{ key: layered.guide.tasks[0].title, summary: '第一个任务仍需验证', sourceType: 'weakness' }]
+    });
+
+    await appService.completeCurrentAction();
+    await appService.completeCurrentAction();
+    await appService.submitLearningResult('第一个任务的最终产出。');
+
+    const items = await store.getKnowledgeItemsForGoal({ goalId: confirmed.goal.id });
+    expect(items[0].status).toBe('resolved');
+  });
+
   it('allows the same onboarding content again after the dedup window expires', async () => {
     installDeterministicAi();
 
@@ -603,8 +719,10 @@ describe('AppService progressive AI flow', () => {
 });
 
 
-function installDeterministicAi(): Array<{ operation: string; user: string }> {
+function installDeterministicAi(options: { failEvaluationAttempts?: number; failDailyGuideAttempts?: number[] } = {}): Array<{ operation: string; user: string }> {
   const calls: Array<{ operation: string; user: string }> = [];
+  let evaluationAttempts = 0;
+  let dailyGuideAttempts = 0;
 
   vi.spyOn(AiClient.prototype, 'generateJson').mockImplementation(async (request) => {
     const operation = operationFromSystem(request.system);
@@ -675,6 +793,10 @@ function installDeterministicAi(): Array<{ operation: string; user: string }> {
     }
 
     if (operation === 'daily_guide') {
+      dailyGuideAttempts += 1;
+      if (options.failDailyGuideAttempts?.includes(dailyGuideAttempts)) {
+        throw new Error('Daily Guide schema validation failed: ZodError');
+      }
       return request.schema.parse({
         date: '2026-07-03',
         todayGoal: '今天把项目从“做过”推进到“能讲、能演示”。',
@@ -746,6 +868,10 @@ function installDeterministicAi(): Array<{ operation: string; user: string }> {
     }
 
     if (operation === 'submission_evaluation') {
+      evaluationAttempts += 1;
+      if (evaluationAttempts <= (options.failEvaluationAttempts ?? 0)) {
+        throw new Error('Submission evaluation timed out');
+      }
       return request.schema.parse({
         result: 'passed',
         mastery: 92,

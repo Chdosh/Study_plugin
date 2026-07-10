@@ -1,7 +1,8 @@
 import type { BrowserWindow } from 'electron';
 import { ipcChannels } from '../../shared/ipc';
+import { localDateIso } from '../../shared/date';
 import type { DailyGuideAgentOutput, NextStepDecisionAgentOutput, SubmissionEvaluationAgentOutput } from '../../shared/schemas';
-import type { AppSettings, DailyGuide, DailyGuideTask, DailyPlanBlock, GenerateRollingPlanResult, GoalBrief, Id, KnowledgeItem, KnowledgeItemStatus, LayeredPlanResult, PrepareCurrentLearningDayResult, PreviousLearningDayResult, ReviewResult, RoadmapStage, ShortPlanDay, StartNextSessionResult, StudySession, TodayGuideState, TodayState } from '../../shared/types';
+import type { AppSettings, DailyGuide, DailyGuideTask, DailyPlanBlock, GenerateRollingPlanResult, GoalBrief, Id, KnowledgeItem, KnowledgeItemStatus, LayeredPlanResult, LearningSubmission, PrepareCurrentLearningDayResult, PreviousLearningDayResult, ReviewResult, RoadmapStage, ShortPlanDay, StartNextSessionResult, StudySession, SubmissionEvaluationResult, TodayGuideState, TodayState } from '../../shared/types';
 import { AiClient, type AiCallMetrics } from '../ai/ai-client';
 import { CategorizedError } from '../ai/categorized-error';
 import {
@@ -451,7 +452,17 @@ export class AppService {
     const lockKey = `daily_guide:${goalId}`;
     if (this.generationLocks.has(lockKey)) return 'generating';
 
-    const hasAvailablePlanDay = await this.hasAvailableShortPlanDay(goalId, today.shortPlan);
+    const usedShortPlanDayIds = await this.store.getUsedShortPlanDayIds(goalId);
+    const hasRecoverablePlanDay = today.shortPlan.some((day) =>
+      day.sessionStatus === 'active' && !usedShortPlanDayIds.has(day.id)
+    );
+    if (hasRecoverablePlanDay) return 'generation_failed';
+
+    const hasAvailablePlanDay = today.shortPlan.some((day) =>
+      day.sessionStatus === 'pending' &&
+      day.date === null &&
+      !usedShortPlanDayIds.has(day.id)
+    );
     const guide = today.guide;
     if (guide) {
       if (guide.status === 'completed' || guide.sessionStatus === 'closed') {
@@ -474,7 +485,7 @@ export class AppService {
     );
   }
 
-  async prepareCurrentLearningDay(): Promise<PrepareCurrentLearningDayResult> {
+  async prepareCurrentLearningDay(forceRetry = false): Promise<PrepareCurrentLearningDayResult> {
     const today = await this.store.getActiveGuide(true);
     if (!today.goal) {
       return { todayState: 'needs_goal' };
@@ -486,6 +497,11 @@ export class AppService {
     // In-memory fast path (same process concurrent calls)
     const existingLock = this.generationLocks.get(lockKey);
     if (existingLock) return existingLock;
+
+    if (forceRetry) {
+      // 用户显式重试时，当前进程没有内存任务，因此持久锁只能来自已终止的旧进程。
+      await this.store.releaseGenerationLock(lockKey);
+    }
 
     // Cross-process / restarted lock (persistent)
     const acquired = await this.store.acquireGenerationLock(lockKey);
@@ -555,7 +571,7 @@ export class AppService {
     let dailyGuideMetrics: AiCallMetrics | undefined;
     try {
       dailyGuideOutput = await this.dailyGuideAgent.run({
-        date: new Date().toISOString().slice(0, 10),
+        date: todayIso(),
         windows: runtimeSettings.dailyStudyWindows,
         goal,
         brief,
@@ -569,7 +585,7 @@ export class AppService {
         traceId: dailyGuideTraceId,
         onMetrics: (m) => { dailyGuideMetrics = m; }
       });
-      const guideDate = new Date().toISOString().slice(0, 10);
+      const guideDate = todayIso();
       await this.store.saveAiReview({
         kind: 'daily_guide',
         date: guideDate,
@@ -587,7 +603,7 @@ export class AppService {
       if (dailyGuideMetrics) {
         dailyGuideMetrics = { ...dailyGuideMetrics, errorCategory: 'ai_failure' };
       }
-      const failDate = new Date().toISOString().slice(0, 10);
+      const failDate = todayIso();
       await this.store.saveAiReview({
         kind: 'daily_guide',
         date: failDate,
@@ -607,7 +623,7 @@ export class AppService {
 
     const result = await this.store.saveDailyGuideWithTransaction({
       goal,
-      date: new Date().toISOString().slice(0, 10),
+      date: todayIso(),
       windows: runtimeSettings.dailyStudyWindows,
       shortPlanDayId: targetDay.id,
       dailyGuide: dailyGuideOutput
@@ -648,7 +664,7 @@ export class AppService {
       }
       const activeGuideState = await this.store.getActiveGuide();
       const dailyGuideOutput = await this.dailyGuideAgent.run({
-        date: new Date().toISOString().slice(0, 10),
+        date: todayIso(),
         windows: runtimeSettings.dailyStudyWindows,
         goal,
         brief,
@@ -663,7 +679,7 @@ export class AppService {
       });
       const saved = await this.store.saveDailyGuideWithTransaction({
         goal,
-        date: new Date().toISOString().slice(0, 10),
+        date: todayIso(),
         windows: runtimeSettings.dailyStudyWindows,
         shortPlanDayId: existingStageDay.id,
         dailyGuide: dailyGuideOutput
@@ -726,7 +742,7 @@ export class AppService {
       }
       const activeGuideState = await this.store.getActiveGuide();
       const dailyGuideOutput = await this.dailyGuideAgent.run({
-        date: new Date().toISOString().slice(0, 10),
+        date: todayIso(),
         windows: runtimeSettings.dailyStudyWindows,
         goal,
         brief,
@@ -741,7 +757,7 @@ export class AppService {
       });
       const saved = await this.store.saveDailyGuideWithTransaction({
         goal,
-        date: new Date().toISOString().slice(0, 10),
+        date: todayIso(),
         windows: runtimeSettings.dailyStudyWindows,
         shortPlanDayId: firstDay.id,
         dailyGuide: dailyGuideOutput
@@ -1024,11 +1040,53 @@ export class AppService {
     }
     const active = await this.getActiveSession();
     const submission = await this.store.createSubmission(before.dailyGuideAction.id, active?.session.id ?? null, content);
+    return this.evaluateSavedSubmission(submission, promptProfileId);
+  }
+
+  retrySubmissionEvaluation(submissionId: Id, promptProfileId?: Id) {
+    return this.dedupe(
+      `retry-evaluation:${submissionId}`,
+      DEDUP_TTL_MS,
+      async () => {
+        const submission = await this.store.getSubmissionById(submissionId);
+        if (!submission) {
+          throw new CategorizedError('user_input_error', '找不到需要重试的提交记录。');
+        }
+        if (submission.evaluationStatus === 'completed') {
+          throw new CategorizedError('validation_error', '这条提交已经完成评价，无需重复评价。');
+        }
+        return this.evaluateSavedSubmission(submission, promptProfileId, true);
+      }
+    );
+  }
+
+  private async evaluateSavedSubmission(
+    submission: LearningSubmission,
+    promptProfileId?: Id,
+    resetExistingLock = false
+  ): Promise<SubmissionEvaluationResult> {
+    const before = await this.store.getLearningRuntimeSnapshot();
+    if (!before.dailyGuideAction || before.dailyGuideAction.id !== submission.dailyGuideActionId) {
+      throw new CategorizedError('validation_error', '当前学习位置与这条提交不一致，无法自动重试评价。');
+    }
+
+    const evaluationLockKey = `evaluation:${submission.id}`;
+    if (resetExistingLock) {
+      // 用户显式重试表示上一次尝试不再有效，同时清理进程异常退出后遗留的持久锁。
+      await this.store.releaseGenerationLock(evaluationLockKey);
+    }
+    const acquired = await this.store.acquireGenerationLock(evaluationLockKey);
+    if (!acquired) {
+      throw new CategorizedError('validation_error', '这条提交正在评价中，请稍后再试。');
+    }
+
+    try {
+      const active = await this.getActiveSession();
     const guideTask = before.dailyGuideTask;
     const activeGuideForEval = await this.store.getActiveGuide(true);
     const goalIdForEval = activeGuideForEval.goal?.id;
     const [evaluationContext, profile, runtimeSettings, evalKnowledge] = await Promise.all([
-      this.contextBuilder.build('evaluate_submission', { submission: content }),
+      this.contextBuilder.build('evaluate_submission', { submission: submission.content }),
       this.store.getPromptProfile(promptProfileId),
       this.settings.getRuntimeSettings(),
       goalIdForEval ? this.store.getKnowledgeItemsForGoal({ goalId: goalIdForEval, status: 'active', limit: 5 }) : Promise.resolve([])
@@ -1037,11 +1095,11 @@ export class AppService {
     let evaluationMetrics: AiCallMetrics | undefined;
     let evaluationOutput;
     if (guideTask?.evaluationMode === 'local') {
-      evaluationOutput = buildLocalSubmissionEvaluation(content, guideTask);
+      evaluationOutput = buildLocalSubmissionEvaluation(submission.content, guideTask);
     } else {
       try {
         evaluationOutput = await this.evaluationAgent.run({
-          submission: content,
+          submission: submission.content,
           context: evaluationContext.context,
           profile,
           settings: runtimeSettings,
@@ -1095,13 +1153,23 @@ export class AppService {
                 key: m.slice(0, 50),
                 summary: m,
                 sourceType: 'misconception' as const,
-                sourceId: submission.id
+                sourceId: submission.id,
+                evidence: {
+                  submissionId: submission.id,
+                  evaluationId: result.evaluation.id,
+                  taskId: guideTask?.id
+                }
               })),
               ...evaluationOutput.missingRequirements.map((m) => ({
                 key: m.slice(0, 50),
                 summary: m,
                 sourceType: 'weakness' as const,
-                sourceId: submission.id
+                sourceId: submission.id,
+                evidence: {
+                  submissionId: submission.id,
+                  evaluationId: result.evaluation.id,
+                  taskId: guideTask?.id
+                }
               }))
             ]
           });
@@ -1110,17 +1178,35 @@ export class AppService {
         // Knowledge recording is best-effort; never block the main evaluation flow.
       }
     }
+    if (evaluationOutput.result === 'passed' && evaluationOutput.misconceptions.length === 0) {
+      try {
+        if (goalIdForEval && guideTask) {
+          const resolveKeys = [...guideTask.doneWhen, guideTask.title].filter(Boolean);
+          await this.store.resolveKnowledgeItems(goalIdForEval, resolveKeys);
+        }
+      } catch {
+        // Knowledge resolution is best-effort; never block the main evaluation flow.
+      }
+    }
     if (result.decision.taskCompleted && active?.session) {
       this.focusMonitor.stop();
       const completedSession = await this.store.completeSession(active.session.id);
       await this.pushSessionState(completedSession);
 
-    const today = await this.store.getActiveGuide();
-    if (today.guide && today.guide.tasks.length > 0 && today.guide.tasks.every((t) => t.status === 'done')) {
-      await this.store.closeCurrentSession(today.guide.id);
+      const today = await this.store.getActiveGuide();
+      if (today.guide && today.guide.tasks.length > 0 && today.guide.tasks.every((t) => t.status === 'done')) {
+        await this.store.closeCurrentSession(today.guide.id);
+      }
     }
+      return {
+        submission: { ...submission, evaluationStatus: 'completed' },
+        evaluation: result.evaluation,
+        decision: result.decision,
+        nextAction: result.nextAction
+      };
+    } finally {
+      await this.store.releaseGenerationLock(evaluationLockKey);
     }
-    return result;
   }
 
   decidePlanAdjustment(proposalId: Id, status: 'accepted' | 'rejected') {
@@ -1144,11 +1230,7 @@ export class AppService {
 }
 
 function todayIso(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return localDateIso();
 }
 
 function buildLocalDecisionFromEvaluation(evaluation: SubmissionEvaluationAgentOutput): NextStepDecisionAgentOutput {
