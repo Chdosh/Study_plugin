@@ -19,10 +19,11 @@ import type {
   TodayGuideState,
   TeachStepResult
 } from '../../shared/types';
+import { localDateIso } from '../../shared/date';
 import './styles.css';
 
 
-const todayIso = new Date().toISOString().slice(0, 10);
+const todayIso = localDateIso();
 
 export default function App(): JSX.Element {
   const [view, setView] = useState<ViewKey>('overview');
@@ -91,13 +92,42 @@ export default function App(): JSX.Element {
   }
 
   async function submitResultAndSyncSession(content: string): Promise<void> {
-    const result = await window.studyApp.learning.submitResult(content);
-    setSubmissionResult(result);
-    setTeaching(null);
-    setQuestionAnswer(null);
+    try {
+      const result = await window.studyApp.learning.submitResult(content);
+      setSubmissionResult(result);
+      setTeaching(null);
+      setQuestionAnswer(null);
+    } finally {
+      await refresh();
+      await syncActiveSession();
+    }
+  }
 
-    await refresh();
-    await syncActiveSession();
+  async function runActionWithResult<T>(label: string, action: () => Promise<T>): Promise<T> {
+    setNotice(`${label}...`);
+    try {
+      const result = await action();
+      setBootError(null);
+      setNotice(`${label}完成`);
+      return result;
+    } catch (error) {
+      const message = toUserErrorMessage(error);
+      setBootError(message);
+      setNotice(message);
+      throw error;
+    }
+  }
+
+  async function retrySubmissionEvaluationAndSyncSession(submissionId: string): Promise<void> {
+    try {
+      const result = await window.studyApp.learning.retrySubmissionEvaluation(submissionId);
+      setSubmissionResult(result);
+      setTeaching(null);
+      setQuestionAnswer(null);
+    } finally {
+      await refresh();
+      await syncActiveSession();
+    }
   }
 
   useEffect(() => {
@@ -217,6 +247,15 @@ export default function App(): JSX.Element {
                 await refresh();
               })
             }
+            onPrepareCurrentLearningDay={() =>
+              runAction('重新生成当前学习单元', async () => {
+                const result = await window.studyApp.guides.prepareCurrentLearningDay(true);
+                await refresh();
+                if (result.todayState !== 'active') {
+                  throw new Error(result.errorMessage ?? '当前学习单元仍未生成成功，请稍后重试。');
+                }
+              })
+            }
           />
         )}
         {view === 'study' && (
@@ -331,6 +370,11 @@ export default function App(): JSX.Element {
                 await submitResultAndSyncSession(content);
               })
             }
+            onRetrySubmissionEvaluation={(submissionId) =>
+              runAction('重新评价提交', async () => {
+                await retrySubmissionEvaluationAndSyncSession(submissionId);
+              })
+            }
             onOpenDrawer={handleOpenDrawer}
             onGenerateRollingPlan={() =>
               runAction('生成下一批任务', async () => {
@@ -375,13 +419,16 @@ export default function App(): JSX.Element {
                 setView('study');
               })
             }
-            onApplyPlanAdjustments={(adjustments) =>
-              runAction('应用计划调整', async () => {
-                if (!todayGuide?.goal?.id) return;
-                await window.studyApp.reviews.applyAdjustments(todayGuide.goal.id, adjustments);
+            onApplyPlanAdjustments={async (adjustments) => {
+              return runActionWithResult('应用计划调整', async () => {
+                if (!todayGuide?.goal?.id) {
+                  throw new Error('没有活跃的学习目标。');
+                }
+                const updated = await window.studyApp.reviews.applyAdjustments(todayGuide.goal.id, adjustments);
                 await refresh();
-              })
-            }
+                return updated.length;
+              });
+            }}
           />
         )}
         {view === 'settings' && (
@@ -421,6 +468,11 @@ export default function App(): JSX.Element {
           onSubmitResult={(content) =>
             runAction('评估学习结果', async () => {
               await submitResultAndSyncSession(content);
+            })
+          }
+          onRetrySubmissionEvaluation={(submissionId) =>
+            runAction('重新评价提交', async () => {
+              await retrySubmissionEvaluationAndSyncSession(submissionId);
             })
           }
         />
