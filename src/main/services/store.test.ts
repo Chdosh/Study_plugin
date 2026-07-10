@@ -15,6 +15,7 @@ import {
   learningRuntimeStates,
   learningSteps,
   learningSubmissions,
+  knowledgeItemEvidence,
   planStages,
   roadmapStages,
   shortPlanDays,
@@ -660,6 +661,24 @@ describe('Runtime convergence', () => {
     expect(items[0].key).toBe('hooks');
   });
 
+  it('recordKnowledgeItems groups equivalent technical misconception wording', async () => {
+    const goal = await store.createGoal('test', 'test');
+    await store.recordKnowledgeItems({
+      goalId: goal.id,
+      items: [{ key: 'React Hooks 概念混淆', summary: 'React Hooks 概念混淆', sourceType: 'misconception', sourceId: 'submission-1' }]
+    });
+    await store.recordKnowledgeItems({
+      goalId: goal.id,
+      items: [{ key: '对 React Hooks 的理解仍有混淆', summary: '对 React Hooks 的理解仍有混淆', sourceType: 'misconception', sourceId: 'submission-2' }]
+    });
+
+    const items = await store.getKnowledgeItemsForGoal({ goalId: goal.id });
+    expect(items).toHaveLength(1);
+    expect(items[0].occurrenceCount).toBe(2);
+    const evidence = await store.db.select().from(knowledgeItemEvidence).where(eq(knowledgeItemEvidence.knowledgeItemId, items[0].id));
+    expect(evidence.map((item) => item.sourceId).sort()).toEqual(['submission-1', 'submission-2']);
+  });
+
   it('getReviewWorthyKnowledgeItems returns only items with >= 2 occurrences', async () => {
     const goal = await store.createGoal('test', 'test');
 
@@ -679,6 +698,25 @@ describe('Runtime convergence', () => {
     expect(reviewWorthy.length).toBe(1);
     expect(reviewWorthy[0].key).toBe('hooks');
     expect(reviewWorthy[0].occurrenceCount).toBe(2);
+  });
+
+  it('resolveKnowledgeItems marks matching active items as resolved', async () => {
+    const goal = await store.createGoal('test', 'test');
+    await store.recordKnowledgeItems({
+      goalId: goal.id,
+      items: [
+        { key: 'hooks', summary: 'React Hooks 概念混淆', sourceType: 'misconception' },
+        { key: 'state', summary: 'State 管理薄弱', sourceType: 'weakness' }
+      ]
+    });
+
+    await store.resolveKnowledgeItems(goal.id, ['React Hooks 概念混淆']);
+
+    const items = await store.getKnowledgeItemsForGoal({ goalId: goal.id });
+    const hooksItem = items.find((i) => i.key === 'hooks');
+    const stateItem = items.find((i) => i.key === 'state');
+    expect(hooksItem?.status).toBe('resolved');
+    expect(stateItem?.status).toBe('active');
   });
 
   it('applyReviewPlanAdjustments skips locked days', async () => {

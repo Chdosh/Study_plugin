@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import type {
   DailyPlanBlock,
   DailyGuide,
@@ -64,6 +64,7 @@ import {
   goalIntakes,
   goals,
   knowledgeItems,
+  knowledgeItemEvidence,
   learningEvaluations,
   learningRuntimeStates,
   learningSteps,
@@ -84,6 +85,7 @@ import {
   taskItems
 } from '../db/schema';
 import { createId, nowIso } from './id';
+import { localDateIso } from '../../shared/date';
 
 export class StudyStore {
   private cachedActiveStepId: string | null = null;
@@ -280,7 +282,7 @@ export class StudyStore {
           : false;
         if (confirmedWithGoal && confirmedIsNewerThanEmptyIntake) {
           const guideRows = await this.db.select().from(dailyGuides)
-            .where(and(eq(dailyGuides.goalId, confirmedWithGoal.goalId), eq(dailyGuides.date, nowIso().slice(0, 10))))
+            .where(and(eq(dailyGuides.goalId, confirmedWithGoal.goalId), eq(dailyGuides.date, localDateIso())))
             .limit(1);
           const hasGuide = guideRows.length > 0 && guideRows[0].status !== 'archived';
           if (!hasGuide) {
@@ -294,7 +296,7 @@ export class StudyStore {
       const latest = existing[0];
       if (latest && latest.status === 'confirmed' && latest.goalId) {
         const guideRows = await this.db.select().from(dailyGuides)
-          .where(and(eq(dailyGuides.goalId, latest.goalId), eq(dailyGuides.date, nowIso().slice(0, 10))))
+          .where(and(eq(dailyGuides.goalId, latest.goalId), eq(dailyGuides.date, localDateIso())))
           .limit(1);
         const hasGuide = guideRows.length > 0 && guideRows[0].status !== 'archived';
         if (!hasGuide) {
@@ -740,22 +742,33 @@ export class StudyStore {
       detail?: string;
       sourceType: KnowledgeItemSourceType;
       sourceId?: string;
+      evidence?: {
+        submissionId?: string;
+        evaluationId?: string;
+        taskId?: string;
+      };
     }>;
   }): Promise<KnowledgeItem[]> {
     if (params.items.length === 0) return [];
     const now = nowIso();
     const result: KnowledgeItem[] = [];
     for (const item of params.items) {
+      const canonicalKey = normalizeKnowledgeKey(item.key || item.summary);
       const existingRows = await this.db
         .select()
         .from(knowledgeItems)
-        .where(and(eq(knowledgeItems.goalId, params.goalId), eq(knowledgeItems.key, item.key)))
-        .limit(1);
-      if (existingRows[0]) {
-        const existing = existingRows[0];
+        .where(eq(knowledgeItems.goalId, params.goalId));
+      const existing = existingRows.find((row) =>
+        normalizeKnowledgeKey(row.key) === canonicalKey ||
+        normalizeKnowledgeKey(row.summary) === canonicalKey
+      );
+      let knowledgeItemId: string;
+      if (existing) {
+        knowledgeItemId = existing.id;
         await this.db
           .update(knowledgeItems)
           .set({
+            key: canonicalKey,
             occurrenceCount: existing.occurrenceCount + 1,
             lastSeenAt: now,
             updatedAt: now
@@ -769,10 +782,11 @@ export class StudyStore {
         });
       } else {
         const id = createId('knowledge_item');
+        knowledgeItemId = id;
         await this.db.insert(knowledgeItems).values({
           id,
           goalId: params.goalId,
-          key: item.key,
+          key: canonicalKey,
           summary: item.summary,
           detail: item.detail ?? null,
           sourceType: item.sourceType,
@@ -783,7 +797,20 @@ export class StudyStore {
           createdAt: now,
           updatedAt: now
         });
-        result.push({ id, goalId: params.goalId, key: item.key, summary: item.summary, detail: item.detail ?? null, sourceType: item.sourceType, sourceId: item.sourceId ?? null, occurrenceCount: 1, lastSeenAt: now, status: 'active', createdAt: now, updatedAt: now });
+        result.push({ id, goalId: params.goalId, key: canonicalKey, summary: item.summary, detail: item.detail ?? null, sourceType: item.sourceType, sourceId: item.sourceId ?? null, occurrenceCount: 1, lastSeenAt: now, status: 'active', createdAt: now, updatedAt: now });
+      }
+
+      if (item.sourceId || item.evidence) {
+        await this.db.insert(knowledgeItemEvidence).values({
+          id: createId('knowledge_evidence'),
+          knowledgeItemId,
+          sourceType: item.sourceType,
+          sourceId: item.sourceId ?? null,
+          submissionId: item.evidence?.submissionId ?? null,
+          evaluationId: item.evidence?.evaluationId ?? null,
+          taskId: item.evidence?.taskId ?? null,
+          createdAt: now
+        }).onConflictDoNothing();
       }
     }
     return result;
@@ -827,6 +854,31 @@ export class StudyStore {
       this.getReviewWorthyKnowledgeItems(goalId)
     ]);
     return { knowledgeItems, reviewKnowledgeItems };
+  }
+
+  async resolveKnowledgeItems(goalId: string, keys: string[]): Promise<void> {
+    if (keys.length === 0) return;
+    const now = nowIso();
+    const activeItems = await this.db
+      .select()
+      .from(knowledgeItems)
+      .where(and(
+        eq(knowledgeItems.goalId, goalId),
+        eq(knowledgeItems.status, 'active')
+      ));
+    for (const item of activeItems) {
+      const matches = keys.some((k) => {
+        const normalizedCandidate = normalizeKnowledgeKey(k);
+        const normalizedItem = normalizeKnowledgeKey(item.key || item.summary);
+        return normalizedCandidate === normalizedItem;
+      });
+      if (matches) {
+        await this.db
+          .update(knowledgeItems)
+          .set({ status: 'resolved', updatedAt: now })
+          .where(eq(knowledgeItems.id, item.id));
+      }
+    }
   }
 
   async confirmDailyGuide(guideId: string): Promise<DailyGuide> {
@@ -1233,7 +1285,7 @@ export class StudyStore {
   async activateShortPlanDay(shortPlanDayId: string): Promise<boolean> {
     const rows = await this.db
       .update(shortPlanDays)
-      .set({ sessionStatus: 'active', date: nowIso().slice(0, 10) })
+      .set({ sessionStatus: 'active', date: localDateIso() })
       .where(and(eq(shortPlanDays.id, shortPlanDayId), eq(shortPlanDays.sessionStatus, 'pending')))
       .returning({ id: shortPlanDays.id });
     return rows.length > 0;
@@ -1772,6 +1824,15 @@ export class StudyStore {
     return row;
   }
 
+  async getSubmissionById(submissionId: string): Promise<LearningSubmission | null> {
+    const rows = await this.db
+      .select()
+      .from(learningSubmissions)
+      .where(eq(learningSubmissions.id, submissionId))
+      .limit(1);
+    return rows[0] ? mapSubmission(rows[0]) : null;
+  }
+
   async markSubmissionEvaluation(
     submissionId: string,
     status: 'completed' | 'failed'
@@ -2215,6 +2276,23 @@ export class StudyStore {
     return rows.map(mapShortPlanDay);
   }
 
+  async getPlanVersionsForGoal(goalId: string): Promise<Array<{ version: number; changeSummary: string; createdAt: string; snapshot: unknown }>> {
+    const rows = await this.db
+      .select({ version: planVersions.version, changeSummary: planVersions.changeSummary, createdAt: planVersions.createdAt, snapshotJson: planVersions.snapshotJson })
+      .from(planVersions)
+      .innerJoin(dailyPlans, eq(planVersions.planId, dailyPlans.id))
+      .innerJoin(dailyGuides, eq(dailyGuides.planId, dailyPlans.id))
+      .where(eq(dailyGuides.goalId, goalId))
+      .orderBy(desc(planVersions.createdAt))
+      .limit(10);
+    return rows.map((r) => ({
+      version: r.version,
+      changeSummary: r.changeSummary ?? '',
+      createdAt: r.createdAt,
+      snapshot: r.snapshotJson ? JSON.parse(r.snapshotJson) : null
+    }));
+  }
+
   async getDailyGuideById(guideId: string): Promise<DailyGuide | null> {
     const rows = await this.db.select().from(dailyGuides).where(eq(dailyGuides.id, guideId)).limit(1);
     const guide = rows[0];
@@ -2396,17 +2474,48 @@ export class StudyStore {
   }
 
   private async getLatestSubmissionByActionId(actionId: string): Promise<LearningSubmission | null> {
-    const rows = await this.db.select().from(learningSubmissions).where(eq(learningSubmissions.stepId, actionId)).orderBy(desc(learningSubmissions.createdAt)).limit(1);
+    const rows = await this.db
+      .select()
+      .from(learningSubmissions)
+      .where(or(
+        eq(learningSubmissions.dailyGuideActionId, actionId),
+        eq(learningSubmissions.stepId, actionId)
+      ))
+      .orderBy(desc(learningSubmissions.createdAt))
+      .limit(1);
     return rows[0] ? mapSubmission(rows[0]) : null;
   }
 
   private async getLatestEvaluationByActionId(actionId: string): Promise<LearningEvaluation | null> {
-    const rows = await this.db.select().from(learningEvaluations).where(eq(learningEvaluations.stepId, actionId)).orderBy(desc(learningEvaluations.createdAt)).limit(1);
+    const rows = await this.db
+      .select()
+      .from(learningEvaluations)
+      .where(or(
+        eq(learningEvaluations.dailyGuideActionId, actionId),
+        eq(learningEvaluations.stepId, actionId)
+      ))
+      .orderBy(desc(learningEvaluations.createdAt))
+      .limit(1);
     return rows[0] ? mapEvaluation(rows[0]) : null;
   }
 
   private async getLatestDecisionByActionId(actionId: string): Promise<StoredNextStepDecision | null> {
-    const rows = await this.db.select().from(nextStepDecisions).where(eq(nextStepDecisions.stepId, actionId)).orderBy(desc(nextStepDecisions.createdAt)).limit(1);
+    const evaluationRows = await this.db
+      .select({ id: learningEvaluations.id })
+      .from(learningEvaluations)
+      .where(or(
+        eq(learningEvaluations.dailyGuideActionId, actionId),
+        eq(learningEvaluations.stepId, actionId)
+      ))
+      .orderBy(desc(learningEvaluations.createdAt))
+      .limit(1);
+    if (!evaluationRows[0]) return null;
+    const rows = await this.db
+      .select()
+      .from(nextStepDecisions)
+      .where(eq(nextStepDecisions.evaluationId, evaluationRows[0].id))
+      .orderBy(desc(nextStepDecisions.createdAt))
+      .limit(1);
     return rows[0] ? mapDecision(rows[0]) : null;
   }
 
@@ -3003,6 +3112,19 @@ function mapKnowledgeItem(row: typeof knowledgeItems.$inferSelect): KnowledgeIte
     createdAt: row.createdAt,
     updatedAt: row.updatedAt
   };
+}
+
+function normalizeKnowledgeKey(value: string): string {
+  const normalized = value.normalize('NFKC').toLowerCase();
+  const technicalTokens = [...new Set(normalized.match(/[a-z][a-z0-9.+#_-]*/gu) ?? [])];
+  if (technicalTokens.length > 0) {
+    return technicalTokens.slice(0, 3).join(':').slice(0, 50);
+  }
+
+  const withoutDiagnosisWords = normalized
+    .replace(/仍有|存在|概念|理解|混淆|错误|薄弱|缺失|不足|未能|没有|需要|掌握|不清楚|对于|关于|的|对/gu, '')
+    .replace(/[^\p{L}\p{N}]/gu, '');
+  return (withoutDiagnosisWords || normalized.replace(/\s+/gu, '')).slice(0, 50);
 }
 
 function mapStage(row: typeof planStages.$inferSelect): PlanStage {
