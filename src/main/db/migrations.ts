@@ -554,6 +554,23 @@ export const databaseMigrations: DatabaseMigration[] = [
   {
     id: '202607060010_short_plan_locked',
     sql: `ALTER TABLE short_plan_days ADD COLUMN locked INTEGER NOT NULL DEFAULT 0;`
+  },
+  {
+    id: '202607100001_knowledge_item_evidence',
+    sql: `
+      CREATE TABLE IF NOT EXISTS knowledge_item_evidence (
+        id TEXT PRIMARY KEY,
+        knowledge_item_id TEXT NOT NULL REFERENCES knowledge_items(id),
+        source_type TEXT NOT NULL,
+        source_id TEXT,
+        submission_id TEXT REFERENCES learning_submissions(id),
+        evaluation_id TEXT REFERENCES learning_evaluations(id),
+        task_id TEXT REFERENCES daily_guide_tasks(id),
+        created_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS knowledge_item_evidence_evaluation_unique
+        ON knowledge_item_evidence(knowledge_item_id, evaluation_id);
+    `
   }
 ];
 
