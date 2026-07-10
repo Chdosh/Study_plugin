@@ -519,7 +519,7 @@ export interface SubmissionEvaluationResult {
   submission: LearningSubmission;
   evaluation: LearningEvaluation;
   decision: StoredNextStepDecision;
-  nextStep: LearningStep | null;
+  nextAction: DailyGuideAction | null;
 }
 
 export interface StudyAppApi {
@@ -536,7 +536,7 @@ export interface StudyAppApi {
     generateLayeredPlan: (goalId: Id) => Promise<LayeredPlanResult>;
     confirmDailyGuide: (guideId: Id) => Promise<DailyGuide>;
     archiveTodayAndRestart: () => Promise<GoalIntakeState>;
-    prepareCurrentLearningDay: () => Promise<PrepareCurrentLearningDayResult>;
+    prepareCurrentLearningDay: (forceRetry?: boolean) => Promise<PrepareCurrentLearningDayResult>;
     startNextSession: (goalId?: Id) => Promise<StartNextSessionResult>;
     generateRollingPlan: (goalId: Id) => Promise<GenerateRollingPlanResult>;
     getTodayState: () => Promise<TodayState>;
@@ -563,6 +563,7 @@ export interface StudyAppApi {
     askQuestion: (question: string, promptProfileId?: Id) => Promise<QuestionAnswerResult>;
     resolveQuestion: (threadId: Id, summary?: string) => Promise<LearningRuntimeSnapshot>;
     submitResult: (content: string, promptProfileId?: Id) => Promise<SubmissionEvaluationResult>;
+    retrySubmissionEvaluation: (submissionId: Id, promptProfileId?: Id) => Promise<SubmissionEvaluationResult>;
     decideAdjustment: (proposalId: Id, status: 'accepted' | 'rejected') => Promise<PlanAdjustmentProposal>;
   };
   reviews: {

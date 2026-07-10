@@ -43,8 +43,8 @@ const api: StudyAppApi = {
     confirmDailyGuide: (guideId: Id) => ipcRenderer.invoke(ipcChannels.guidesConfirmDailyGuide, { guideId }),
     archiveTodayAndRestart: (): Promise<GoalIntakeState> =>
       ipcRenderer.invoke(ipcChannels.guidesArchiveTodayAndRestart),
-    prepareCurrentLearningDay: (): Promise<PrepareCurrentLearningDayResult> =>
-      ipcRenderer.invoke(ipcChannels.guidesPrepareCurrentLearningDay),
+    prepareCurrentLearningDay: (forceRetry?: boolean): Promise<PrepareCurrentLearningDayResult> =>
+      ipcRenderer.invoke(ipcChannels.guidesPrepareCurrentLearningDay, { forceRetry }),
     startNextSession: (goalId?: Id): Promise<StartNextSessionResult> =>
       ipcRenderer.invoke(ipcChannels.guidesStartNextSession, { goalId }),
     generateRollingPlan: (goalId: Id): Promise<GenerateRollingPlanResult> =>
@@ -83,6 +83,8 @@ const api: StudyAppApi = {
       ipcRenderer.invoke(ipcChannels.learningResolveQuestion, { threadId, summary }),
     submitResult: (content: string, promptProfileId?: Id): Promise<SubmissionEvaluationResult> =>
       ipcRenderer.invoke(ipcChannels.learningSubmitResult, { content, promptProfileId }),
+    retrySubmissionEvaluation: (submissionId: Id, promptProfileId?: Id): Promise<SubmissionEvaluationResult> =>
+      ipcRenderer.invoke(ipcChannels.learningRetrySubmissionEvaluation, { submissionId, promptProfileId }),
     decideAdjustment: (proposalId: Id, status: 'accepted' | 'rejected'): Promise<PlanAdjustmentProposal> =>
       ipcRenderer.invoke(ipcChannels.learningDecideAdjustment, { proposalId, status })
   },
