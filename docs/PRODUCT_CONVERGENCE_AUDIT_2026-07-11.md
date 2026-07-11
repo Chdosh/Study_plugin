@@ -112,3 +112,46 @@ UI 不应立即全面换皮。应先修复运行时语义，再进入独立的 P
 - 当时验证：`npm test` 101 passed、6 skipped；typecheck 和 production build 通过。
 - 未运行真实 DeepSeek 合约测试。
 - 本文是问题与方向快照，不应替代后续按稳定代码快照执行的逐项审查。
+
+## 10. 第一轮清理执行记录：LearningRuntime
+
+本轮只收敛运行时主链，没有扩展到 Planning、LearnerContext、LearningBranch 或视觉重构。
+
+- 以 `LearningRuntime` 的小 Interface 统一 Session 启停、Action 完成/跳过、Task 跳过和“结束本次学习”。
+- Action 全部完成后保留当前 Task，进入等待提交状态；只有评价完成后才结束 Task 并推进。
+- 跳过 Task 保留 `skipped` 语义，不计为完成进度，并进入同一 Guide 的下一 Task。
+- “结束本次学习”统一为暂停可恢复 Session，不再同时表达终止任务；Renderer 会重新同步持久化 Session。
+- 删除被 Runtime Interface 替代的 `StudyStore.terminateLearning` 浅层入口。
+- 为状态机、Store、AppService 和 Runtime Interface 增加回归测试。
+
+验证结果：`npm test` 107 passed、6 skipped；`npm run typecheck` 和 `npm run build` 通过。构建仍提示 `context-builder.ts` 同时被静态和动态导入；测试仍打印 6 类 bootstrap/migration duplicate-column 噪声，均留待兼容收敛阶段单独处理。
+
+下一轮建议进入 `Planning Module`，先锁定“当前学习单元完成 → 评价 → 下一单元生成/耗尽”的唯一推进规则和恢复测试，再移动实现；不要先机械拆分 `app-service.ts`。
+
+## 11. 第二轮清理执行记录：Planning
+
+本轮将“准备当前学习单元”的完整编排迁入 `PlanningModule`：选择或恢复 ShortPlanDay、进程内与持久化生成锁、前一日结果和知识上下文、Daily Guide AI 调用、成功/失败审计、事务保存与锁释放都通过同一个 Interface 执行。
+
+- `AppService.prepareCurrentLearningDay()` 收敛为薄 Adapter，删除其中重复的生成实现。
+- 删除只激活计划日却不生成 Guide 的半成品 `prepareNextLearningUnit()`。
+- 删除未被调用且会直接改库的 `proposeAdjustment()` / `applyAdjustments()` 草稿，避免把 proposal 与 apply 混为一体。
+- 增加 Planning Interface 测试，覆盖计划耗尽、AI 失败可恢复和同目标并发去重。
+- 保留现有 `startNextSession()`、Review 生成和正式复盘调整路径；它们尚未全部进入 Planning Interface，避免一次跨越过多事实边界。
+
+验证结果：`npm test` 110 passed、6 skipped；`npm run typecheck` 和 `npm run build` 通过。迁移 duplicate-column 日志与 `context-builder.ts` 混合导入警告仍为已知待办。
+
+下一轮建议收敛“结束学习日 → Review → 准备下一学习单元”的推进编排，并先明确 Product Truth 中“同一天再次触发下一天”的待定规则；在该规则明确前，不实现覆盖当日已完成 Guide 的行为。
+
+## 12. 第三轮清理执行记录：学习日推进
+
+本轮将 `startNextSession()` 的业务编排迁入 `PlanningModule.advanceLearningDay()`，形成“校验当前 Guide → 关闭学习日 → 获取或生成 Review → 准备下一学习单元”的单一入口。
+
+- 当前学习日存在未完成 Task 时明确阻断，不关闭 Guide、不生成 Review。
+- 已关闭 Guide 优先复用已有 Review，避免重复模型调用。
+- Review 生成失败时记录 `reflection` 失败审计，不回滚已完成 Guide，也不丢失下一单元恢复能力。
+- AppService 只保留 Reflection Agent Adapter 和错误类型映射。
+- 未改变“同一天再次推进”的既有行为；没有实现覆盖已完成 Guide，也没有加入新的等待次日限制。
+
+验证结果：`npm test` 113 passed、6 skipped；`npm run typecheck` 和 `npm run build` 通过。
+
+下一轮不宜继续扩大 Planning 范围。建议转向启动一致性和兼容噪声：先修复 bootstrap 与 migration 双重建列产生的 duplicate-column 日志，并为新库、旧库升级、重复启动建立迁移测试矩阵。
