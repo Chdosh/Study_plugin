@@ -4,7 +4,8 @@ import {
   applyEvaluationResult,
   completeAction,
   recoverExecutionState,
-  skipAction
+  skipAction,
+  skipTask
 } from './execution-state-machine';
 
 describe('execution-state-machine', () => {
@@ -23,7 +24,7 @@ describe('execution-state-machine', () => {
     expect(result.state.tasks[0].status).toBe('active');
   });
 
-  it('最后行动步骤完成后推进到下一任务', () => {
+  it('最后行动步骤完成后等待主任务提交，不直接推进下一任务', () => {
     const state = stateWithTasks([
       task('task-1', ['action-1'], { currentActionId: 'action-1' }),
       task('task-2', ['action-2'])
@@ -33,11 +34,12 @@ describe('execution-state-machine', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.state.status).toBe('active');
-    expect(result.state.activeDailyTaskId).toBe('task-2');
-    expect(result.state.activeStepId).toBe('action-2');
-    expect(result.state.tasks[0].status).toBe('done');
-    expect(result.state.tasks[1].status).toBe('active');
+    expect(result.state.status).toBe('awaiting_result');
+    expect(result.state.activeDailyTaskId).toBe('task-1');
+    expect(result.state.activeStepId).toBeNull();
+    expect(result.state.tasks[0].status).toBe('active');
+    expect(result.state.tasks[0].progressPercent).toBe(100);
+    expect(result.state.tasks[1].status).toBe('planned');
   });
 
   it('已完成步骤被重复完成时不会重复推进', () => {
@@ -155,7 +157,7 @@ describe('execution-state-machine', () => {
     expect(result.state.activeStepId).toBe('action-3');
   });
 
-  it('跳过最后一个步骤后推进到下一任务', () => {
+  it('跳过最后一个步骤后等待主任务提交，不直接推进下一任务', () => {
     const state = stateWithTasks([
       task('task-1', ['action-1'], { currentActionId: 'action-1' }),
       task('task-2', ['action-2'])
@@ -166,10 +168,28 @@ describe('execution-state-machine', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.state.tasks[0].actions[0].status).toBe('skipped');
-    expect(result.state.activeStepId).toBe('action-2');
-    expect(result.state.status).toBe('active');
-    expect(result.state.tasks[0].status).toBe('done');
+    expect(result.state.activeDailyTaskId).toBe('task-1');
+    expect(result.state.activeStepId).toBeNull();
+    expect(result.state.status).toBe('awaiting_result');
+    expect(result.state.tasks[0].status).toBe('active');
+    expect(result.state.tasks[1].status).toBe('planned');
+  });
+
+  it('跳过整个任务时标记 skipped 并进入下一任务', () => {
+    const state = stateWithTasks([
+      task('task-1', ['action-1', 'action-2'], { currentActionId: 'action-1' }),
+      task('task-2', ['action-3'])
+    ], 'task-1', 'action-1');
+
+    const result = skipTask(state);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.state.tasks[0].status).toBe('skipped');
+    expect(result.state.tasks[0].progressPercent).toBe(0);
     expect(result.state.tasks[1].status).toBe('active');
+    expect(result.state.activeDailyTaskId).toBe('task-2');
+    expect(result.state.activeStepId).toBe('action-3');
   });
 
   it('activeDailyTaskId 与任务 status 冲突时返回明确冲突结果', () => {
