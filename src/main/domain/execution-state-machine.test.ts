@@ -36,7 +36,7 @@ describe('execution-state-machine', () => {
     if (!result.ok) return;
     expect(result.state.status).toBe('awaiting_result');
     expect(result.state.activeDailyTaskId).toBe('task-1');
-    expect(result.state.activeStepId).toBeNull();
+    expect(result.state.activeStepId).toBe('action-1');
     expect(result.state.tasks[0].status).toBe('active');
     expect(result.state.tasks[0].progressPercent).toBe(100);
     expect(result.state.tasks[1].status).toBe('planned');
@@ -169,7 +169,7 @@ describe('execution-state-machine', () => {
     if (!result.ok) return;
     expect(result.state.tasks[0].actions[0].status).toBe('skipped');
     expect(result.state.activeDailyTaskId).toBe('task-1');
-    expect(result.state.activeStepId).toBeNull();
+    expect(result.state.activeStepId).toBe('action-1');
     expect(result.state.status).toBe('awaiting_result');
     expect(result.state.tasks[0].status).toBe('active');
     expect(result.state.tasks[1].status).toBe('planned');

@@ -134,7 +134,7 @@ export function completeAction(
 
   if (!nextAction) {
     task.status = 'active';
-    return { ok: true, state: stateFromSelection(tasks, task.id, null, 'awaiting_result') };
+    return { ok: true, state: stateFromSelection(tasks, task.id, action.id, 'awaiting_result') };
   }
 
   task.status = 'active';
@@ -186,7 +186,7 @@ export function skipAction(
 
   if (!nextAction) {
     task.status = 'active';
-    return { ok: true, state: stateFromSelection(tasks, task.id, null, 'awaiting_result') };
+    return { ok: true, state: stateFromSelection(tasks, task.id, currentActionId, 'awaiting_result') };
   }
 
   task.status = 'active';
