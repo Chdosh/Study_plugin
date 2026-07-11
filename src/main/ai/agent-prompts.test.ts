@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildDailyGuidePrompt, buildRollingPlanPrompt } from './agent-prompts';
+import { buildDailyGuidePrompt, buildEvaluateSubmissionPrompt, buildRollingPlanPrompt } from './agent-prompts';
 import type { KnowledgeItem } from '../../shared/types';
 
 const makeProfile = () => ({
@@ -48,6 +48,20 @@ describe('agent-prompts', () => {
     expect(prompt).toContain('5-10 分钟复习');
   });
 
+  it('buildEvaluateSubmissionPrompt includes review items when provided', () => {
+    const prompt = buildEvaluateSubmissionPrompt({
+      submission: 'my submission',
+      context: {},
+      profile: makeProfile(),
+      knowledgeItems: [sampleKnowledge],
+      reviewKnowledgeItems: [{ ...sampleKnowledge, occurrenceCount: 3 }]
+    });
+    expect(prompt).toContain('多次出错');
+    expect(prompt).toContain('hooks');
+    expect(prompt).toContain('3 次');
+    expect(prompt).toContain('多次提醒');
+  });
+
   it('buildRollingPlanPrompt includes review queue text when reviewKnowledgeItems provided', () => {
     const prompt = buildRollingPlanPrompt({
       goal: { title: '学 React' },
@@ -75,19 +89,5 @@ describe('agent-prompts', () => {
       profile: makeProfile()
     });
     expect(prompt).not.toContain('5-10 分钟复习');
-  });
-
-  it('buildRollingPlanPrompt includes review queue when reviewKnowledgeItems provided', () => {
-    const prompt = buildRollingPlanPrompt({
-      goal: { title: '学 React' },
-      brief: null,
-      activeStage: { id: 'r1', goalId: 'g1', title: '基础', objective: '掌握基础', direction: '从零开始', successCriteria: '能写组件', status: 'active', position: 0, createdAt: '', updatedAt: '' },
-      completedSummary: '已完成任务',
-      profile: makeProfile(),
-      reviewKnowledgeItems: [sampleKnowledge]
-    });
-    expect(prompt).toContain('多次出错');
-    expect(prompt).toContain('hooks');
-    expect(prompt).toContain('滚动计划中适当安排');
   });
 });

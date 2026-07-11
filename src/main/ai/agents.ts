@@ -243,7 +243,7 @@ export class StepQuestionAgent {
 export class SubmissionEvaluationAgent {
   constructor(private readonly ai: AiClient) {}
 
-  run(params: { submission: string; context: unknown; profile: PromptProfile; settings: AgentRuntimeSettings; knowledgeItems?: KnowledgeItem[] } & AgentRunExtras) {
+  run(params: { submission: string; context: unknown; profile: PromptProfile; settings: AgentRuntimeSettings; knowledgeItems?: KnowledgeItem[]; reviewKnowledgeItems?: KnowledgeItem[] } & AgentRunExtras) {
     return this.ai.generateJson({
       apiKey: params.settings.deepseekApiKey,
       baseUrl: params.settings.deepseekBaseUrl,
@@ -254,7 +254,8 @@ export class SubmissionEvaluationAgent {
         submission: params.submission,
         context: params.context,
         profile: params.profile,
-        knowledgeItems: params.knowledgeItems
+        knowledgeItems: params.knowledgeItems,
+        reviewKnowledgeItems: params.reviewKnowledgeItems
       }),
       traceId: params.traceId,
       onMetrics: params.onMetrics
