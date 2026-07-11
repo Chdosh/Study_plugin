@@ -14,6 +14,7 @@ import type {
   LearningRuntimeSnapshot,
   QuestionAnswerResult,
   ReviewResult,
+  RuntimeAuditResult,
   SubmissionEvaluationResult,
   StudySession,
   TodayGuideState,
@@ -39,6 +40,7 @@ export default function App(): JSX.Element {
   const [reviewGuide, setReviewGuide] = useState<TodayGuideState | null>(null);
   const [notice, setNotice] = useState<string>('就绪');
   const [bootError, setBootError] = useState<string | null>(null);
+  const [runtimeAudit, setRuntimeAudit] = useState<RuntimeAuditResult | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const mountedRef = useRef(false);
   const [showAiDrawer, setShowAiDrawer] = useState(false);
@@ -132,8 +134,12 @@ export default function App(): JSX.Element {
 
   useEffect(() => {
     void runAction('加载工作区', async () => {
-      await refresh();
-      await syncActiveSession();
+      const [, , audit] = await Promise.all([
+        refresh(),
+        syncActiveSession(),
+        window.studyApp.system.auditRuntime()
+      ]);
+      setRuntimeAudit(audit.fixed.length > 0 || audit.requiresUserAction ? audit : null);
     });
   }, []);
 
@@ -189,6 +195,33 @@ export default function App(): JSX.Element {
             <span className="notice-dot" />
             {notice}
           </div>
+        )}
+        {runtimeAudit && (
+          <section className={`runtime-audit-banner ${runtimeAudit.requiresUserAction ? 'has-conflict' : ''}`} role="alert">
+            <div>
+              <strong>{runtimeAudit.requiresUserAction ? '学习进度需要确认' : '已恢复学习进度'}</strong>
+              <p>
+                {runtimeAudit.requiresUserAction
+                  ? `发现 ${runtimeAudit.conflicts.length} 项无法自动判断的状态，系统没有删除数据或推进任务。`
+                  : `已安全修复 ${runtimeAudit.fixed.length} 项可唯一推导的运行位置。`}
+              </p>
+              {runtimeAudit.conflicts.map((conflict) => (
+                <small key={`${conflict.field}:${conflict.actual}`}>{conflict.field}：当前为 {conflict.actual}，预期 {conflict.expected}</small>
+              ))}
+            </div>
+            <div className="runtime-audit-actions">
+              {runtimeAudit.requiresUserAction && (
+                <button className="secondary-action" onClick={() => void runAction('重新检查学习进度', async () => {
+                  const audit = await window.studyApp.system.auditRuntime();
+                  setRuntimeAudit(audit.fixed.length > 0 || audit.requiresUserAction ? audit : null);
+                  await refresh();
+                })}>重新检查</button>
+              )}
+              <button className="secondary-action" onClick={() => setRuntimeAudit(null)}>
+                {runtimeAudit.requiresUserAction ? '保留数据，稍后处理' : '知道了'}
+              </button>
+            </div>
+          </section>
         )}
         {view === 'overview' && (
           <OverviewPage
@@ -347,10 +380,10 @@ export default function App(): JSX.Element {
               })
             }
             onTerminateLearning={() =>
-              runAction('终止学习', async () => {
+              runAction('结束本次学习', async () => {
                 setLearningState(await window.studyApp.learning.terminateLearning());
                 await refresh();
-                setActiveSession(null);
+                await syncActiveSession();
                 setTeaching(null);
               })
             }
