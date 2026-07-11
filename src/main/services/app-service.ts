@@ -2,7 +2,7 @@ import type { BrowserWindow } from 'electron';
 import { ipcChannels } from '../../shared/ipc';
 import { localDateIso } from '../../shared/date';
 import type { DailyGuideAgentOutput, NextStepDecisionAgentOutput, SubmissionEvaluationAgentOutput } from '../../shared/schemas';
-import type { AppSettings, DailyGuide, DailyGuideTask, DailyPlanBlock, GenerateRollingPlanResult, GoalBrief, Id, KnowledgeItem, KnowledgeItemStatus, LayeredPlanResult, LearningSubmission, PrepareCurrentLearningDayResult, PreviousLearningDayResult, ReviewResult, RoadmapStage, ShortPlanDay, StartNextSessionResult, StudySession, SubmissionEvaluationResult, TodayGuideState, TodayState } from '../../shared/types';
+import type { AppSettings, DailyGuide, DailyGuideTask, DailyPlanBlock, GenerateRollingPlanResult, GoalBrief, Id, KnowledgeItem, KnowledgeItemStatus, LayeredPlanResult, LearningSubmission, PrepareCurrentLearningDayResult, ReviewResult, RoadmapStage, RuntimeAuditResult, ShortPlanDay, StartNextSessionResult, StudySession, SubmissionEvaluationResult, TodayGuideState, TodayState } from '../../shared/types';
 import { AiClient, type AiCallMetrics } from '../ai/ai-client';
 import { CategorizedError } from '../ai/categorized-error';
 import {
@@ -42,6 +42,7 @@ export class AppService {
   private readonly focusMonitor: FocusMonitor;
   private readonly inFlight = new Map<string, Promise<unknown>>();
   private readonly recentResults = new Map<string, { result: unknown; error: boolean; expiresAt: number }>();
+  private startupRuntimeAudit: RuntimeAuditResult | null = null;
   readonly modules: LearningModules;
 
   constructor(
@@ -52,6 +53,10 @@ export class AppService {
     this.focusMonitor = new FocusMonitor(store);
     this.contextBuilder = new ContextBuilder(store);
     this.modules = new LearningModules(store);
+  }
+
+  async initialize(): Promise<void> {
+    this.startupRuntimeAudit = await this.runRuntimeAudit();
   }
 
   private dedupe<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
@@ -344,71 +349,26 @@ export class AppService {
     const active = await this.getActiveSession();
     if (active?.session.status === 'active') {
       this.focusMonitor.stop();
-      const paused = await this.store.pauseSession(active.session.id);
+      const paused = await this.modules.runtime.pauseSession(active.session.id);
       await this.pushSessionState(paused);
     }
     return this.store.archiveTodayGuides(todayIso());
   }
 
   async startNextSession(goalId?: Id): Promise<StartNextSessionResult> {
-    const today = await this.store.getActiveGuide();
-    if (goalId && today.goal?.id !== goalId) {
-      throw new CategorizedError('validation_error', '当前学习目标与请求的目标不一致，请刷新后重试。');
-    }
-    let review: ReviewResult | null = null;
-    if (today.guide && today.guide.sessionStatus === 'active') {
-      const allTasksDone = today.guide.tasks.length > 0 && today.guide.tasks.every((task) => task.status === 'done');
-      if (!allTasksDone) {
-        throw new CategorizedError(
-          'validation_error',
-          '当前学习日还有未完成任务，请完成所有任务后再生成下一批任务。'
-        );
+    return this.modules.planning.advanceLearningDay(
+      { goalId },
+      {
+        dailyGuideAgent: this.dailyGuideAgent,
+        getRuntimeSettings: () => this.settings.getRuntimeSettings(),
+        createTraceId,
+        todayIso,
+        generateReview: (guideId) => this.generateReviewForClosedGuide(guideId)
       }
-      await this.store.closeCurrentSession(today.guide.id);
-      try {
-        review = await this.generateReviewForClosedGuide(today.guide.id);
-      } catch (error) {
-        await this.store.saveAiReview({
-          kind: 'reflection',
-          date: today.guide.date,
-          provider: 'deepseek',
-          model: 'configured',
-          inputSnapshot: { guideId: today.guide.id },
-          output: {},
-          outputSchemaVersion: 'review.v1',
-          status: 'failed',
-          errorMessage: error instanceof Error ? error.message : String(error)
-        });
-      }
-    } else if (today.guide && today.guide.sessionStatus === 'closed') {
-      review = await this.store.getLatestReview(today.guide.date);
-      if (!review) {
-        try {
-          review = await this.generateReviewForClosedGuide(today.guide.id);
-        } catch (error) {
-          await this.store.saveAiReview({
-            kind: 'reflection',
-            date: today.guide.date,
-            provider: 'deepseek',
-            model: 'configured',
-            inputSnapshot: { guideId: today.guide.id },
-            output: {},
-            outputSchemaVersion: 'review.v1',
-            status: 'failed',
-            errorMessage: error instanceof Error ? error.message : String(error)
-          });
-        }
-      }
-    }
-    const nextResult = await this.prepareCurrentLearningDay();
-    if (nextResult.todayState === 'plan_exhausted') {
-      return {
-        review,
-        todayState: 'plan_exhausted',
-        errorMessage: '当前批次学习任务已全部完成。请前往复盘页查看总结，复盘后可根据当前学习路径生成下一批任务。'
-      };
-    }
-    return { review, ...nextResult };
+    ).catch((error) => {
+      if (error instanceof CategorizedError) throw error;
+      throw new CategorizedError('validation_error', error instanceof Error ? error.message : String(error));
+    });
   }
 
   private async generateReviewForClosedGuide(guideId: string): Promise<ReviewResult> {
@@ -445,16 +405,12 @@ export class AppService {
     return { reviewId, date: guide.date, ...output };
   }
 
-  private generationLocks = new Map<string, Promise<PrepareCurrentLearningDayResult>>();
-
   async getTodayState(): Promise<TodayState> {
     const today = await this.store.getActiveGuide();
     if (!today.goal) return 'needs_goal';
 
     const goalId = today.goal.id;
-    const lockKey = `daily_guide:${goalId}`;
-    if (this.generationLocks.has(lockKey)) return 'generating';
-
+    if (this.modules.planning.isPreparing(goalId)) return 'generating';
     const usedShortPlanDayIds = await this.store.getUsedShortPlanDayIds(goalId);
     const hasRecoverablePlanDay = today.shortPlan.some((day) =>
       day.sessionStatus === 'active' && !usedShortPlanDayIds.has(day.id)
@@ -468,6 +424,7 @@ export class AppService {
     );
     const guide = today.guide;
     if (guide) {
+      if (guide.sessionStatus === 'draft') return 'generation_failed';
       if (guide.status === 'completed' || guide.sessionStatus === 'closed') {
         return hasAvailablePlanDay ? 'completed' : 'plan_exhausted';
       }
@@ -479,160 +436,16 @@ export class AppService {
     return 'ready_to_generate';
   }
 
-  private async hasAvailableShortPlanDay(goalId: Id, shortPlan: ShortPlanDay[]): Promise<boolean> {
-    const usedShortPlanDayIds = await this.store.getUsedShortPlanDayIds(goalId);
-    return shortPlan.some((day) =>
-      day.sessionStatus === 'pending' &&
-      day.date === null &&
-      !usedShortPlanDayIds.has(day.id)
-    );
-  }
-
   async prepareCurrentLearningDay(forceRetry = false): Promise<PrepareCurrentLearningDayResult> {
-    const today = await this.store.getActiveGuide(true);
-    if (!today.goal) {
-      return { todayState: 'needs_goal' };
-    }
-
-    const goalId = today.goal.id;
-    const lockKey = `daily_guide:${goalId}`;
-
-    // In-memory fast path (same process concurrent calls)
-    const existingLock = this.generationLocks.get(lockKey);
-    if (existingLock) return existingLock;
-
-    if (forceRetry) {
-      // 用户显式重试时，当前进程没有内存任务，因此持久锁只能来自已终止的旧进程。
-      await this.store.releaseGenerationLock(lockKey);
-    }
-
-    // Cross-process / restarted lock (persistent)
-    const acquired = await this.store.acquireGenerationLock(lockKey);
-    if (!acquired) {
-      return { todayState: 'generating' };
-    }
-
-    const promise = this.doPrepareCurrentLearningDay(today.goal, today.roadmap, today.shortPlan, today.guide);
-    this.generationLocks.set(lockKey, promise);
-    try {
-      return await promise;
-    } finally {
-      this.generationLocks.delete(lockKey);
-      await this.store.releaseGenerationLock(lockKey).catch(() => { /* ignore release errors */ });
-    }
-  }
-
-  private async doPrepareCurrentLearningDay(
-    goal: import('../../shared/types').LearningGoal,
-    roadmap: RoadmapStage[],
-    shortPlan: ShortPlanDay[],
-    existingGuide: import('../../shared/types').DailyGuide | null
-  ): Promise<PrepareCurrentLearningDayResult> {
-    if (existingGuide) {
-      if (existingGuide.status === 'completed') return { todayState: 'completed' };
-      return { todayState: 'active' };
-    }
-
-    const usedShortPlanDayIds = await this.store.getUsedShortPlanDayIds(goal.id);
-    let targetDay: ShortPlanDay | null = shortPlan
-      .find((d) => d.sessionStatus === 'active' && !usedShortPlanDayIds.has(d.id)) ?? null;
-    let isRetry = targetDay !== null;
-
-    if (!targetDay) {
-      targetDay = shortPlan
-        .filter((d) => d.sessionStatus === 'pending' && d.date === null)
-        .filter((d) => !usedShortPlanDayIds.has(d.id))
-        .sort((a, b) => a.dayIndex - b.dayIndex)[0] ?? null;
-    }
-
-    if (!targetDay) {
-      return { todayState: 'plan_exhausted' };
-    }
-
-    if (!isRetry) {
-      const activated = await this.store.activateShortPlanDay(targetDay.id);
-      if (!activated) {
-        return await this.prepareCurrentLearningDay();
+    return this.modules.planning.prepareCurrentLearningDay(
+      { forceRetry },
+      {
+        dailyGuideAgent: this.dailyGuideAgent,
+        getRuntimeSettings: () => this.settings.getRuntimeSettings(),
+        createTraceId,
+        todayIso
       }
-    }
-
-    const previousDayResult: PreviousLearningDayResult | null | undefined = !isRetry
-      ? await this.store.getPreviousCompletedLearningDayContext(goal.id)
-      : undefined; void previousDayResult;
-
-    const [brief, profile, runtimeSettings, knowledgeCtx] = await Promise.all([
-      this.store.getGoalBriefForGoal(goal.id),
-      this.store.getPromptProfile(),
-      this.settings.getRuntimeSettings(),
-      this.store.getKnowledgeContextForGoal(goal.id)
-    ]);
-    const knowledgeItems = knowledgeCtx.knowledgeItems;
-    const reviewKnowledgeItems = knowledgeCtx.reviewKnowledgeItems;
-
-    let dailyGuideOutput: DailyGuideAgentOutput;
-    const dailyGuideTraceId = createTraceId();
-    let dailyGuideMetrics: AiCallMetrics | undefined;
-    try {
-      dailyGuideOutput = await this.dailyGuideAgent.run({
-        date: todayIso(),
-        windows: runtimeSettings.dailyStudyWindows,
-        goal,
-        brief,
-        roadmap,
-        targetDay,
-        previousDayResult: previousDayResult ?? undefined,
-        profile,
-        settings: runtimeSettings,
-        knowledgeItems: knowledgeItems ?? undefined,
-        reviewKnowledgeItems: reviewKnowledgeItems ?? undefined,
-        traceId: dailyGuideTraceId,
-        onMetrics: (m) => { dailyGuideMetrics = m; }
-      });
-      const guideDate = todayIso();
-      await this.store.saveAiReview({
-        kind: 'daily_guide',
-        date: guideDate,
-        provider: 'deepseek',
-        model: runtimeSettings.deepseekModel,
-        promptProfileId: profile.id,
-        promptVersionId: profile.activeVersionId,
-        inputSnapshot: { goalId: goal.id, targetDay: targetDay.title },
-        output: dailyGuideOutput,
-        outputSchemaVersion: 'daily-guide.v2',
-        status: 'success',
-        metrics: dailyGuideMetrics
-      });
-    } catch (error) {
-      if (dailyGuideMetrics) {
-        dailyGuideMetrics = { ...dailyGuideMetrics, errorCategory: 'ai_failure' };
-      }
-      const failDate = todayIso();
-      await this.store.saveAiReview({
-        kind: 'daily_guide',
-        date: failDate,
-        provider: 'deepseek',
-        model: runtimeSettings.deepseekModel,
-        promptProfileId: profile.id,
-        promptVersionId: profile.activeVersionId,
-        inputSnapshot: { goalId: goal.id, targetDay: targetDay.title },
-        output: {},
-        outputSchemaVersion: 'daily-guide.v2',
-        status: 'failed',
-        errorMessage: error instanceof Error ? error.message : String(error),
-        metrics: dailyGuideMetrics
-      });
-      return { todayState: 'generation_failed', errorMessage: error instanceof Error ? error.message : String(error) };
-    }
-
-    const result = await this.store.saveDailyGuideWithTransaction({
-      goal,
-      date: todayIso(),
-      windows: runtimeSettings.dailyStudyWindows,
-      shortPlanDayId: targetDay.id,
-      dailyGuide: dailyGuideOutput
-    });
-
-    return { todayState: 'active', result };
+    );
   }
 
   async generateRollingPlan(goalId: Id): Promise<GenerateRollingPlanResult> {
@@ -689,8 +502,22 @@ export class AppService {
     return this.store.getKnowledgeItemsForGoal(params);
   }
 
-  async auditRuntimeConsistency(): Promise<{ consistent: boolean; fixed: string[]; conflicts: Array<{ field: string; expected: string; actual: string }> }> {
-    return this.store.auditRuntimeConsistency();
+  async auditRuntimeConsistency(): Promise<RuntimeAuditResult> {
+    if (this.startupRuntimeAudit) {
+      const result = this.startupRuntimeAudit;
+      this.startupRuntimeAudit = null;
+      return result;
+    }
+    return this.runRuntimeAudit();
+  }
+
+  private async runRuntimeAudit(): Promise<RuntimeAuditResult> {
+    const result = await this.store.auditRuntimeConsistency();
+    return {
+      ...result,
+      checkedAt: new Date().toISOString(),
+      requiresUserAction: result.conflicts.length > 0
+    };
   }
 
   async exportGoalData(goalId: Id): Promise<Record<string, unknown>> {
@@ -698,7 +525,7 @@ export class AppService {
   }
 
   async startSession(blockId: Id) {
-    const session = await this.modules.runtime.session.start(blockId);
+    const session = await this.modules.runtime.startSession(blockId);
     this.focusMonitor.start(session.id);
     this.getMainWindow()?.flashFrame(true);
     await this.pushSessionState(session);
@@ -707,7 +534,7 @@ export class AppService {
 
   async pauseSession(sessionId: Id) {
     this.focusMonitor.stop();
-    const session = await this.modules.runtime.session.pause(sessionId);
+    const session = await this.modules.runtime.pauseSession(sessionId);
     await this.pushSessionState(session);
     return session;
   }
@@ -776,7 +603,7 @@ export class AppService {
   }
 
   getLearningState() {
-    return this.store.getLearningRuntimeSnapshot();
+    return this.modules.runtime.getSnapshot();
   }
 
   async teachCurrentStep(promptProfileId?: Id) {
@@ -820,19 +647,19 @@ export class AppService {
   }
 
   completeCurrentAction() {
-    return this.store.completeCurrentAction();
+    return this.modules.runtime.dispatch({ type: 'completeCurrentAction' });
   }
 
   skipCurrentAction() {
-    return this.store.skipCurrentAction();
+    return this.modules.runtime.dispatch({ type: 'skipCurrentAction' });
   }
 
   skipCurrentTask() {
-    return this.store.skipCurrentTask();
+    return this.modules.runtime.dispatch({ type: 'skipCurrentTask' });
   }
 
   async terminateLearning() {
-    const snapshot = await this.store.terminateLearning();
+    const snapshot = await this.modules.runtime.dispatch({ type: 'endCurrentSession' });
     this.focusMonitor.stop();
     return snapshot;
   }
@@ -1045,13 +872,10 @@ export class AppService {
     });
     if (result.decision.taskCompleted && active?.session) {
       this.focusMonitor.stop();
-      const completedSession = await this.store.completeSession(active.session.id);
+      const completedSession = await this.modules.runtime.completeSession(active.session.id);
       await this.pushSessionState(completedSession);
 
-      const today = await this.store.getActiveGuide();
-      if (today.guide && today.guide.tasks.length > 0 && today.guide.tasks.every((t) => t.status === 'done')) {
-        await this.store.closeCurrentSession(today.guide.id);
-      }
+      await this.modules.planning.closeCompletedLearningDay();
     }
       return {
         submission: { ...submission, evaluationStatus: 'completed' },
