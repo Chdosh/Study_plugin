@@ -574,13 +574,37 @@ export const databaseMigrations: DatabaseMigration[] = [
   }
 ];
 
-export async function runDatabaseMigrations(client: Client): Promise<void> {
+async function ensureMigrationTable(client: Client): Promise<void> {
   await client.executeMultiple(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       id TEXT PRIMARY KEY,
       applied_at TEXT NOT NULL
     );
   `);
+}
+
+const bootstrapCoveredMigrationIds = new Set([
+  '202607050006_short_plan_day_association',
+  '202607060001_ai_reviews_observability',
+  '202607060004_session_status',
+  '202607060006_roadmap_stage_status',
+  '202607060008_short_plan_roadmap_stage',
+  '202607060010_short_plan_locked'
+]);
+
+export async function markBootstrapCoveredMigrationsApplied(client: Client): Promise<void> {
+  await ensureMigrationTable(client);
+  const appliedAt = new Date().toISOString();
+  for (const migration of databaseMigrations.filter(({ id }) => bootstrapCoveredMigrationIds.has(id))) {
+    await client.execute({
+      sql: 'INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)',
+      args: [migration.id, appliedAt]
+    });
+  }
+}
+
+export async function runDatabaseMigrations(client: Client): Promise<void> {
+  await ensureMigrationTable(client);
 
   for (const migration of databaseMigrations) {
     const existing = await client.execute({
@@ -588,16 +612,7 @@ export async function runDatabaseMigrations(client: Client): Promise<void> {
       args: [migration.id]
     });
     if (existing.rows.length > 0) continue;
-    try {
-      await client.executeMultiple(migration.sql);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (/duplicate column name/i.test(message) || /already exists/i.test(message)) {
-        console.log(`[migrations] ${migration.id} skipped (already applied by bootstrap): ${message}`);
-      } else {
-        throw error;
-      }
-    }
+    await client.executeMultiple(migration.sql);
     await client.execute({
       sql: 'INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)',
       args: [migration.id, new Date().toISOString()]
