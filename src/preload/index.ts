@@ -103,6 +103,12 @@ const api: StudyAppApi = {
   knowledge: {
     listForGoal: (goalId: string) => ipcRenderer.invoke(ipcChannels.knowledgeListForGoal, { goalId })
   },
+  system: {
+    auditRuntime: () => ipcRenderer.invoke(ipcChannels.systemAuditRuntime)
+  },
+  data: {
+    exportGoal: (goalId: string) => ipcRenderer.invoke(ipcChannels.dataExportGoal, { goalId })
+  },
   prompts: {
     list: () => ipcRenderer.invoke(ipcChannels.promptsList),
     update: (profileId: Id, content: string) =>

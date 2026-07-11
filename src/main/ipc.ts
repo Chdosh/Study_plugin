@@ -63,6 +63,8 @@ export function registerIpcHandlers(appService: AppService): void {
   ipcMain.handle(ipcChannels.reviewsGetLatest, (_event, payload) => appService.getLatestReview(payload?.date));
   ipcMain.handle(ipcChannels.reviewsApplyAdjustments, (_event, payload) => appService.applyReviewPlanAdjustments(payload));
   ipcMain.handle(ipcChannels.knowledgeListForGoal, (_event, payload) => appService.getKnowledgeItemsForGoal(payload));
+  ipcMain.handle(ipcChannels.systemAuditRuntime, () => appService.auditRuntimeConsistency());
+  ipcMain.handle(ipcChannels.dataExportGoal, (_event, payload) => appService.exportGoalData(payload.goalId));
   ipcMain.handle(ipcChannels.promptsList, () => appService.listPrompts());
   ipcMain.handle(ipcChannels.promptsUpdate, (_event, payload) =>
     appService.updatePrompt(payload.profileId, payload.content)

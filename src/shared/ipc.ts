@@ -31,6 +31,8 @@ export const ipcChannels = {
   reviewsGetLatest: 'reviews:getLatest',
   reviewsApplyAdjustments: 'reviews:applyAdjustments',
   knowledgeListForGoal: 'knowledge:listForGoal',
+  systemAuditRuntime: 'system:auditRuntime',
+  dataExportGoal: 'data:exportGoal',
   promptsList: 'prompts:list',
   promptsUpdate: 'prompts:update',
   sessionGetActive: 'session:getActive',

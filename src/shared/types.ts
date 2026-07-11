@@ -250,6 +250,7 @@ export interface TodayGuideState {
   shortPlan: ShortPlanDay[];
   guide: DailyGuide | null;
   todayState: TodayState;
+  pendingEvaluations?: string[];
 }
 
 export interface PreviousLearningDayResult {
@@ -580,6 +581,12 @@ export interface StudyAppApi {
   };
   knowledge: {
     listForGoal: (goalId: string) => Promise<KnowledgeItem[]>;
+  };
+  system: {
+    auditRuntime: () => Promise<{ consistent: boolean; fixed: string[]; conflicts: Array<{ field: string; expected: string; actual: string }> }>;
+  };
+  data: {
+    exportGoal: (goalId: string) => Promise<Record<string, unknown>>;
   };
   prompts: {
     list: () => Promise<PromptProfile[]>;
