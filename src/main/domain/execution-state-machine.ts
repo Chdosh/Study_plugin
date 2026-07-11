@@ -133,15 +133,15 @@ export function completeAction(
   task.nextStartPoint = nextAction?.title ?? '行动步骤已完成，可以提交当前成果。';
 
   if (!nextAction) {
-    return advanceOnTaskCompletion(tasks, task);
+    task.status = 'active';
+    return { ok: true, state: stateFromSelection(tasks, task.id, null, 'awaiting_result') };
   }
 
   task.status = 'active';
   return { ok: true, state: stateFromSelection(tasks, task.id, nextAction.id) };
 }
 
-function advanceOnTaskCompletion(tasks: DailyGuideTask[], currentTask: DailyGuideTask): ExecutionResult {
-  currentTask.status = 'done';
+function advanceAfterTerminalTask(tasks: DailyGuideTask[], currentTask: DailyGuideTask): ExecutionResult {
   currentTask.currentAction = null;
   currentTask.nextStartPoint = null;
 
@@ -185,7 +185,8 @@ export function skipAction(
   task.nextStartPoint = nextAction?.title ?? '行动步骤已完成，可以提交当前成果。';
 
   if (!nextAction) {
-    return advanceOnTaskCompletion(tasks, task);
+    task.status = 'active';
+    return { ok: true, state: stateFromSelection(tasks, task.id, null, 'awaiting_result') };
   }
 
   task.status = 'active';
@@ -211,12 +212,15 @@ export function skipTask(
     }
   }
   task.remainingActions = [];
-  task.completedActions = task.actions.map((a) => a.id);
-  task.progressPercent = 100;
+  task.completedActions = task.actions.filter((action) => action.status === 'done').map((action) => action.id);
+  task.progressPercent = task.actions.length > 0
+    ? Math.round((task.completedActions.length / task.actions.length) * 100)
+    : 0;
   task.currentAction = null;
   task.nextStartPoint = null;
+  task.status = 'skipped';
 
-  return advanceOnTaskCompletion(tasks, task);
+  return advanceAfterTerminalTask(tasks, task);
 }
 
 export function applyEvaluationResult(
@@ -243,7 +247,7 @@ export function applyEvaluationResult(
   task.completedActions = task.actions.map((action) => action.id);
   task.remainingActions = [];
 
-  return advanceOnTaskCompletion(tasks, task);
+  return advanceAfterTerminalTask(tasks, task);
 }
 
 export function isPassingEvaluation(evaluation: EvaluationDecisionLike): boolean {
