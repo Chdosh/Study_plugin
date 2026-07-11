@@ -10,11 +10,20 @@ export type LearningAiOperation =
   | 'decide_next_step'
   | 'summarize_step';
 
+export type ContextFieldStatus = 'current' | 'stale' | 'failed';
+
+export interface ContextSourceMeta {
+  status: ContextFieldStatus;
+  sourceId: string | null;
+  createdAt: string | null;
+}
+
 export interface BuiltLearningContext {
   operation: LearningAiOperation;
   snapshot: LearningRuntimeSnapshot;
   context: Record<string, unknown>;
   contextSourceIds: string[];
+  contextMeta?: Record<string, ContextSourceMeta>;
 }
 
 const CONTEXT_MAX_AGE_DAYS = 30;
@@ -36,6 +45,7 @@ export class ContextBuilder {
   async build(operation: LearningAiOperation, extra: Record<string, unknown> = {}): Promise<BuiltLearningContext> {
     const snapshot = await this.store.getLearningRuntimeSnapshot();
     const contextSourceIds = collectSourceIds(snapshot);
+    const meta: Record<string, ContextSourceMeta> = {};
     const full: Record<string, unknown> = {
       operation,
       goal: snapshot.goal
@@ -106,23 +116,32 @@ export class ContextBuilder {
     const context: Record<string, unknown> = {};
     for (const key of whitelist) {
       if (key in full) {
-        context[key] = full[key];
+        let value = full[key];
+        if (value && typeof value === 'object' && 'note' in value && Object.keys(value).length === 1) {
+          const sourceField = snapshot[key as keyof LearningRuntimeSnapshot] as { id?: string; createdAt?: string } | null;
+          meta[key] = { status: 'stale', sourceId: sourceField?.id ?? null, createdAt: sourceField?.createdAt ?? null };
+        }
+        context[key] = value;
       }
     }
     for (const [key, value] of Object.entries(extra)) {
       context[key] = value;
     }
 
-    const conflicts = detectConflicts(snapshot);
+    const { conflicts, arbitratedContext } = arbitrateContext(snapshot);
     if (conflicts.length > 0) {
       context.conflicts = conflicts;
+    }
+    if (arbitratedContext) {
+      context.arbitratedContext = arbitratedContext;
     }
 
     return {
       operation,
       snapshot,
       context,
-      contextSourceIds
+      contextSourceIds,
+      contextMeta: Object.keys(meta).length > 0 ? meta : undefined
     };
   }
 
@@ -157,7 +176,7 @@ function truncateField(value: string | null | undefined, maxChars: number): stri
 }
 
 function evaluationRelevant(operation: LearningAiOperation): boolean {
-  return operation === 'evaluate_submission';
+  return operation === 'evaluate_submission' || operation === 'generate_daily_plan';
 }
 
 function foldIfStale(value: { createdAt?: string } | null, operation: string): unknown {
@@ -174,8 +193,27 @@ interface ConflictNote {
  原因: string;
 }
 
-function detectConflicts(snapshot: LearningRuntimeSnapshot): ConflictNote[] {
+interface ArbitrationRules {
+  priority: string;
+  decision: string;
+  reason: string;
+}
+
+interface ArbitratedContext {
+  rules: ArbitrationRules[];
+  safeToUse: string[];
+  avoidAssuming: string[];
+}
+
+function arbitrateContext(snapshot: LearningRuntimeSnapshot): {
+  conflicts: ConflictNote[];
+  arbitratedContext: ArbitratedContext | null;
+} {
   const conflicts: ConflictNote[] = [];
+  const rules: ArbitrationRules[] = [];
+  const safeToUse: string[] = [];
+  const avoidAssuming: string[] = [];
+
   const evaluation = snapshot.latestEvaluation;
   const brief = snapshot.goal;
 
@@ -188,6 +226,13 @@ function detectConflicts(snapshot: LearningRuntimeSnapshot): ConflictNote[] {
         采用: '最近评估结果',
         原因: '系统记录的实际行为优先于初始自我评估'
       });
+      rules.push({
+        priority: '实际评价 > 初始自我画像',
+        decision: '按最近评估结果判断当前水平',
+        reason: '用户实际行为比初始描述更可靠'
+      });
+      safeToUse.push('最近评价结果');
+      avoidAssuming.push('用户基础扎实');
     }
   }
 
@@ -201,6 +246,13 @@ function detectConflicts(snapshot: LearningRuntimeSnapshot): ConflictNote[] {
         采用: '实际掌握度评估',
         原因: '评估基于完成标准，而非提交长度'
       });
+      rules.push({
+        priority: '完成标准 > 提交篇幅',
+        decision: '以 mastery 分数为准',
+        reason: '评估基于完成标准，而非提交长度'
+      });
+      safeToUse.push('mastery 评估分数');
+      avoidAssuming.push('提交长度反映掌握度');
     }
   }
 
@@ -214,10 +266,35 @@ function detectConflicts(snapshot: LearningRuntimeSnapshot): ConflictNote[] {
         采用: '本地验证模式',
         原因: '用户对任务有疑虑时降低评价门槛'
       });
+      rules.push({
+        priority: '用户当前判断 > 系统预设模式',
+        decision: '建议切换到本地验证或简化任务',
+        reason: '用户对任务有疑虑时降低评价门槛'
+      });
+      safeToUse.push('用户当前反馈');
+      avoidAssuming.push('原定评价模式');
     }
   }
 
-  return conflicts;
+  if (evaluation && snapshot.dailyGuideTask) {
+    const passedWithLowMastery = evaluation.result === 'passed' && evaluation.mastery < 70;
+    if (passedWithLowMastery) {
+      rules.push({
+        priority: '连续评价 > 单次判断',
+        decision: '标记为初步通过，建议后续继续巩固',
+        reason: '单次 AI 判断不能永久确认掌握'
+      });
+      avoidAssuming.push('用户已完全掌握该知识点');
+    }
+  }
+
+  const arbitratedContext: ArbitratedContext | null = rules.length > 0 ? {
+    rules,
+    safeToUse,
+    avoidAssuming
+  } : null;
+
+  return { conflicts, arbitratedContext };
 }
 
 function collectSourceIds(snapshot: LearningRuntimeSnapshot): string[] {
