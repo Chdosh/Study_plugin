@@ -1,8 +1,7 @@
 import type { Client } from '@libsql/client';
-import { runDatabaseMigrations } from './migrations';
+import { markBootstrapCoveredMigrationsApplied, runDatabaseMigrations } from './migrations';
 
-export async function bootstrapDatabase(client: Client): Promise<void> {
-  await client.executeMultiple(`
+const CURRENT_SCHEMA_SQL = `
     PRAGMA foreign_keys = ON;
 
     CREATE TABLE IF NOT EXISTS raw_imports (
@@ -294,7 +293,27 @@ export async function bootstrapDatabase(client: Client): Promise<void> {
 
     CREATE UNIQUE INDEX IF NOT EXISTS daily_guides_short_plan_day_unique
       ON daily_guides(short_plan_day_id);
+  `;
+
+async function hasApplicationSchema(client: Client): Promise<boolean> {
+  const result = await client.execute(`
+    SELECT name FROM sqlite_master
+    WHERE type = 'table'
+      AND name IN ('goals', 'daily_plans', 'daily_guides', 'learning_runtime_states')
+    LIMIT 1
   `);
+  return result.rows.length > 0;
+}
+
+export async function bootstrapDatabase(client: Client): Promise<void> {
+  const existingDatabase = await hasApplicationSchema(client);
+  if (!existingDatabase) {
+    await client.executeMultiple(CURRENT_SCHEMA_SQL);
+    await markBootstrapCoveredMigrationsApplied(client);
+    await runDatabaseMigrations(client);
+    return;
+  }
 
   await runDatabaseMigrations(client);
+  await client.executeMultiple(CURRENT_SCHEMA_SQL);
 }
