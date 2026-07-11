@@ -78,6 +78,166 @@ AI 主动访谈澄清目标
 
 新增 `store.resolveKnowledgeItems(goalId, keys)`：当用户通过评价（无 misconceptions）时，自动匹配并标记相关 knowledge_item 为 `resolved`。匹配逻辑使用 case-includes（知识 item key 与任务 doneWhen/title 互包含）。`submitLearningResult` 评价成功后自动调用。新增 store 层测试覆盖。
 
+### 2026-07-10 落地 C3：摘要失败与来源追踪
+
+新增 `contextMeta` 输出：每个上下文字段附带 `{ status, sourceId, createdAt }` 元数据。当 `foldIfStale` 折叠超过 30 天的记录时，标记为 `stale` 状态，AI 可据此判断信息新鲜度。`evaluationRelevant` 扩展为包含 `generate_daily_plan`，使每日计划生成也能参考最近评价。
+
+新增 `context-builder.test.ts` 覆盖 stale 标记场景。
+
+验证：`npm test` 100 passed, 6 skipped；`npm run typecheck` 通过；`npm run build` 通过。
+
+### 2026-07-10 落地 C2：上下文冲突仲裁
+
+将 `detectConflicts` 升级为 `arbitrateContext`，输出从单一冲突列表扩展为：
+- `conflicts`：检测到的冲突列表
+- `arbitratedContext`：仲裁结果（`rules` 优先级规则 + `safeToUse` 安全信息 + `avoidAssuming` 禁止假设）
+
+仲裁规则：
+1. 用户最近一次明确评估 > 初始自我画像（"基础扎实"但评估失败 → 采信评估）
+2. 连续评价 > 单次判断（mastery < 70 时标记"初步通过"，避免永久标记 mastered）
+3. 无法安全仲裁时显式保留冲突，不静默选择
+
+新增 `context-builder.test.ts` 覆盖冲突检测 + 仲裁输出 + 无冲突场景。
+
+验证：`npm test` 99 passed, 6 skipped；`npm run typecheck` 通过；`npm run build` 通过。
+
+### 2026-07-10 落地 U3：知识库使用体验
+
+Review 页知识库卡片增强：
+- 状态筛选标签（活跃/已解决/全部）
+- 类型标签（错误/薄弱/洞见/纠正）+ 颜色区分
+- 按出现次数降序排列
+- 来源证据显示 (`sourceId`)
+- 已解决项使用虚线边框 + 半透明样式
+
+验证：`npm test` 101 passed, 6 skipped；`npm run typecheck` 通过；`npm run build` 通过。
+
+### 2026-07-11 建立深模块 seam
+
+按用户要求在最有价值的 seam 建立 5 个模块，先建骨架再逐步迁入：
+
+**新增目录 `src/main/modules/`：**
+
+| 模块 | 文件 | 职责 |
+|------|------|------|
+| `PlanningModule` | `planning/planning.ts` | `prepareNextLearningUnit()` + `proposeAdjustment()` + `applyAdjustments()` |
+| `LearningRuntimeModule` | `runtime/runtime.ts` | `getSnapshot()` + `dispatch(command)` |
+| `LearnerContextModule` | `context/context.ts` | `build()` + `proposeFact()` + `confirmFact()` |
+| `LearningBranchModule` | `branch/branch.ts` | `open()` + `append()` + `resolve()` + `promote()` |
+| `LearningHistoryModule` | `history/history.ts` | `getTaskTimeline()` + `getGoalTimeline()` |
+| `LearningModules` | `container.ts` | 容器，统一实例化所有模块 |
+
+**AppService 集成**：`app-service.ts` 新增 `readonly modules: LearningModules` 属性。
+
+**Store 扩展**（模块依赖的新方法）：`getActiveStageForGoal`、`getPendingShortPlanDaysForGoal`、`updateShortPlanDay`、`getCompletedGuidesForGoal`、`promoteQuestionThread`、`getPlanAdjustmentProposal`、`getSubmissionsForTask`、`getEvaluationsForTask`、`buildContext`。
+
+验证：`npm test` 101 passed, 6 skipped；`npm run typecheck` 通过；`npm run build` 通过。
+
+下一步：把 session 管理迁入 LearningRuntimeModule，把评价-知识流迁入 LearnerContextModule。
+
+### 2026-07-11 迁入 PlanningModule：generateRollingPlan
+
+将 `app-service.ts` 中 ~130 行的 `generateRollingPlan` 方法迁入 `PlanningModule.generateRollingPlan`。AppService 现在通过 `this.modules.planning.generateRollingPlan()` 调用，仅保留错误分类包装。模块通过 `GenerateRollingPlanDeps` 接口接收 AI -agent 依赖，避免构造函数膨胀。
+
+验证：`npm test` 101 passed, 6 skipped；`npm run typecheck` 通过；`npm run build` 通过。
+
+下一步：收尾第二优先级（T2 Proposal/Apply + T3 审计 + U4 导出 + Q2 噪声治理）。
+
+### 2026-07-11 迁入 LearnerContextModule：评价-知识流
+
+`LearnerContextModule.processEvaluationResult(params)` — 封装评价后的知识流逻辑：
+- `misconceptions`/`missingRequirements` → `recordKnowledgeItems`
+- `passed` + 无缺陷 → `resolveKnowledgeItems`
+
+`AppService._submitLearningResult` 中的两段知识流逻辑（~40 行）替换为单行模块调用。
+
+验证：`npm test` 101 passed, 6 skipped；`npm run typecheck` 通过；`npm run build` 通过。
+
+### 2026-07-11 迁入 LearningRuntimeModule：session 管理
+
+`LearningRuntimeModule` 新增 `session` 属性（`SessionOps` 接口），暴露 `start/pause/complete` 方法。`AppService.startSession/pauseSession` 现在通过 `this.modules.runtime.session.start/pause()` 调用，focus monitor 和 window flash 仍保留在 AppService（UI 层关注点）。
+
+验证：`npm test` 101 passed, 6 skipped；`npm run typecheck` 通过；`npm run build` 通过。
+
+下一步：收尾第二优先级（Q2 噪声治理）。
+
+### 2026-07-11 落地 U3 + U4：知识库 UI + 数据导出
+
+**U3** — 知识库使用体验：Review 页知识库卡片增强：
+- 状态筛选标签（活跃/已解决/全部）
+- 类型标签（错误/薄弱/洞见/纠正）+ 颜色区分
+- 按出现次数降序排列
+- 来源证据显示 (`sourceId`)
+- 已解决项使用虚线边框 + 半透明样式
+
+**U4** — 本地数据导出：
+- `store.exportGoalData(goalId)` — 导出目标的所有学习数据为 JSON
+- IPC 通道 `data:exportGoal` + preload `data.exportGoal()`
+- Settings 页"数据管理"卡片 — 导出按钮生成 `.json` 文件下载
+
+验证：`npm test` 101 passed, 6 skipped；`npm run typecheck` 通过；`npm run build` 通过。
+
+### 2026-07-11 迁入 LearnerContextModule：评价-知识流
+
+`LearnerContextModule.processEvaluationResult(params)` — 封装评价后的知识流逻辑：
+- `misconceptions`/`missingRequirements` → `recordKnowledgeItems`
+- `passed` + 无缺陷 → `resolveKnowledgeItems`
+
+`AppService._submitLearningResult` 中的两段知识流逻辑（~40 行）替换为单行模块调用。
+
+验证：`npm test` 101 passed, 6 skipped；`npm run typecheck` 通过；`npm run build` 通过。
+
+### 2026-07-10 C1 字段白名单验证
+
+审阅 `OPERATION_FIELD_WHITELIST`：每个 operation 的 prompt 实际消费字段均已覆盖。`generate_daily_plan` 的 `targetDay` / `previousDayResult` / `knowledgeItems` 通过 `build()` 的 `extra` 参数注入，不经过白名单。无遗漏、无冗余。
+
+同时确认 `evaluationRelevant` 扩展至 `generate_daily_plan`（使每日计划生成能参考最近评价）。
+
+C1 可标记 completed。
+
+### 2026-07-10 R2 审查修复 + 知识流修补
+
+**R2**: `generation_failed` 状态可恢复。重试时通过 active ShortPlanDay + failed ai_review 推导，无需创建 draft Guide（经审查发现 draft 方案与现有测试冲突，改用轻量路径）。
+
+**知识流修补**（本轮审查发现）：
+- `recordKnowledgeItems` 恢复 active 状态：已 resolved 的知识点再次出现时，status 重新激活
+- 评价路径统一使用 `getKnowledgeContextForGoal`，注入 `reviewKnowledgeItems`
+- `resolveKnowledgeItems` 增加 `missingRequirements.length === 0` 条件，避免 record + resolve 冲突
+- 新增/调整测试覆盖
+
+验证：`npm test` 101 passed, 6 skipped；`npm run typecheck` 通过；`npm run build` 通过。
+
+### 2026-07-10 落地 U2：学习时间线 + 计划调整差异
+
+**时间线增强**：Review 页 `review-timeline-card` 现在展示任务完成事件（每个 done 任务的标题），不再只显示累计分钟数。
+
+**调整差异展示**：采纳调整后显示"已应用调整"或"没有可应用项"明确反馈，区分成功和无可用项两种结果。
+
+验证：`npm test` 101 passed, 6 skipped；`npm run typecheck` 通过；`npm run build` 通过。
+
+### 2026-07-10 落地 U1：待处理中心
+
+Today 页新增"待处理"卡片，集中展示需要用户关注的事项：
+- 今日执行稿待确认（guide.status === 'draft'）
+- 评价未完成（pendingEvaluations 数量）
+- 待确认的调整建议（pendingAdjustment）
+
+每项提供快捷跳转按钮（去确认/去评价/查看）。`TodayGuideState` 新增 `pendingEvaluations` 字段。OverviewPage 新增 `onNavigate` prop 用于页面内跳转。
+
+验证：`npm test` 101 passed, 6 skipped；`npm run typecheck` 通过；`npm run build` 通过。
+
+### 2026-07-10 落地 R4：启动一致性审计
+
+新增 `store.auditRuntimeConsistency()`：
+- 检查 `activeGoalId` 是否指向 active goal，若不唯一可推导则自动修复
+- 检查 `activeStageId` 是否属于当前 goal 且 active
+- 检查 `activeDailyTaskId` / `activeStepId` 是否存在且一致
+- 返回 `{ consistent, fixed, conflicts }` 结构
+
+IPC 通道 `system:auditRuntime` + preload `system.auditRuntime()` + `StudyAppApi` 类型。新增 store 层测试覆盖。
+
+验证：`npm test` 96 passed, 6 skipped；`npm run typecheck` 通过；`npm run build` 通过。
+
 ### 2026-07-10 落地 T3 部分：locked 前端展示 + plan_versions 只读
 
 **locked 前端**：TodayPage 当前学习单元标题旁显示"已锁定"徽章（当 `short_plan_day.locked = true`）。`confirmDailyGuide` 时自动锁定关联 short_plan_day。
