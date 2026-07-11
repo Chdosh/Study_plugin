@@ -235,6 +235,35 @@ describe('Runtime convergence', () => {
     expect(actionRows[0]).toBeTruthy();
   });
 
+  it('Action 全部完成后仍停留当前主任务等待提交', async () => {
+    const guide = await createConfirmedGuide();
+    const taskId = guide.tasks[0].id;
+    await store.startSession(taskId);
+
+    await store.completeCurrentAction();
+    const awaitingSubmission = await store.completeCurrentAction();
+
+    expect(awaitingSubmission.state.activeDailyTaskId).toBe(taskId);
+    expect(awaitingSubmission.state.activeStepId).toBe(guide.tasks[0].actions[1].id);
+    expect(awaitingSubmission.dailyGuideTask?.status).toBe('active');
+    expect(awaitingSubmission.dailyGuideTask?.actions.every((action) => action.status === 'done')).toBe(true);
+    expect(awaitingSubmission.dailyGuideAction?.status).toBe('done');
+    expect(awaitingSubmission.dailyGuide?.tasks[1].status).toBe('planned');
+  });
+
+  it('跳过主任务时保留 skipped 语义并进入同一 Guide 的下一任务', async () => {
+    const guide = await createConfirmedGuide();
+    await store.startSession(guide.tasks[0].id);
+
+    const afterSkip = await store.skipCurrentTask();
+
+    expect(afterSkip.dailyGuide?.tasks[0].status).toBe('skipped');
+    expect(afterSkip.state.activeDailyTaskId).toBe(guide.tasks[1].id);
+    expect(afterSkip.dailyGuideTask?.status).toBe('active');
+    expect(afterSkip.dailyGuideAction?.id).toBe(guide.tasks[1].actions[0].id);
+    expect(afterSkip.dailyGuide?.sessionStatus).toBe('active');
+  });
+
   it('3. activeStageId directly queries roadmap_stages', async () => {
     await createConfirmedGuide();
     const rows = await db.select().from(roadmapStages);
@@ -729,6 +758,39 @@ describe('Runtime convergence', () => {
 
     await store.db.delete(learningRuntimeStates);
     await store.db.delete(goals);
+  });
+  it('auditRuntimeConsistency repairs one recoverable Session but reports ambiguous multiple Sessions', async () => {
+    const guide = await createConfirmedGuide();
+    const taskId = guide.tasks[0].id;
+    const session = await store.startSession(taskId);
+    await store.db.update(learningRuntimeStates).set({
+      activeDailyTaskId: null,
+      activeStepId: null,
+      sessionStatus: 'idle'
+    });
+
+    const repaired = await store.auditRuntimeConsistency();
+    const runtimeRows = await store.db.select().from(learningRuntimeStates);
+    expect(repaired.consistent).toBe(true);
+    expect(repaired.fixed.some((item) => item.includes('focusSession'))).toBe(true);
+    expect(runtimeRows[0].activeDailyTaskId).toBe(taskId);
+    expect(runtimeRows[0].sessionStatus).toBe('active');
+
+    await store.db.insert(studySessions).values({
+      id: 'session-conflict',
+      taskId,
+      taskItemsId: null,
+      startedAt: '2026-07-11T00:00:00.000Z',
+      endedAt: null,
+      durationMinutes: null,
+      status: 'paused',
+      focusScore: null,
+      notes: null
+    });
+    const conflicted = await store.auditRuntimeConsistency();
+    expect(conflicted.consistent).toBe(false);
+    expect(conflicted.conflicts.some((item) => item.field === 'focusSession')).toBe(true);
+    expect((await store.listSessions()).map((item) => item.id)).toContain(session.id);
   });
   it('recordKnowledgeItems restores active status when a resolved item reappears', async () => {
     await store.db.delete(knowledgeItemEvidence);

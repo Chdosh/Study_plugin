@@ -898,6 +898,66 @@ export class StudyStore {
       }
     }
 
+    const currentStateRows = await this.db.select().from(learningRuntimeStates).limit(1);
+    const currentState = currentStateRows[0];
+    const resumableSessions = await this.db.select({
+      id: studySessions.id,
+      taskId: studySessions.taskId,
+      status: studySessions.status
+    }).from(studySessions).where(inArray(studySessions.status, ['active', 'paused']));
+
+    if (resumableSessions.length > 1) {
+      conflicts.push({
+        field: 'focusSession',
+        expected: 'at most one active or paused session',
+        actual: resumableSessions.map((session) => `${session.id}:${session.status}`).join(', ')
+      });
+    } else if (resumableSessions[0] && currentState) {
+      const session = resumableSessions[0];
+      if (!session.taskId) {
+        conflicts.push({ field: 'focusSession.taskId', expected: 'a valid DailyGuideTask', actual: 'null' });
+      } else {
+        const taskRows = await this.db
+          .select({
+            id: dailyGuideTasks.id,
+            currentActionId: dailyGuideTasks.currentActionId,
+            goalId: dailyGuides.goalId,
+            guideStatus: dailyGuides.sessionStatus
+          })
+          .from(dailyGuideTasks)
+          .innerJoin(dailyGuides, eq(dailyGuides.id, dailyGuideTasks.guideId))
+          .where(eq(dailyGuideTasks.id, session.taskId))
+          .limit(1);
+        const task = taskRows[0];
+        if (!task) {
+          conflicts.push({ field: 'focusSession.taskId', expected: 'an existing DailyGuideTask', actual: session.taskId });
+        } else if (task.guideStatus === 'closed') {
+          conflicts.push({ field: 'focusSession.guide', expected: 'an active guide', actual: 'closed' });
+        } else if (currentState.activeGoalId && task.goalId !== currentState.activeGoalId) {
+          conflicts.push({ field: 'focusSession.goalId', expected: currentState.activeGoalId, actual: task.goalId });
+        } else if (currentState.activeDailyTaskId && currentState.activeDailyTaskId !== session.taskId) {
+          conflicts.push({
+            field: 'activeDailyTaskId',
+            expected: session.taskId,
+            actual: currentState.activeDailyTaskId
+          });
+        } else {
+          const nextSessionStatus = session.status === 'active' ? 'active' : 'paused';
+          const patch: Partial<typeof learningRuntimeStates.$inferInsert> = {};
+          if (!currentState.activeDailyTaskId) patch.activeDailyTaskId = session.taskId;
+          if (!currentState.activeStepId && task.currentActionId) patch.activeStepId = task.currentActionId;
+          if (currentState.sessionStatus !== nextSessionStatus) patch.sessionStatus = nextSessionStatus;
+          if (Object.keys(patch).length > 0) {
+            await this.db.update(learningRuntimeStates).set({ ...patch, updatedAt: now });
+            fixed.push(`focusSession → ${session.id}:${nextSessionStatus}`);
+          }
+        }
+      }
+    } else if (currentState && currentState.sessionStatus === 'active') {
+      await this.db.update(learningRuntimeStates).set({ sessionStatus: 'idle', updatedAt: now });
+      fixed.push('sessionStatus → idle');
+    }
+
     return { consistent: conflicts.length === 0, fixed, conflicts };
   }
 
@@ -1178,6 +1238,41 @@ export class StudyStore {
     return null;
   }
 
+  async ensureDraftDailyGuide(params: {
+    goal: LearningGoal;
+    date: string;
+    windows: StudyWindow[];
+    shortPlanDayId: string;
+  }): Promise<DailyGuide> {
+    const existing = await this.db.select({ id: dailyGuides.id }).from(dailyGuides)
+      .where(eq(dailyGuides.shortPlanDayId, params.shortPlanDayId)).limit(1);
+    if (existing[0]) {
+      const guide = await this.getDailyGuideById(existing[0].id);
+      if (!guide) throw new Error('待生成执行稿读取失败。');
+      return guide;
+    }
+
+    const now = nowIso();
+    const planId = createId('plan');
+    const guideId = createId('daily_guide');
+    await this.db.transaction(async (tx) => {
+      await tx.insert(dailyPlans).values({
+        id: planId, date: params.date, status: 'draft',
+        availableWindowsJson: JSON.stringify(params.windows), shortPlanDayId: params.shortPlanDayId,
+        createdAt: now, confirmedAt: null, sourceReviewId: null, version: 1
+      });
+      await tx.insert(dailyGuides).values({
+        id: guideId, goalId: params.goal.id, planId, shortPlanDayId: params.shortPlanDayId,
+        date: params.date, status: 'draft', sessionStatus: 'draft', weekFocus: '', todayGoal: '',
+        deliverablesJson: '[]', boundariesJson: '[]', acceptanceCriteriaJson: '[]', tomorrowActionsJson: '[]',
+        createdAt: now, confirmedAt: null
+      });
+    });
+    const guide = await this.getDailyGuideById(guideId);
+    if (!guide) throw new Error('待生成执行稿创建失败。');
+    return guide;
+  }
+
   async saveDailyGuideWithTransaction(params: {
     goal: LearningGoal;
     date: string;
@@ -1196,36 +1291,44 @@ export class StudyStore {
         .limit(1);
       const activeStageId = activeStageRows[0]?.id ?? null;
 
-      const planId = createId('plan');
-      await tx.insert(dailyPlans).values({
-        id: planId,
-        date: params.date,
-        status: 'draft',
-        availableWindowsJson: JSON.stringify(params.windows),
-        shortPlanDayId: params.shortPlanDayId,
-        createdAt: now,
-        confirmedAt: null,
-        sourceReviewId: null,
-        version: 1
-      });
+      const existingRows = await tx.select().from(dailyGuides)
+        .where(eq(dailyGuides.shortPlanDayId, params.shortPlanDayId)).limit(1);
+      const existing = existingRows[0] ?? null;
+      if (existing && existing.sessionStatus !== 'draft') {
+        throw new Error('该学习单元已经存在有效执行稿。');
+      }
 
-      const guideId = createId('daily_guide');
-      await tx.insert(dailyGuides).values({
-        id: guideId,
-        goalId: params.goal.id,
-        planId,
-        shortPlanDayId: params.shortPlanDayId,
-        date: params.date,
-        status: 'draft',
-        weekFocus: '',
-        todayGoal: params.dailyGuide.todayGoal,
-        deliverablesJson: JSON.stringify(params.dailyGuide.deliverables),
-        boundariesJson: JSON.stringify(params.dailyGuide.boundaries),
-        acceptanceCriteriaJson: JSON.stringify(params.dailyGuide.acceptanceCriteria),
-        tomorrowActionsJson: JSON.stringify(params.dailyGuide.tomorrowActions),
-        createdAt: now,
-        confirmedAt: null
-      });
+      const planId = existing?.planId ?? createId('plan');
+      const guideId = existing?.id ?? createId('daily_guide');
+      if (existing) {
+        await tx.update(dailyPlans).set({
+          date: params.date,
+          availableWindowsJson: JSON.stringify(params.windows)
+        }).where(eq(dailyPlans.id, planId));
+        await tx.update(dailyGuides).set({
+          date: params.date, sessionStatus: 'active', todayGoal: params.dailyGuide.todayGoal,
+          deliverablesJson: JSON.stringify(params.dailyGuide.deliverables),
+          boundariesJson: JSON.stringify(params.dailyGuide.boundaries),
+          acceptanceCriteriaJson: JSON.stringify(params.dailyGuide.acceptanceCriteria),
+          tomorrowActionsJson: JSON.stringify(params.dailyGuide.tomorrowActions)
+        }).where(eq(dailyGuides.id, guideId));
+      } else {
+        await tx.insert(dailyPlans).values({
+          id: planId, date: params.date, status: 'draft',
+          availableWindowsJson: JSON.stringify(params.windows), shortPlanDayId: params.shortPlanDayId,
+          createdAt: now, confirmedAt: null, sourceReviewId: null, version: 1
+        });
+        await tx.insert(dailyGuides).values({
+          id: guideId, goalId: params.goal.id, planId, shortPlanDayId: params.shortPlanDayId,
+          date: params.date, status: 'draft', sessionStatus: 'active', weekFocus: '',
+          todayGoal: params.dailyGuide.todayGoal,
+          deliverablesJson: JSON.stringify(params.dailyGuide.deliverables),
+          boundariesJson: JSON.stringify(params.dailyGuide.boundaries),
+          acceptanceCriteriaJson: JSON.stringify(params.dailyGuide.acceptanceCriteria),
+          tomorrowActionsJson: JSON.stringify(params.dailyGuide.tomorrowActions),
+          createdAt: now, confirmedAt: null
+        });
+      }
 
       let blockPosition = 0;
       let cursorTime = params.windows[0]?.start ?? '20:00';
@@ -1338,7 +1441,7 @@ export class StudyStore {
       .where(inArray(dailyGuides.status, ['draft', 'confirmed', 'completed']))
       .orderBy(desc(dailyGuides.createdAt));
     const active = activeOnly
-      ? rows.find((r) => r.sessionStatus === 'active') ?? null
+      ? rows.find((r) => r.sessionStatus === 'active' || r.sessionStatus === 'draft') ?? null
       : rows.find((r) => r.sessionStatus === 'active') ?? rows[0] ?? null;
     const guide = active ? await this.getDailyGuideById(active.id) : null;
     const goal = guide
@@ -1495,6 +1598,10 @@ export class StudyStore {
     const session = await this.finishSession(sessionId, 'paused');
     if (session.taskId) {
       await this.updateDailyGuideTaskElapsed(session.taskId);
+      const runtime = await this.getOrCreateRuntimeState();
+      if (runtime.activeDailyTaskId === session.taskId) {
+        await this.upsertRuntimeState({ sessionStatus: 'paused' });
+      }
     }
     return session;
   }
@@ -1729,19 +1836,9 @@ export class StudyStore {
     }
     await this.persistExecutionState(result.state, now);
 
-    let activeStepId = snapshot.dailyGuideAction?.id ?? null;
-
-    const updatedTask = result.state.tasks.find((item) => item.id === task.id) ?? task;
-    const nextAction = updatedTask.currentAction;
-    if (nextAction) {
-      activeStepId = nextAction.id;
-    } else {
-      activeStepId = null;
-    }
-
     await this.upsertRuntimeState({
-      activeDailyTaskId: taskId,
-      activeStepId,
+      activeDailyTaskId: result.state.activeDailyTaskId,
+      activeStepId: result.state.activeStepId,
       activeQuestionThreadId: null,
       sessionStatus: snapshot.state.sessionStatus === 'idle' ? 'active' : snapshot.state.sessionStatus
     });
@@ -1771,8 +1868,8 @@ export class StudyStore {
     const updatedTask = result.state.tasks.find((t) => t.id === taskId);
     const nextAction = updatedTask?.currentAction ?? null;
     await this.upsertRuntimeState({
-      activeDailyTaskId: taskId,
-      activeStepId: nextAction?.id ?? null,
+      activeDailyTaskId: result.state.activeDailyTaskId,
+      activeStepId: result.state.activeStepId ?? nextAction?.id ?? null,
       activeQuestionThreadId: null,
       sessionStatus: snapshot.state.sessionStatus === 'idle' ? 'active' : snapshot.state.sessionStatus
     });
@@ -1784,17 +1881,18 @@ export class StudyStore {
     const taskId = snapshot.state.activeDailyTaskId;
     if (!taskId || !snapshot.dailyGuideTask) return snapshot;
 
-    const tasks = [snapshot.dailyGuideTask];
+    const tasks = snapshot.dailyGuide?.tasks ?? [snapshot.dailyGuideTask];
     const result = skipTask({ tasks, activeDailyTaskId: taskId, activeStepId: null });
     if (!result.ok) throw new Error(result.conflict.message);
 
     await this.persistExecutionState(result.state, nowIso());
-    const updatedTask = result.state.tasks.find((t) => t.id === taskId);
-    const nextTask = result.state.tasks.find((t) => t.status === 'active');
+    const nextTask = result.state.activeDailyTaskId
+      ? result.state.tasks.find((task) => task.id === result.state.activeDailyTaskId) ?? null
+      : null;
 
     await this.upsertRuntimeState({
-      activeDailyTaskId: nextTask?.id ?? null,
-      activeStepId: nextTask?.currentAction?.id ?? null,
+      activeDailyTaskId: result.state.activeDailyTaskId,
+      activeStepId: result.state.activeStepId ?? nextTask?.currentAction?.id ?? null,
       activeQuestionThreadId: null,
       sessionStatus: snapshot.state.sessionStatus === 'idle' ? 'active' : snapshot.state.sessionStatus
     });
@@ -1803,11 +1901,6 @@ export class StudyStore {
       await this.closeCurrentSession(snapshot.dailyGuide.id);
     }
 
-    return this.getLearningRuntimeSnapshot();
-  }
-
-  async terminateLearning(): Promise<LearningRuntimeSnapshot> {
-    await this.upsertRuntimeState({ sessionStatus: 'completed' });
     return this.getLearningRuntimeSnapshot();
   }
 
