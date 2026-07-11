@@ -154,3 +154,16 @@ Renderer 操作
 大型架构变更必须先产出设计说明或迁移方案，再修改生产代码。
 
 保持向后兼容，除非用户明确批准破坏性变更。
+
+## 8. 当前主链调用映射
+
+```text
+Renderer
+→ typed preload / IPC
+→ AppService Adapter（窗口通知、FocusMonitor、错误映射、AI Adapter）
+→ LearningRuntimeModule | PlanningModule | LearnerContextModule
+→ StudyStore
+→ SQLite
+```
+
+运行时命令必须经过 `LearningRuntimeModule`：Session 开始/暂停/完成、Action 完成/跳过、Task 跳过、结束本次学习。学习单元命令必须经过 `PlanningModule`：Daily Guide 准备与失败恢复、关闭已完成学习日、Review 容错、下一单元推进、滚动计划。AppService 不再复制这些状态编排，只保留 Electron 和 AI Adapter 职责。

@@ -1,7 +1,7 @@
 # 项目 Step 推进计划
 
 状态：ACTIVE  
-更新日期：2026-07-10  
+更新日期：2026-07-11
 用途：把“长期学习 Agent Runtime”方向拆成可逐步实现、独立验收的开发步骤。  
 约束：本文件服从 `docs/PRODUCT_TRUTH.md`、`docs/MVP_SPEC.md` 和仓库当前代码；完成状态以代码、测试和 `docs/PROJECT_MEMORY.md` 为准。
 
@@ -55,6 +55,9 @@
 - 知识项已具备证据、聚合、复习候选和重新验证基础，长期掌握度策略仍可继续深化。
 - 旧 block/step 数据仍承担部分 Session 兼容职责。
 - 测试初始化存在 migration duplicate-column 跳过日志，迁移事实源需要收敛。
+- `LearningRuntimeModule` 已统一 Session、Action、Task skip 和结束本次学习的运行时入口。
+- `PlanningModule` 已统一 Daily Guide 生成/恢复、滚动计划、学习日关闭、Review 容错和下一单元推进。
+- Action 全部完成后等待正式提交与评价；只有评价通过才完成 Task 并推进。
 
 ## 4. Step 清单
 
@@ -85,11 +88,11 @@
 
 #### R2 Daily Guide 生成失败恢复
 
-状态：`in_progress`
+状态：`completed`
 
 目标：目标学习日激活后，生成失败不会跳日、覆盖历史或退回访谈。
 
-当前进展：已修复“active ShortPlanDay + 无新 Guide”被误判为 `plan_exhausted` 的问题；Today 会展示 `generation_failed` 和显式重试入口，重启后显式重试会清理旧进程遗留的生成锁并复用原学习单元。剩余工作是把待生成状态显式落到 draft Guide，而不只依赖 active ShortPlanDay + 失败 AI Review 推导。
+完成结果：生成 AI 前事务创建 `sessionStatus=draft` 的空任务 Guide；失败、退出和重启后直接从持久 draft 恢复。重试原位填充同一个 Guide ID 并切换为 active，不跳 ShortPlanDay、不覆盖历史、不产生双 Guide。
 
 实现范围：
 
@@ -118,7 +121,7 @@
 
 #### R4 启动一致性审计
 
-状态：`pending`
+状态：`completed`
 
 目标：应用启动时识别并安全处理 runtime、Session、Task、Action 和 Guide 的不一致。
 
@@ -130,6 +133,8 @@
 4. UI 提供明确恢复选择。
 
 验收：代表性中断状态均能恢复或给出明确阻断原因。
+
+完成结果：主进程创建窗口前执行审计并缓存结构化结果；唯一可推导的 Goal/Stage/Task/Action/Session 指针自动修复，多 Session、跨 Goal 或关闭 Guide 等歧义只报告。Renderer 提供重新检查或保留数据稍后处理，不静默推进和删除数据。
 
 ### Phase T：AI 事务边界
 
@@ -242,9 +247,11 @@
 
 #### Q2 旧数据迁移和 migration 噪声治理
 
-状态：`pending`
+状态：`completed`
 
 目标：在不删除用户数据的前提下验证旧库迁移，并消除 bootstrap 与 migration 重复产生的跳过噪声。
+
+完成结果：全新库只预登记 bootstrap 已真实覆盖的 6 个加列 migration，其余历史 migration 正常执行；已有库严格执行缺失 migration，失败不再被吞掉。已建立空库、旧库补最后一版 migration、已升级库重复启动测试，均校验数据保留和 `foreign_key_check`，全量测试不再输出 duplicate-column 日志。
 
 #### Q3 端到端与真实模型验收
 
