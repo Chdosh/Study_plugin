@@ -227,7 +227,7 @@ export function StudyPage({
                     type="button"
                     onClick={() => void onTerminateLearning()}
                   >
-                    终止
+                    结束本次学习
                   </button>
                 </>
               ) : (
