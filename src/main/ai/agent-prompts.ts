@@ -261,12 +261,19 @@ export function buildEvaluateSubmissionPrompt(params: {
   context: unknown;
   profile: PromptProfile;
   knowledgeItems?: KnowledgeItem[];
+  reviewKnowledgeItems?: KnowledgeItem[];
 }): string {
   const knowledgeCtx = (params.knowledgeItems && params.knowledgeItems.length > 0)
     ? ['',
       '学习者历史上的相关错误和薄弱点：',
       ...params.knowledgeItems.slice(0, 3).map((k) => `- [${k.key}] ${k.summary}${k.occurrenceCount > 1 ? `（已出现 ${k.occurrenceCount} 次）` : ''}`),
       '如果本次提交暴露了上述问题，请在 feedback 中明确指出并关联。'
+    ].join('\n')
+    : '';
+  const reviewCtx = (params.reviewKnowledgeItems && params.reviewKnowledgeItems.length > 0)
+    ? ['',
+      '以下知识点已经多次出错，如果本次提交仍涉及，请在 feedback 中明确指出你已多次提醒：',
+      ...params.reviewKnowledgeItems.slice(0, 3).map((k) => `- [${k.key}] ${k.summary}（已出现 ${k.occurrenceCount} 次）`)
     ].join('\n')
     : '';
   return [
@@ -281,7 +288,8 @@ export function buildEvaluateSubmissionPrompt(params: {
     '',
     `用户提交：${params.submission}`,
     `工作上下文：${JSON.stringify(params.context)}`,
-    knowledgeCtx
+    knowledgeCtx,
+    reviewCtx
   ].filter(Boolean).join('\n');
 }
 
