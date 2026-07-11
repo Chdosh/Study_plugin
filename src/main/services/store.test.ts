@@ -11,11 +11,14 @@ import {
   dailyGuideTasks,
   dailyGuides,
   dailyPlanBlocks,
+  dailyPlans,
   goals,
+  knowledgeItems,
+  knowledgeItemEvidence,
+  learningEvaluations,
   learningRuntimeStates,
   learningSteps,
   learningSubmissions,
-  knowledgeItemEvidence,
   planStages,
   roadmapStages,
   shortPlanDays,
@@ -700,8 +703,74 @@ describe('Runtime convergence', () => {
     expect(reviewWorthy[0].occurrenceCount).toBe(2);
   });
 
-  it('resolveKnowledgeItems marks matching active items as resolved', async () => {
+  it('auditRuntimeConsistency fixes invalid pointers and reports conflicts', async () => {
+    await store.db.delete(learningRuntimeStates);
+    const goal1 = await store.createGoal('goal1', 'active goal');
+    const goal2 = await store.createGoal('goal2', 'inactive goal');
+    await store.db.update(goals).set({ status: 'archived' }).where(eq(goals.id, goal2.id));
+
+    await store.db.insert(learningRuntimeStates).values({
+      id: 'runtime-1',
+      activeGoalId: goal2.id,
+      activeStageId: null,
+      activeDailyTaskId: null,
+      activeStepId: null,
+      activeQuestionThreadId: null,
+      sessionStatus: 'idle',
+      updatedAt: 'now'
+    });
+
+    const result = await store.auditRuntimeConsistency();
+    expect(result.fixed.length).toBeGreaterThan(0);
+    expect(result.fixed[0]).toContain('activeGoalId');
+
+    const runtimeRows = await store.db.select().from(learningRuntimeStates);
+    expect(runtimeRows[0].activeGoalId).toBe(goal1.id);
+
+    await store.db.delete(learningRuntimeStates);
+    await store.db.delete(goals);
+  });
+  it('recordKnowledgeItems restores active status when a resolved item reappears', async () => {
+    await store.db.delete(knowledgeItemEvidence);
+    await store.db.delete(knowledgeItems);
+    await store.db.delete(learningEvaluations);
+    await store.db.delete(learningSubmissions);
+    await store.db.delete(dailyGuideActions);
+    await store.db.delete(dailyGuideTasks);
+    await store.db.delete(dailyPlanBlocks);
+    await store.db.delete(dailyPlans);
+    await store.db.delete(shortPlanDays);
+    await store.db.delete(dailyGuides);
+    await store.db.delete(roadmapStages);
+    await store.db.delete(goals);
     const goal = await store.createGoal('test', 'test');
+
+    const first = await store.recordKnowledgeItems({
+      goalId: goal.id,
+      items: [{ key: 'hooks', summary: 'React Hooks 概念混淆', sourceType: 'misconception' }]
+    });
+    expect(first.length).toBe(1);
+    expect(first[0].occurrenceCount).toBe(1);
+
+    await store.db.update(knowledgeItems).set({ status: 'resolved' }).where(eq(knowledgeItems.goalId, goal.id));
+
+    const second = await store.recordKnowledgeItems({
+      goalId: goal.id,
+      items: [{ key: 'hooks', summary: 'React Hooks 概念混淆', sourceType: 'misconception' }]
+    });
+    expect(second.length).toBe(1);
+
+    const items = await store.getKnowledgeItemsForGoal({ goalId: goal.id, status: 'active' });
+    expect(items.length).toBe(1);
+    expect(items[0].key).toBe('hooks');
+    expect(items[0].occurrenceCount).toBe(2);
+  });
+
+  it('resolveKnowledgeItems marks matching active items as resolved', async () => {
+    await store.db.delete(knowledgeItems);
+    await store.db.delete(goals);
+    const goal = await store.createGoal('test', 'test');
+
     await store.recordKnowledgeItems({
       goalId: goal.id,
       items: [

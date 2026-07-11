@@ -49,6 +49,8 @@ import { applyEvaluationResult, completeAction, isPassingEvaluation, skipAction,
 import { defaultPromptProfiles } from '../db/default-prompts';
 import type { Database } from '../db/client';
 import type { AiCallMetrics } from '../ai/ai-client';
+import type { LearningAiOperation, BuiltLearningContext } from './context-builder';
+export type { LearningAiOperation, BuiltLearningContext };
 import {
   aiReviews,
   appSettings,
@@ -771,14 +773,16 @@ export class StudyStore {
             key: canonicalKey,
             occurrenceCount: existing.occurrenceCount + 1,
             lastSeenAt: now,
-            updatedAt: now
+            updatedAt: now,
+            status: 'active'
           })
           .where(eq(knowledgeItems.id, existing.id));
         result.push({
           ...mapKnowledgeItem(existing),
           occurrenceCount: existing.occurrenceCount + 1,
           lastSeenAt: now,
-          updatedAt: now
+          updatedAt: now,
+          status: 'active'
         });
       } else {
         const id = createId('knowledge_item');
@@ -919,6 +923,11 @@ export class StudyStore {
     return { knowledgeItems, reviewKnowledgeItems };
   }
 
+  private extractTechnicalTokens(value: string): string[] {
+    const normalized = value.normalize('NFKC').toLowerCase();
+    return [...new Set(normalized.match(/[a-z][a-z0-9.+#_-]*/gu) ?? [])];
+  }
+
   async resolveKnowledgeItems(goalId: string, keys: string[]): Promise<void> {
     if (keys.length === 0) return;
     const now = nowIso();
@@ -931,9 +940,14 @@ export class StudyStore {
       ));
     for (const item of activeItems) {
       const matches = keys.some((k) => {
-        const normalizedCandidate = normalizeKnowledgeKey(k);
-        const normalizedItem = normalizeKnowledgeKey(item.key || item.summary);
-        return normalizedCandidate === normalizedItem;
+        const candidateTokens = this.extractTechnicalTokens(k);
+        const itemTokens = this.extractTechnicalTokens(item.key || item.summary);
+        if (candidateTokens.length > 0 && itemTokens.length > 0) {
+          return candidateTokens.some((ct) => itemTokens.some((it) => ct.includes(it) || it.includes(ct)));
+        }
+        const lowerK = k.toLowerCase();
+        const lowerItem = (item.key || item.summary).toLowerCase();
+        return lowerItem.includes(lowerK) || lowerK.includes(lowerItem);
       });
       if (matches) {
         await this.db
@@ -1352,6 +1366,55 @@ export class StudyStore {
       .where(and(eq(shortPlanDays.id, shortPlanDayId), eq(shortPlanDays.sessionStatus, 'pending')))
       .returning({ id: shortPlanDays.id });
     return rows.length > 0;
+  }
+
+  async getActiveStageForGoal(goalId: string): Promise<RoadmapStage | null> {
+    const rows = await this.db
+      .select()
+      .from(roadmapStages)
+      .where(and(eq(roadmapStages.goalId, goalId), eq(roadmapStages.status, 'active')))
+      .orderBy(asc(roadmapStages.position))
+      .limit(1);
+    return rows[0] ? mapRoadmapStage(rows[0]) : null;
+  }
+
+  async getPendingShortPlanDaysForGoal(goalId: string): Promise<ShortPlanDay[]> {
+    const rows = await this.db
+      .select()
+      .from(shortPlanDays)
+      .where(and(eq(shortPlanDays.goalId, goalId), eq(shortPlanDays.sessionStatus, 'pending')))
+      .orderBy(asc(shortPlanDays.dayIndex));
+    return rows.map(mapShortPlanDay);
+  }
+
+  async updateShortPlanDay(shortPlanDayId: string, patch: Partial<ShortPlanDay>): Promise<ShortPlanDay | null> {
+    const rows = await this.db
+      .update(shortPlanDays)
+      .set(patch)
+      .where(eq(shortPlanDays.id, shortPlanDayId))
+      .returning();
+    return rows[0] ? mapShortPlanDay(rows[0]) : null;
+  }
+
+  async getCompletedGuidesForGoal(goalId: string): Promise<DailyGuide[]> {
+    const rows = await this.db
+      .select()
+      .from(dailyGuides)
+      .where(and(eq(dailyGuides.goalId, goalId), eq(dailyGuides.sessionStatus, 'closed')))
+      .orderBy(desc(dailyGuides.createdAt));
+    const guides: DailyGuide[] = [];
+    for (const row of rows) {
+      const guide = await this.getDailyGuideById(row.id);
+      if (guide) guides.push(guide);
+    }
+    return guides;
+  }
+
+  async promoteQuestionThread(threadId: string, target: { taskId: string }): Promise<void> {
+    await this.db
+      .update(questionThreads)
+      .set({ resolutionSummary: `Promoted to task ${target.taskId}`, updatedAt: new Date().toISOString() })
+      .where(eq(questionThreads.id, threadId));
   }
 
   async closeCurrentSession(guideId: string): Promise<void> {
@@ -2231,6 +2294,81 @@ export class StudyStore {
     });
   }
 
+  async getPlanAdjustmentProposal(proposalId: string): Promise<PlanAdjustmentProposal | null> {
+    const rows = await this.db.select().from(planAdjustmentProposals).where(eq(planAdjustmentProposals.id, proposalId)).limit(1);
+    return rows[0] ? mapPlanAdjustmentProposal(rows[0]) : null;
+  }
+
+  async getSubmissionsForTask(taskId: string): Promise<LearningSubmission[]> {
+    const rows = await this.db.select().from(learningSubmissions).where(eq(learningSubmissions.dailyGuideActionId, taskId)).orderBy(desc(learningSubmissions.createdAt));
+    return rows.map(mapSubmission);
+  }
+
+  async getEvaluationsForTask(taskId: string): Promise<LearningEvaluation[]> {
+    const submissionRows = await this.db.select().from(learningSubmissions).where(eq(learningSubmissions.dailyGuideActionId, taskId));
+    const evaluations: LearningEvaluation[] = [];
+    for (const sub of submissionRows) {
+      const evRows = await this.db.select().from(learningEvaluations).where(eq(learningEvaluations.submissionId, sub.id)).orderBy(desc(learningEvaluations.createdAt));
+      evaluations.push(...evRows.map(mapEvaluation));
+    }
+    return evaluations;
+  }
+
+  async buildContext(operation: LearningAiOperation, extra: Record<string, unknown> = {}): Promise<BuiltLearningContext> {
+    const { ContextBuilder } = await import('./context-builder');
+    const builder = new ContextBuilder(this);
+    return builder.build(operation, extra);
+  }
+
+  async exportGoalData(goalId: string): Promise<Record<string, unknown>> {
+    const [goalRows, stageRows, shortPlanRows, guideRows, knowledgeRows] = await Promise.all([
+      this.db.select().from(goals).where(eq(goals.id, goalId)),
+      this.db.select().from(roadmapStages).where(eq(roadmapStages.goalId, goalId)),
+      this.db.select().from(shortPlanDays).where(eq(shortPlanDays.goalId, goalId)),
+      this.db.select().from(dailyGuides).where(eq(dailyGuides.goalId, goalId)),
+      this.db.select().from(knowledgeItems).where(eq(knowledgeItems.goalId, goalId))
+    ]);
+    const dailyPlanIds = [...new Set(guideRows.map((r) => r.planId).filter(Boolean))];
+    const taskRows = guideRows.length > 0
+      ? await this.db.select().from(dailyGuideTasks).where(inArray(dailyGuideTasks.guideId, guideRows.map((r) => r.id)))
+      : [];
+    const actionIds = taskRows.map((r) => r.id);
+    const actionRows = actionIds.length > 0
+      ? await this.db.select().from(dailyGuideActions).where(inArray(dailyGuideActions.taskId, actionIds))
+      : [];
+    const submissionRows = actionIds.length > 0
+      ? await this.db.select().from(learningSubmissions).where(inArray(learningSubmissions.dailyGuideActionId, actionIds))
+      : [];
+    const evaluationRows = submissionRows.length > 0
+      ? await this.db.select().from(learningEvaluations).where(inArray(learningEvaluations.submissionId, submissionRows.map((r) => r.id)))
+      : [];
+    const blockRows = dailyPlanIds.length > 0
+      ? await this.db.select().from(dailyPlanBlocks).where(inArray(dailyPlanBlocks.planId, dailyPlanIds))
+      : [];
+    const planRows = dailyPlanIds.length > 0
+      ? await this.db.select().from(dailyPlans).where(inArray(dailyPlans.id, dailyPlanIds))
+      : [];
+    const sessionRows = actionIds.length > 0
+      ? await this.db.select().from(studySessions).where(inArray(studySessions.taskId, actionIds))
+      : [];
+    return {
+      version: '1.0',
+      exportedAt: new Date().toISOString(),
+      goal: goalRows[0] ?? null,
+      roadmapStages: stageRows,
+      shortPlanDays: shortPlanRows,
+      dailyGuides: guideRows,
+      dailyPlans: planRows,
+      dailyGuideTasks: taskRows,
+      dailyGuideActions: actionRows,
+      dailyPlanBlocks: blockRows,
+      studySessions: sessionRows,
+      knowledgeItems: knowledgeRows,
+      submissions: submissionRows,
+      evaluations: evaluationRows
+    };
+  }
+
   async listPlanAdjustmentProposals(status?: PlanAdjustmentProposal['status']): Promise<PlanAdjustmentProposal[]> {
     const rows = status
       ? await this.db
@@ -2705,7 +2843,7 @@ export class StudyStore {
     return row;
   }
 
-  private async getQuestionThread(threadId: string): Promise<QuestionThread | null> {
+  async getQuestionThread(threadId: string): Promise<QuestionThread | null> {
     const rows = await this.db.select().from(questionThreads).where(eq(questionThreads.id, threadId)).limit(1);
     return rows[0] ? mapQuestionThread(rows[0]) : null;
   }
