@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  AlertTriangle,
   CheckCircle2,
   ChevronRight,
   Circle,
@@ -40,7 +41,8 @@ export function OverviewPage({
   onConfirmGuide,
   onArchiveTodayAndRestart,
   onGenerateRollingPlan,
-  onPrepareCurrentLearningDay
+  onPrepareCurrentLearningDay,
+  onNavigate
 }: {
   settings: AppSettings;
   onboarding: GoalIntakeState | null;
@@ -55,6 +57,7 @@ export function OverviewPage({
   onArchiveTodayAndRestart: () => Promise<void>;
   onGenerateRollingPlan: () => Promise<void>;
   onPrepareCurrentLearningDay: () => Promise<void>;
+  onNavigate?: (view: 'study' | 'review') => void;
 }): JSX.Element {
   const [message, setMessage] = useState('');
   const [briefDraft, setBriefDraft] = useState<GoalBrief | null>(null);
@@ -72,6 +75,8 @@ export function OverviewPage({
   const shortPlanDays = todayGuide?.shortPlan ?? [];
   const currentShortPlanDay = shortPlanDays.find((d) => d.id === guide?.shortPlanDayId) ?? null;
   const completedTaskCount = guide?.tasks.filter((t) => t.status === 'done').length ?? 0;
+  const pendingEvaluationCount = todayGuide?.pendingEvaluations?.length ?? 0;
+  const hasPendingItems = guide?.status === 'draft' || pendingEvaluationCount > 0;
   const totalTaskCount = guide?.tasks.length ?? 0;
   const totalElapsedMinutes = guide?.tasks.reduce((sum, t) => sum + (t.totalElapsedMinutes || 0), 0) ?? 0;
 
@@ -289,7 +294,42 @@ export function OverviewPage({
           </p>
         </header>
 
-        {todayGuide?.todayState === 'generation_failed' && (
+        {hasPendingItems && (
+          <section className="surface pending-center-card" aria-label="待处理">
+            <h3><ListChecks size={16} /> 待处理</h3>
+            <div className="pending-items">
+              {guide.status === 'draft' && (
+                <div className="pending-item">
+                  <FileText size={14} />
+                  <span>今日执行稿尚未确认</span>
+                  <button className="secondary-action small" type="button" onClick={() => void onConfirmGuide(guide.id)}>
+                    去确认
+                  </button>
+                </div>
+              )}
+              {pendingEvaluationCount > 0 && (
+                <div className="pending-item">
+                  <Clock3 size={14} />
+                  <span>{pendingEvaluationCount} 条评价未完成</span>
+                  <button className="secondary-action small" type="button" onClick={() => onNavigate?.('study')}>
+                    去评价
+                  </button>
+                </div>
+              )}
+              {learningState?.pendingAdjustment?.status === 'pending' && (
+                <div className="pending-item">
+                  <AlertTriangle size={14} />
+                  <span>有待确认的调整建议</span>
+                  <button className="secondary-action small" type="button" onClick={() => onNavigate?.('review')}>
+                    查看
+                  </button>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {todayGuide?.todayState === 'generation_failed' && !hasPendingItems && (
           <section className="surface generation-retry-card" aria-live="polite">
             <div>
               <strong>当前学习单元尚未生成成功</strong>

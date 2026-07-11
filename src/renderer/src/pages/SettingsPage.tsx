@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Brain, Check, Target } from 'lucide-react';
+import { Brain, Check, Database, Download, Target } from 'lucide-react';
 import type { AppSettings } from '../../../shared/types';
 
 export function SettingsPage({
@@ -90,6 +90,34 @@ export function SettingsPage({
               onChange={(event) => setBlockMinutes(Number(event.target.value))}
             />
           </label>
+        </section>
+
+        <section className="settings-card">
+          <div className="settings-card-title">
+            <span className="settings-card-icon"><Database size={22} /></span>
+            <h3>数据管理</h3>
+          </div>
+          <p className="settings-hint">导出当前学习目标的所有数据为 JSON 文件，用于备份或迁移。</p>
+          <button
+            className="secondary-action full"
+            type="button"
+            onClick={async () => {
+              const today = await window.studyApp.guides.listToday();
+              const id = today.goal?.id;
+              if (!id) return;
+              const data = await window.studyApp.data.exportGoal(id);
+              const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `study-data-${id}-${new Date().toISOString().slice(0, 10)}.json`;
+              a.click();
+              URL.revokeObjectURL(url);
+            }}
+          >
+            <Download size={16} />
+            导出学习数据
+          </button>
         </section>
       </div>
     </section>
