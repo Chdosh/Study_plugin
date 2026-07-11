@@ -523,6 +523,20 @@ export interface SubmissionEvaluationResult {
   nextAction: DailyGuideAction | null;
 }
 
+export interface RuntimeConsistencyConflict {
+  field: string;
+  expected: string;
+  actual: string;
+}
+
+export interface RuntimeAuditResult {
+  consistent: boolean;
+  fixed: string[];
+  conflicts: RuntimeConsistencyConflict[];
+  checkedAt: string;
+  requiresUserAction: boolean;
+}
+
 export interface StudyAppApi {
   settings: {
     get: () => Promise<AppSettings>;
@@ -583,7 +597,7 @@ export interface StudyAppApi {
     listForGoal: (goalId: string) => Promise<KnowledgeItem[]>;
   };
   system: {
-    auditRuntime: () => Promise<{ consistent: boolean; fixed: string[]; conflicts: Array<{ field: string; expected: string; actual: string }> }>;
+    auditRuntime: () => Promise<RuntimeAuditResult>;
   };
   data: {
     exportGoal: (goalId: string) => Promise<Record<string, unknown>>;
