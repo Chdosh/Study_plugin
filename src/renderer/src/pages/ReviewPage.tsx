@@ -39,6 +39,7 @@ export function ReviewPage({
   const [applying, setApplying] = useState(false);
   const [adjustmentApplyResult, setAdjustmentApplyResult] = useState<'idle' | 'applied' | 'none'>('idle');
   const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
+  const [knowledgeFilter, setKnowledgeFilter] = useState<'all' | 'active' | 'resolved'>('active');
 
   useEffect(() => {
     setAdjustmentApplyResult('idle');
@@ -46,9 +47,22 @@ export function ReviewPage({
 
   useEffect(() => {
     if (todayGuide?.goal?.id && window.studyApp?.knowledge?.listForGoal) {
-      void window.studyApp.knowledge.listForGoal(todayGuide.goal.id).then(setKnowledgeItems).catch(() => {});
+      void window.studyApp.knowledge
+        .listForGoal(todayGuide.goal.id)
+        .then((items) => setKnowledgeItems(items.sort((a, b) => b.occurrenceCount - a.occurrenceCount)))
+        .catch(() => {});
     }
   }, [todayGuide?.goal?.id]);
+
+  const filteredKnowledgeItems = knowledgeItems.filter((item) => {
+    if (knowledgeFilter === 'active') return item.status === 'active';
+    if (knowledgeFilter === 'resolved') return item.status === 'resolved';
+    return true;
+  });
+  const knowledgeTypeLabel = (type: KnowledgeItem['sourceType']): string => {
+    const labels: Record<KnowledgeItem['sourceType'], string> = { misconception: '错误', weakness: '薄弱', insight: '洞见', correction: '纠正' };
+    return labels[type] || type;
+  };
 
   const allActions = review?.nextActions ?? [];
   const displayGuide = review ? reviewGuide : todayGuide;
@@ -143,10 +157,17 @@ export function ReviewPage({
 
         <section className="surface review-timeline-card">
           <h3>学习记录</h3>
-          {!review && recordedMinutes <= 0 && (
+          {!review && recordedMinutes <= 0 && guideTasks.length === 0 && (
             <p className="muted">暂无学习记录，完成一次学习后会在这里汇总。</p>
           )}
           <div className="review-timeline">
+            {guideTasks.filter((t) => t.status === 'done').map((task) => (
+              <div key={task.id} className="timeline-item">
+                <span className="timeline-dot" />
+                <span className="timeline-time">完成</span>
+                <span className="timeline-text">{task.title}</span>
+              </div>
+            ))}
             {recordedMinutes > 0 && (
               <div className="timeline-item">
                 <span className="timeline-dot" />
@@ -252,6 +273,18 @@ export function ReviewPage({
             </div>
           </section>
         )}
+        {adjustmentApplyResult === 'applied' && (
+          <p className="muted apply-result-success">
+            <CheckCircle2 size={14} />
+            调整建议已应用到尚未执行的学习单元。
+          </p>
+        )}
+        {adjustmentApplyResult === 'none' && (
+          <p className="muted">
+            <CheckCircle2 size={14} />
+            没有可应用的调整（可能都已被锁定或在其他阶段）。
+          </p>
+        )}
         {review && onGenerateRollingPlan && (
           <button
             className="primary-action review-generate-action"
@@ -265,22 +298,40 @@ export function ReviewPage({
         )}
         {knowledgeItems.length > 0 && (
           <section className="surface review-knowledge-card">
-            <h3><Lightbulb size={16} /> 错题与薄弱点</h3>
-            <div className="knowledge-items">
-              {knowledgeItems.map((item) => (
-                <div key={item.id} className="knowledge-item">
-                  <div className="knowledge-item-head">
-                    <strong>{item.key}</strong>
-                    {item.occurrenceCount >= 2 && (
-                      <span className="knowledge-badge review-worthy">{item.occurrenceCount}×</span>
-                    )}
-                    {item.sourceType === 'misconception' && <span className="knowledge-badge error">错误</span>}
-                    {item.sourceType === 'weakness' && <span className="knowledge-badge warning">薄弱</span>}
-                  </div>
-                  <span className="knowledge-item-summary">{item.summary}</span>
-                </div>
-              ))}
+            <div className="knowledge-header">
+              <h3><Lightbulb size={16} /> 错题与薄弱点</h3>
+              <div className="knowledge-filter">
+                {(['active', 'resolved', 'all'] as const).map((f) => (
+                  <button
+                    key={f}
+                    type="button"
+                    className={`filter-tab ${knowledgeFilter === f ? 'active' : ''}`}
+                    onClick={() => setKnowledgeFilter(f)}
+                  >
+                    {f === 'active' ? '活跃' : f === 'resolved' ? '已解决' : '全部'}
+                  </button>
+                ))}
+              </div>
             </div>
+            {filteredKnowledgeItems.length === 0 ? (
+              <p className="muted">该筛选条件下没有知识项。</p>
+            ) : (
+              <div className="knowledge-items">
+                {filteredKnowledgeItems.map((item) => (
+                  <div key={item.id} className={`knowledge-item ${item.status === 'resolved' ? 'resolved' : ''}`}>
+                    <div className="knowledge-item-head">
+                      <strong>{item.key}</strong>
+                      <span className={`knowledge-badge type-${item.sourceType}`}>{knowledgeTypeLabel(item.sourceType)}</span>
+                      {item.occurrenceCount >= 2 && (
+                        <span className="knowledge-badge review-worthy">{item.occurrenceCount}×</span>
+                      )}
+                    </div>
+                    <span className="knowledge-item-summary">{item.summary}</span>
+                    {item.sourceId && <span className="knowledge-item-source">来源: {item.sourceId}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
         )}
       </div>

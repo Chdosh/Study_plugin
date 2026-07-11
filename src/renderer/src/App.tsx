@@ -247,6 +247,7 @@ export default function App(): JSX.Element {
                 await refresh();
               })
             }
+            onNavigate={setView}
             onPrepareCurrentLearningDay={() =>
               runAction('重新生成当前学习单元', async () => {
                 const result = await window.studyApp.guides.prepareCurrentLearningDay(true);
