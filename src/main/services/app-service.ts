@@ -20,6 +20,7 @@ import { FocusMonitor } from './focus-monitor';
 import type { SettingsService } from './settings-service';
 import type { StudyStore } from './store';
 import { isPassingEvaluation } from '../domain/execution-state-machine';
+import { LearningModules } from '../modules';
 
 function createTraceId(): string {
   return `ta_${crypto.randomUUID()}`;
@@ -41,6 +42,7 @@ export class AppService {
   private readonly focusMonitor: FocusMonitor;
   private readonly inFlight = new Map<string, Promise<unknown>>();
   private readonly recentResults = new Map<string, { result: unknown; error: boolean; expiresAt: number }>();
+  readonly modules: LearningModules;
 
   constructor(
     private readonly store: StudyStore,
@@ -49,6 +51,7 @@ export class AppService {
   ) {
     this.focusMonitor = new FocusMonitor(store);
     this.contextBuilder = new ContextBuilder(store);
+    this.modules = new LearningModules(store);
   }
 
   private dedupe<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
@@ -633,142 +636,23 @@ export class AppService {
   }
 
   async generateRollingPlan(goalId: Id): Promise<GenerateRollingPlanResult> {
-    const goal = await this.store.getGoal(goalId);
-    if (!goal) throw new Error('找不到要续生计划的学习目标。');
-
-    await this.store.syncRoadmapProgressBeforeRollingPlan(goal.id);
-
-    const stageResult = await this.store.findActiveOrActivateStage(goal.id);
-    if (stageResult === 'goal_completed') {
-      throw new CategorizedError('validation_error', '当前学习目标的所有阶段都已完成。请创建新的学习目标或重新开始。');
-    }
-    if (!stageResult) {
-      throw new CategorizedError('validation_error', '没有可用的学习阶段。请先生成学习路径。');
-    }
-    const activeStage = stageResult;
-
-    const [brief, profile, runtimeSettings] = await Promise.all([
-      this.store.getGoalBriefForGoal(goal.id),
-      this.store.getPromptProfile(),
-      this.settings.getRuntimeSettings()
-    ]);
-
-    const availableStageDays = await this.store.listAvailableShortPlanDaysForStage(goal.id, activeStage.id);
-    const existingStageDay = availableStageDays[0] ?? null;
-    const { knowledgeItems: knowledgeItemsForGuide, reviewKnowledgeItems: reviewItemsForGuide } = await this.store.getKnowledgeContextForGoal(goal.id);
-
-    if (existingStageDay) {
-      const activated = await this.store.activateShortPlanDay(existingStageDay.id);
-      if (!activated) {
-        throw new CategorizedError('db_error', '激活已有计划项失败，请重试。');
+    return this.modules.planning.generateRollingPlan(
+      { goalId },
+      {
+        shortPlanAgent: this.shortPlanAgent,
+        dailyGuideAgent: this.dailyGuideAgent,
+        getRuntimeSettings: () => this.settings.getRuntimeSettings(),
+        saveAiReview: (params) => this.store.saveAiReview(params),
+        createTraceId,
+        todayIso
       }
-      const activeGuideState = await this.store.getActiveGuide();
-      const dailyGuideOutput = await this.dailyGuideAgent.run({
-        date: todayIso(),
-        windows: runtimeSettings.dailyStudyWindows,
-        goal,
-        brief,
-        roadmap: activeGuideState.roadmap,
-        targetDay: existingStageDay,
-        profile,
-        settings: runtimeSettings,
-        knowledgeItems: knowledgeItemsForGuide,
-        reviewKnowledgeItems: reviewItemsForGuide,
-        traceId: createTraceId(),
-        onMetrics: () => {}
-      });
-      const saved = await this.store.saveDailyGuideWithTransaction({
-        goal,
-        date: todayIso(),
-        windows: runtimeSettings.dailyStudyWindows,
-        shortPlanDayId: existingStageDay.id,
-        dailyGuide: dailyGuideOutput
-      });
-      const fullState = await this.store.getActiveGuide();
-      return { goal, roadmap: fullState.roadmap, shortPlan: fullState.shortPlan, guide: saved.guide, activatedStage: activeStage };
-    }
-
-    const completedContext = await this.store.getRollingPlanContext(goal.id);
-    const reviewSummary = completedContext?.reviewSummary;
-
-    const traceId = createTraceId();
-    let metrics: AiCallMetrics | undefined;
-    const rollingOutput = await this.shortPlanAgent.runRolling({
-      goal,
-      brief,
-      activeStage,
-      completedSummary: completedContext?.summary ?? '暂无已完成任务',
-      reviewSummary,
-      profile,
-      settings: runtimeSettings,
-      knowledgeItems: knowledgeItemsForGuide,
-      reviewKnowledgeItems: reviewItemsForGuide,
-      traceId,
-      onMetrics: (m) => { metrics = m; }
-    });
-    await this.store.saveAiReview({
-      kind: 'rolling_plan',
-      provider: 'deepseek',
-      model: runtimeSettings.deepseekModel,
-      promptProfileId: profile.id,
-      promptVersionId: profile.activeVersionId,
-      inputSnapshot: { goalId: goal.id, stageId: activeStage.id },
-      output: rollingOutput,
-      outputSchemaVersion: 'rolling-plan.v1',
-      status: 'success',
-      metrics
-    });
-
-    const newPlanDays = await this.store.saveRollingPlanDays({
-      goalId: goal.id,
-      roadmapStageId: activeStage.id,
-      items: rollingOutput.days.map((day) => ({
-        dayIndex: day.dayIndex,
-        title: day.title,
-        focus: day.focus,
-        tasks: day.tasks,
-        expectedOutput: day.expectedOutput,
-        successCriteria: day.successCriteria
-      }))
-    });
-
-    const firstDay = newPlanDays
-      .sort((a, b) => a.dayIndex - b.dayIndex)[0] ?? null;
-    let guide: DailyGuide;
-    if (firstDay) {
-      const activated = await this.store.activateShortPlanDay(firstDay.id);
-      if (!activated) {
-        throw new CategorizedError('db_error', '激活新计划项失败，请重试。');
+    ).catch((error) => {
+      if (error instanceof CategorizedError) throw error;
+      if (error instanceof Error && /找不到|没有可用|未返回有效|激活.*失败/.test(error.message)) {
+        throw new CategorizedError('validation_error', error.message);
       }
-      const activeGuideState = await this.store.getActiveGuide();
-      const dailyGuideOutput = await this.dailyGuideAgent.run({
-        date: todayIso(),
-        windows: runtimeSettings.dailyStudyWindows,
-        goal,
-        brief,
-        roadmap: activeGuideState.roadmap,
-        targetDay: firstDay,
-        profile,
-        settings: runtimeSettings,
-        knowledgeItems: knowledgeItemsForGuide,
-        reviewKnowledgeItems: reviewItemsForGuide,
-        traceId: createTraceId(),
-        onMetrics: () => {}
-      });
-      const saved = await this.store.saveDailyGuideWithTransaction({
-        goal,
-        date: todayIso(),
-        windows: runtimeSettings.dailyStudyWindows,
-        shortPlanDayId: firstDay.id,
-        dailyGuide: dailyGuideOutput
-      });
-      guide = saved.guide;
-    } else {
-      throw new CategorizedError('ai_failure', 'AI 未返回有效的学习任务，请重试。');
-    }
-
-    const fullState = await this.store.getActiveGuide();
-    return { goal, roadmap: fullState.roadmap, shortPlan: fullState.shortPlan, guide, activatedStage: activeStage };
+      throw new CategorizedError('ai_failure', error instanceof Error ? error.message : String(error));
+    });
   }
 
   async listTodayGuide(): Promise<TodayGuideState> {
@@ -776,7 +660,7 @@ export class AppService {
       this.store.getActiveGuide(),
       this.getTodayState()
     ]);
-    return { ...today, todayState };
+    return { ...today, todayState, pendingEvaluations: [] as string[] };
   }
 
   getLatestReview(date?: string): Promise<ReviewResult | null> {
@@ -805,8 +689,16 @@ export class AppService {
     return this.store.getKnowledgeItemsForGoal(params);
   }
 
+  async auditRuntimeConsistency(): Promise<{ consistent: boolean; fixed: string[]; conflicts: Array<{ field: string; expected: string; actual: string }> }> {
+    return this.store.auditRuntimeConsistency();
+  }
+
+  async exportGoalData(goalId: Id): Promise<Record<string, unknown>> {
+    return this.store.exportGoalData(goalId);
+  }
+
   async startSession(blockId: Id) {
-    const session = await this.store.startSession(blockId);
+    const session = await this.modules.runtime.session.start(blockId);
     this.focusMonitor.start(session.id);
     this.getMainWindow()?.flashFrame(true);
     await this.pushSessionState(session);
@@ -815,7 +707,7 @@ export class AppService {
 
   async pauseSession(sessionId: Id) {
     this.focusMonitor.stop();
-    const session = await this.store.pauseSession(sessionId);
+    const session = await this.modules.runtime.session.pause(sessionId);
     await this.pushSessionState(session);
     return session;
   }
@@ -1085,11 +977,11 @@ export class AppService {
     const guideTask = before.dailyGuideTask;
     const activeGuideForEval = await this.store.getActiveGuide(true);
     const goalIdForEval = activeGuideForEval.goal?.id;
-    const [evaluationContext, profile, runtimeSettings, evalKnowledge] = await Promise.all([
+    const [evaluationContext, profile, runtimeSettings, evalKnowledgeCtx] = await Promise.all([
       this.contextBuilder.build('evaluate_submission', { submission: submission.content }),
       this.store.getPromptProfile(promptProfileId),
       this.settings.getRuntimeSettings(),
-      goalIdForEval ? this.store.getKnowledgeItemsForGoal({ goalId: goalIdForEval, status: 'active', limit: 5 }) : Promise.resolve([])
+      goalIdForEval ? this.store.getKnowledgeContextForGoal(goalIdForEval) : Promise.resolve({ knowledgeItems: [], reviewKnowledgeItems: [] })
     ]);
     let evaluationAiReviewId: string | undefined;
     let evaluationMetrics: AiCallMetrics | undefined;
@@ -1103,7 +995,8 @@ export class AppService {
           context: evaluationContext.context,
           profile,
           settings: runtimeSettings,
-          knowledgeItems: evalKnowledge,
+          knowledgeItems: evalKnowledgeCtx.knowledgeItems,
+          reviewKnowledgeItems: evalKnowledgeCtx.reviewKnowledgeItems,
           traceId: createTraceId(),
           onMetrics: (m) => { evaluationMetrics = m; }
         });
@@ -1141,53 +1034,15 @@ export class AppService {
       decisionOutput,
       evaluationAiReviewId
     });
-    if (evaluationOutput.misconceptions.length > 0 || evaluationOutput.missingRequirements.length > 0) {
-      try {
-        const activeGuide = await this.store.getActiveGuide(true);
-        const goalId = activeGuide.goal?.id;
-        if (goalId) {
-          await this.store.recordKnowledgeItems({
-            goalId,
-            items: [
-              ...evaluationOutput.misconceptions.map((m) => ({
-                key: m.slice(0, 50),
-                summary: m,
-                sourceType: 'misconception' as const,
-                sourceId: submission.id,
-                evidence: {
-                  submissionId: submission.id,
-                  evaluationId: result.evaluation.id,
-                  taskId: guideTask?.id
-                }
-              })),
-              ...evaluationOutput.missingRequirements.map((m) => ({
-                key: m.slice(0, 50),
-                summary: m,
-                sourceType: 'weakness' as const,
-                sourceId: submission.id,
-                evidence: {
-                  submissionId: submission.id,
-                  evaluationId: result.evaluation.id,
-                  taskId: guideTask?.id
-                }
-              }))
-            ]
-          });
-        }
-      } catch {
-        // Knowledge recording is best-effort; never block the main evaluation flow.
-      }
-    }
-    if (evaluationOutput.result === 'passed' && evaluationOutput.misconceptions.length === 0) {
-      try {
-        if (goalIdForEval && guideTask) {
-          const resolveKeys = [...guideTask.doneWhen, guideTask.title].filter(Boolean);
-          await this.store.resolveKnowledgeItems(goalIdForEval, resolveKeys);
-        }
-      } catch {
-        // Knowledge resolution is best-effort; never block the main evaluation flow.
-      }
-    }
+    await this.modules.context.processEvaluationResult({
+      goalId: goalIdForEval ?? '',
+      taskId: guideTask?.id,
+      submissionId: submission.id,
+      evaluationId: result.evaluation.id,
+      evaluationOutput,
+      taskDoneWhen: guideTask?.doneWhen,
+      taskTitle: guideTask?.title
+    });
     if (result.decision.taskCompleted && active?.session) {
       this.focusMonitor.stop();
       const completedSession = await this.store.completeSession(active.session.id);
