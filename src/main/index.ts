@@ -104,6 +104,7 @@ async function main(): Promise<void> {
   await store.seedDefaults();
   const settings = new SettingsService(store);
   const appService = new AppService(store, settings, () => mainWindow);
+  await appService.initialize();
   registerIpcHandlers(appService);
 
   mainWindow = createMainWindow();

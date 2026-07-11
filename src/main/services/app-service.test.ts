@@ -55,6 +55,20 @@ afterEach(async () => {
 });
 
 describe('AppService progressive AI flow', () => {
+  it('runs runtime consistency audit during initialization and exposes the cached result once', async () => {
+    const audit = vi.spyOn(store, 'auditRuntimeConsistency');
+
+    await appService.initialize();
+    const startup = await appService.auditRuntimeConsistency();
+
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(startup.checkedAt).toBeTruthy();
+    expect(startup.requiresUserAction).toBe(false);
+
+    await appService.auditRuntimeConsistency();
+    expect(audit).toHaveBeenCalledTimes(2);
+  });
+
   it('runs active goal intake and generates a layered first-day guide', async () => {
     const aiCalls = installDeterministicAi();
 
@@ -587,6 +601,10 @@ describe('AppService progressive AI flow', () => {
     expect(failed.todayState).toBe('generation_failed');
     expect(await appService.getTodayState()).toBe('generation_failed');
 
+    const failedGuide = (await appService.listTodayGuide()).guide;
+    expect(failedGuide?.sessionStatus).toBe('draft');
+    expect(failedGuide?.tasks).toHaveLength(0);
+
     const failedDay = (await appService.listTodayGuide()).shortPlan.find((day) => day.sessionStatus === 'active');
     expect(failedDay).toBeTruthy();
     expect(await store.acquireGenerationLock(`daily_guide:${confirmed.goal.id}`)).toBe(true);
@@ -595,6 +613,7 @@ describe('AppService progressive AI flow', () => {
     const retried = await appService.prepareCurrentLearningDay(true);
     expect(retried.todayState).toBe('active');
     expect(retried.result?.guide.shortPlanDayId).toBe(failedDay!.id);
+    expect(retried.result?.guide.id).toBe(failedGuide!.id);
   });
 
   it('uses the local calendar date for generated guides near UTC midnight', async () => {
@@ -714,6 +733,23 @@ describe('AppService progressive AI flow', () => {
     await appService.submitLearningResult('Done.');
 
     await expect(appService.startSession(taskId)).rejects.toThrow('已完成');
+  });
+
+  it('结束本次学习会暂停持久化 Session 并保留当前任务位置', async () => {
+    installDeterministicAi();
+    await appService.sendOnboardingMessage('我想学 React。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+    await appService.startSession(layered.guide.tasks[0].id);
+
+    const ended = await appService.terminateLearning();
+    const recoverable = await appService.getActiveSession();
+
+    expect(ended.state.sessionStatus).toBe('paused');
+    expect(ended.state.activeDailyTaskId).toBe(layered.guide.tasks[0].id);
+    expect(recoverable?.session.status).toBe('paused');
+    expect(recoverable?.session.taskId).toBe(layered.guide.tasks[0].id);
   });
 
 });
