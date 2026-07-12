@@ -556,6 +556,24 @@ export const databaseMigrations: DatabaseMigration[] = [
     sql: `ALTER TABLE short_plan_days ADD COLUMN locked INTEGER NOT NULL DEFAULT 0;`
   },
   {
+    id: '202607110002_learner_facts',
+    sql: `
+      CREATE TABLE IF NOT EXISTS learner_facts (
+        id TEXT PRIMARY KEY,
+        goal_id TEXT REFERENCES goals(id),
+        scope TEXT NOT NULL DEFAULT 'goal',
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        source TEXT NOT NULL,
+        confidence REAL NOT NULL DEFAULT 0.8,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS learner_facts_goal_scope_key_idx
+        ON learner_facts(goal_id, scope, key);
+    `
+  },
+  {
     id: '202607100001_knowledge_item_evidence',
     sql: `
       CREATE TABLE IF NOT EXISTS knowledge_item_evidence (
@@ -570,6 +588,29 @@ export const databaseMigrations: DatabaseMigration[] = [
       );
       CREATE UNIQUE INDEX IF NOT EXISTS knowledge_item_evidence_evaluation_unique
         ON knowledge_item_evidence(knowledge_item_id, evaluation_id);
+    `
+  },
+  {
+    id: '202607110003_question_thread_kind',
+    sql: `ALTER TABLE question_threads ADD COLUMN kind TEXT NOT NULL DEFAULT 'question';`
+  },
+  {
+    id: '202607110004_question_thread_metadata',
+    sql: `ALTER TABLE question_threads ADD COLUMN metadata TEXT;`
+  },
+  {
+    id: '202607120001_learner_fact_task_anchor',
+    sql: `
+      ALTER TABLE learner_facts ADD COLUMN task_id TEXT REFERENCES daily_guide_tasks(id);
+      UPDATE learner_facts SET goal_id = NULL WHERE scope = 'global';
+    `
+  },
+  {
+    id: '202607120002_submission_application_lifecycle',
+    sql: `
+      ALTER TABLE learning_submissions ADD COLUMN application_status TEXT NOT NULL DEFAULT 'applied';
+      ALTER TABLE learning_submissions ADD COLUMN application_error TEXT;
+      ALTER TABLE learning_submissions ADD COLUMN applied_at TEXT;
     `
   }
 ];
@@ -589,7 +630,8 @@ const bootstrapCoveredMigrationIds = new Set([
   '202607060004_session_status',
   '202607060006_roadmap_stage_status',
   '202607060008_short_plan_roadmap_stage',
-  '202607060010_short_plan_locked'
+  '202607060010_short_plan_locked',
+  '202607120001_learner_fact_task_anchor'
 ]);
 
 export async function markBootstrapCoveredMigrationsApplied(client: Client): Promise<void> {
