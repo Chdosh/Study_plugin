@@ -3,6 +3,9 @@ import type {
   GenerateRollingPlanResult,
   Id,
   LearningGoal,
+  PlanAdjustmentProposal,
+  PlanProposalInput,
+  PlanVersionEntry,
   PrepareCurrentLearningDayResult,
   ReviewResult,
   RoadmapStage,
@@ -28,11 +31,17 @@ export type PlanningStore = Pick<StudyStore,
   | 'releaseGenerationLock'
   | 'closeCurrentSession'
   | 'getLatestReview'
-  | 'syncRoadmapProgressBeforeRollingPlan'
   | 'findActiveOrActivateStage'
   | 'listAvailableShortPlanDaysForStage'
   | 'getRollingPlanContext'
   | 'saveRollingPlanDays'
+  | 'getPlanVersionsForGoal'
+  | 'createProposal'
+  | 'confirmProposal'
+  | 'rejectProposal'
+  | 'markRoadmapStageReadyForReview'
+  | 'confirmRoadmapStageCompletion'
+  | 'buildContext'
 >;
 
 export interface PrepareCurrentLearningDayDeps {
@@ -132,25 +141,32 @@ export class PlanningModule {
 
     const traceId = deps.createTraceId();
     let metrics: AiCallMetrics | undefined;
+    let contextSourceIds: string[] = [];
     let output: DailyGuideAgentOutput;
     try {
+      const boundedContext = await this.store.buildContext('generate_daily_guide', {
+        shortPlanDay: targetDay,
+        previousDayResult,
+        availableMinutes: settings.dailyStudyWindows
+      });
+      contextSourceIds = boundedContext.contextSourceIds;
       output = await deps.dailyGuideAgent.run({
         date: deps.todayIso(), windows: settings.dailyStudyWindows, goal, brief, roadmap, targetDay,
         previousDayResult, profile, settings, knowledgeItems: knowledge.knowledgeItems,
-        reviewKnowledgeItems: knowledge.reviewKnowledgeItems, traceId,
+        reviewKnowledgeItems: knowledge.reviewKnowledgeItems, context: boundedContext.context, traceId,
         onMetrics: (value: AiCallMetrics) => { metrics = value; }
       });
       await this.store.saveAiReview({
         kind: 'daily_guide', date: deps.todayIso(), provider: 'deepseek', model: settings.deepseekModel,
         promptProfileId: profile.id, promptVersionId: profile.activeVersionId,
-        inputSnapshot: { goalId: goal.id, targetDay: targetDay.title }, output,
+        inputSnapshot: { goalId: goal.id, targetDay: targetDay.title, contextSourceIds }, output,
         outputSchemaVersion: 'daily-guide.v2', status: 'success', metrics
       });
     } catch (error) {
       await this.store.saveAiReview({
         kind: 'daily_guide', date: deps.todayIso(), provider: 'deepseek', model: settings.deepseekModel,
         promptProfileId: profile.id, promptVersionId: profile.activeVersionId,
-        inputSnapshot: { goalId: goal.id, targetDay: targetDay.title }, output: {},
+        inputSnapshot: { goalId: goal.id, targetDay: targetDay.title, contextSourceIds }, output: {},
         outputSchemaVersion: 'daily-guide.v2', status: 'failed',
         errorMessage: error instanceof Error ? error.message : String(error),
         metrics: metrics ? { ...metrics, errorCategory: 'ai_failure' } : undefined
@@ -226,11 +242,14 @@ export class PlanningModule {
     const goal = await this.store.getGoal(goalId);
     if (!goal) throw new Error('找不到要续生计划的学习目标。');
 
-    await this.store.syncRoadmapProgressBeforeRollingPlan(goal.id);
+    await this.store.markRoadmapStageReadyForReview(goal.id);
 
     const stageResult = await this.store.findActiveOrActivateStage(goal.id);
     if (stageResult === 'goal_completed') {
       throw new Error('当前学习目标的所有阶段都已完成。请创建新的学习目标或重新开始。');
+    }
+    if (stageResult === 'stage_review_required') {
+      throw new Error('当前阶段已完成全部学习单元，需先在复盘页确认阶段成果，再进入下一阶段。');
     }
     if (!stageResult) {
       throw new Error('没有可用的学习阶段。请先生成学习路径。');
@@ -253,6 +272,10 @@ export class PlanningModule {
       const activated = await this.store.activateShortPlanDay(targetDay.id);
       if (!activated) throw new Error('激活已有计划项失败，请重试。');
       const activeGuideState = await this.store.getActiveGuide();
+      const boundedContext = await this.store.buildContext('generate_daily_guide', {
+        shortPlanDay: targetDay,
+        availableMinutes: runtimeSettings.dailyStudyWindows
+      });
       const dailyGuideOutput = await dailyGuideAgent.run({
         date: todayIso(),
         windows: runtimeSettings.dailyStudyWindows,
@@ -260,6 +283,7 @@ export class PlanningModule {
         brief,
         roadmap: activeGuideState.roadmap,
         targetDay,
+        context: boundedContext.context,
         profile,
         settings: runtimeSettings,
         knowledgeItems: knowledgeItemsForGuide,
@@ -282,13 +306,17 @@ export class PlanningModule {
     const reviewSummary = completedContext?.reviewSummary;
 
     const traceId = createTraceId();
+    const rollingContext = await this.store.buildContext('generate_rolling_plan', {
+      completedDays: completedContext?.summary ?? '暂无已完成任务',
+      remainingDays: availableStageDays
+    });
     const rollingOutput = await shortPlanAgent.runRolling({
-      goal, brief, activeStage, completedSummary: completedContext?.summary ?? '暂无已完成任务', reviewSummary, profile, settings: runtimeSettings, knowledgeItems: knowledgeItemsForGuide, reviewKnowledgeItems: reviewItemsForGuide, traceId, onMetrics: () => {}
+      goal, brief, activeStage, completedSummary: completedContext?.summary ?? '暂无已完成任务', reviewSummary, profile, settings: runtimeSettings, knowledgeItems: knowledgeItemsForGuide, reviewKnowledgeItems: reviewItemsForGuide, context: rollingContext.context, traceId, onMetrics: () => {}
     });
 
     await saveAiReview({
       kind: 'rolling_plan', provider: 'deepseek', model: runtimeSettings.deepseekModel, promptProfileId: profile.id, promptVersionId: profile.activeVersionId,
-      inputSnapshot: { goalId: goal.id, stageId: activeStage.id }, output: rollingOutput, outputSchemaVersion: 'rolling-plan.v1', status: 'success'
+      inputSnapshot: { goalId: goal.id, stageId: activeStage.id, contextSourceIds: rollingContext.contextSourceIds }, output: rollingOutput, outputSchemaVersion: 'rolling-plan.v1', status: 'success'
     });
 
     const newPlanDays = await this.store.saveRollingPlanDays({
@@ -303,14 +331,38 @@ export class PlanningModule {
     if (!activated) throw new Error('激活新计划项失败，请重试。');
 
     const activeGuideState = await this.store.getActiveGuide();
+    const dailyGuideContext = await this.store.buildContext('generate_daily_guide', {
+      shortPlanDay: firstDay,
+      availableMinutes: runtimeSettings.dailyStudyWindows
+    });
     const dailyGuideOutput = await dailyGuideAgent.run({
-      date: todayIso(), windows: runtimeSettings.dailyStudyWindows, goal, brief, roadmap: activeGuideState.roadmap, targetDay: firstDay, profile, settings: runtimeSettings, knowledgeItems: knowledgeItemsForGuide, reviewKnowledgeItems: reviewItemsForGuide, traceId: createTraceId(), onMetrics: () => {}
+      date: todayIso(), windows: runtimeSettings.dailyStudyWindows, goal, brief, roadmap: activeGuideState.roadmap, targetDay: firstDay, profile, settings: runtimeSettings, knowledgeItems: knowledgeItemsForGuide, reviewKnowledgeItems: reviewItemsForGuide, context: dailyGuideContext.context, traceId: createTraceId(), onMetrics: () => {}
     });
     const saved = await this.store.saveDailyGuideWithTransaction({
       goal, date: todayIso(), windows: runtimeSettings.dailyStudyWindows, shortPlanDayId: firstDay.id, dailyGuide: dailyGuideOutput
     });
     const fullState = await this.store.getActiveGuide();
     return { goal, roadmap: fullState.roadmap, shortPlan: fullState.shortPlan, guide: saved.guide, activatedStage: activeStage };
+  }
+
+  async getPlanVersionsForGoal(goalId: Id): Promise<PlanVersionEntry[]> {
+    return this.store.getPlanVersionsForGoal(goalId);
+  }
+
+  async proposePlanChange(goalId: Id, proposal: PlanProposalInput): Promise<PlanAdjustmentProposal> {
+    return this.store.createProposal(goalId, proposal);
+  }
+
+  async confirmPlanChange(proposalId: Id): Promise<PlanAdjustmentProposal> {
+    return this.store.confirmProposal(proposalId);
+  }
+
+  async rejectPlanChange(proposalId: Id): Promise<PlanAdjustmentProposal> {
+    return this.store.rejectProposal(proposalId);
+  }
+
+  async confirmRoadmapStage(goalId: Id, stageId: Id): Promise<RoadmapStage[]> {
+    return this.store.confirmRoadmapStageCompletion(goalId, stageId);
   }
 
 }

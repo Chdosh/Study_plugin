@@ -1,5 +1,5 @@
 import type { LearningAiOperation, BuiltLearningContext } from '../../services/context-builder';
-import type { KnowledgeItem } from '../../../shared/types';
+import type { KnowledgeItem, LearnerFact, LearnerFactScope, LearnerFactSource } from '../../../shared/types';
 import type { SubmissionEvaluationAgentOutput } from '../../../shared/schemas';
 import type { StudyStore } from '../../services/store';
 
@@ -28,21 +28,28 @@ export class LearnerContextModule {
     return this.store.buildContext(operation, extra);
   }
 
-  async proposeFact(goalId: string, fact: FactProposal): Promise<void> {
-    await this.store.recordKnowledgeItems({
-      goalId,
-      items: [{
-        key: fact.key,
-        summary: fact.summary,
-        detail: fact.detail,
-        sourceType: fact.sourceType,
-        sourceId: fact.sourceId
-      }]
-    });
+  async proposeFact(goalId: string, fact: { scope: LearnerFactScope; taskId?: string; key: string; value: string; source: LearnerFactSource; confidence?: number }): Promise<LearnerFact> {
+    return this.store.proposeFact(goalId, fact);
   }
 
-  async confirmFact(goalId: string, keys: string[]): Promise<void> {
-    await this.store.resolveKnowledgeItems(goalId, keys);
+  async confirmFact(goalId: string, key: string, scope: LearnerFactScope, taskId?: string): Promise<LearnerFact> {
+    const existing = await this.store.getFact(goalId, key, scope, taskId);
+    if (!existing || !existing.value.trim()) {
+      throw new Error('无法确认不存在或内容为空的学习事实。请先提供具体内容。');
+    }
+    return this.store.proposeFact(goalId, { scope, taskId, key, value: existing.value, source: 'confirmed', confidence: 1 });
+  }
+
+  async getFact(goalId: string, key: string, scope: LearnerFactScope, taskId?: string): Promise<LearnerFact | null> {
+    return this.store.getFact(goalId, key, scope, taskId);
+  }
+
+  async listFactsForGoal(goalId: string, scope?: LearnerFactScope): Promise<LearnerFact[]> {
+    return this.store.listFactsForGoal(goalId, scope);
+  }
+
+  async deleteFact(goalId: string, key: string, scope: LearnerFactScope, taskId?: string): Promise<void> {
+    return this.store.deleteFact(goalId, key, scope, taskId);
   }
 
   async getFactsForGoal(goalId: string, status?: 'active' | 'resolved' | 'dormant'): Promise<KnowledgeItem[]> {
