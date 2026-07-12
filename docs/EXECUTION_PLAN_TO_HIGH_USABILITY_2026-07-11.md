@@ -270,14 +270,20 @@ P0 工作树稳定与事实同步
 
 禁止用“文件拆小了”“页面做出来了”“AI 能返回结果”作为完成依据。必须同时满足成功、失败、恢复、幂等和用户反馈。
 
-## 6. 立即执行顺序
+## 6. 执行状态
 
-接下来连续五轮固定为：
+| 阶段 | 状态 | 验证基线 |
+|------|------|---------|
+| P0 文档同步 | ✅ completed | 119 tests |
+| P1.1 migration | ✅ completed | 119 tests |
+| P1.2 draft Guide | ✅ completed | 119 tests |
+| P1.3 启动审计 | ✅ completed | 119 tests |
+| P2 事务闭环 | ✅ completed | 评价事务 + 持久应用 Saga，171 tests |
+| P3.1 Plan Proposal | ✅ completed | 单一 proposal/confirm 写入口，171 tests |
+| P3.2 LearnerContext | 🚧 in progress | 确认边界与预算已修复，通用仲裁待完成 |
+| P3.3 Branch | ✅ completed | 145 tests |
+| P4 UI 基线 | ✅ completed | 152 tests |
+| P5+P6 体验+兼容 | 🚧 in progress | 时间线、恢复、Q1 与桌面验收待完成 |
+| Q3 真实验收 | ⏳ opt-in | — |
 
-1. P0：固化三轮 Runtime/Planning 清理成果。
-2. P1.1：migration 噪声与启动矩阵。
-3. P1.2：显式 draft Guide 失败状态。
-4. P1.3：启动一致性审计和恢复入口。
-5. P2：Submission/Evaluation/推进事务闭环。
-
-完成这五轮后再开始 UI 系统性重构；在此之前只修阻塞操作和错误反馈，不做全面换皮。
+项目当前为 M1 内部稳定版，正在按 `PRODUCT_REVIEW_REMEDIATION_2026-07-12.md` 收敛到 M2；在时间线、恢复、Q1 和桌面黑盒验收完成前不宣称达到真实试用版。

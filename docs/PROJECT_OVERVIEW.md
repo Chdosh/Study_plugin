@@ -20,7 +20,9 @@
                            │ ipcMain.handle / invoke
 ┌──────────────────────────▼──────────────────────────┐
 │              Main (Electron + services)              │
-│  AppService                                          │
+│  AppService (业务 Adapter 层)                         │
+│    ├── modules/*  (Planning/Runtime/Context/Branch/  │
+│    │                History 五个深模块)               │
 │    ├── ai/*        (Agents + AiClient + prompts)    │
 │    ├── services/*  (Store, ContextBuilder, Focus…)  │
 │    └── domain/*    (execution-state-machine)         │
@@ -53,7 +55,13 @@
 | `src/main/index.ts`        | Electron 入口：创建窗口、托盘、启动 DB/AppService/IPC           |
 | `src/main/ipc.ts`          | 32 个 IPC channel 的单文件注册表                                 |
 | `src/main/services/store.ts` | 应用层持久化：事务、游标恢复、计划版本、block↔task 映射     |
-| `src/main/services/app-service.ts` | 业务编排：访谈→计划→提问→提交→评价→复盘            |
+| `src/main/services/app-service.ts` | 业务 Adapter 层：通过 modules 容器调用各模块      |
+| `src/main/modules/container.ts` | `LearningModules` 容器，统一实例化五个模块         |
+| `src/main/modules/planning/planning.ts` | PlanningModule：学习日生成/恢复/滚动计划/调整 |
+| `src/main/modules/runtime/runtime.ts` | LearningRuntimeModule：Session/Action/Task 运行时 |
+| `src/main/modules/context/context.ts` | LearnerContextModule：上下文/事实/评价知识流      |
+| `src/main/modules/branch/branch.ts` | LearningBranchModule：分支 open/append/resolve/promote |
+| `src/main/modules/history/history.ts` | LearningHistoryModule：时间线只读投影             |
 | `src/main/services/context-builder.ts` | 按操作组装 AI 上下文快照，不直接调用模型      |
 | `src/main/domain/execution-state-machine.ts` | 纯函数状态机：completeAction / skipAction / applyEvaluationResult / recover |
 | `src/main/ai/agents.ts`    | 8 个单职责 Agent 包装器（GoalIntake、Roadmap、ShortPlan、DailyGuide、Teach、Question、Evaluation、Reflection） |
@@ -200,7 +208,7 @@ prompt_profiles → prompt_versions (可编辑、可版本化的 5 档 profile)
 | 节点                    | 调用方                  | Agent                 | 关键输入                                | 关键输出                                |
 | ----------------------- | ----------------------- | --------------------- | --------------------------------------- | --------------------------------------- |
 | 访谈目标                | `sendOnboardingMessage` | GoalIntake            | 最近 intake 消息                        | `status / reply / brief`                |
-| 长期大纲 / 短期计划     | `generateLayeredPlan`   | Roadmap + ShortPlan   | 目标 + brief + 时间窗                   | 阶段 + 前 3 天 dayIndex                 |
+| 长期大纲 / 短期计划     | `generateLayeredPlan`   | Roadmap + ShortPlan   | 目标 + brief + 时间窗                   | 阶段 + 滚动短期计划单元                 |
 | 今日执行稿              | `prepareCurrentLearningDay` / `generateLayeredPlan` | DailyGuide | roadmap + targetDay + 前一天结果   | 1–4 主任务 + 1–6 步骤                   |
 | 展开当前步骤            | `teachCurrentStep`      | TeachStep             | 当前 guideTask/guideAction              | `explanation / userAction`              |
 | 回答问题                | `askStepQuestion`       | StepQuestion          | 当前动作 + 问题 + 最近 4 条历史        | `answer / resolved / returnToStep`      |
@@ -255,7 +263,7 @@ prompt_profiles → prompt_versions (可编辑、可版本化的 5 档 profile)
 | 命令                                              | 作用                                  |
 | ------------------------------------------------- | ------------------------------------- |
 | `npm run typecheck`                               | main + web 双 tsconfig                |
-| `npm test`                                        | vitest run (fake AI，62 passed)       |
+| `npm test`                                        | vitest run (fake AI，101 passed)      |
 | `RUN_DEEPSEEK_CONTRACT=1 npm.cmd test -- src/main/ai/deepseek-contract.test.ts` | 真实合约测试（opt-in）               |
 | `npm run build`                                   | typecheck + electron-vite 全构建     |
 | `npm run dev`                                     | 本地开发                             |
@@ -265,12 +273,15 @@ prompt_profiles → prompt_versions (可编辑、可版本化的 5 档 profile)
 
 ---
 
-## 9. 待收敛项（来自 PROJECT_MEMORY）
+## 9. 待收敛项（来自 PROJECT_MEMORY & EXECUTION_PLAN）
 
-1. `daily_plan_blocks` / `daily_guide_blocks` / `plan_stages` / `task_items` / `learning_steps` 等旧表仍是 session 锚点和历史兼容的组成部分，**先有迁移方案再清理**。
-2. 真实 DeepSeek 完整主流程仍需人工验收一次，确认当前 daily guide prompt 在真实模型下稳定。
-3. 提问、主任务最终提交、复盘调整等入口已接到 `daily_guide_tasks` 主流程，但需持续检查是否还有旧 block/step 语义遗留。
+1. `daily_plan_blocks` / `daily_guide_blocks` / `plan_stages` / `task_items` / `learning_steps` 等旧表仍是 session 锚点和历史兼容的组成部分，**先有迁移方案再清理（Q1）**。
+2. 真实 DeepSeek 完整主流程仍需人工验收一次，确认当前 daily guide prompt 在真实模型下稳定（Q3/P7）。
+3. 提问、主任务最终提交、复盘调整等入口已接到 `daily_guide_tasks` 主流程，但仍需持续检查是否还有旧 block/step 语义遗留。
 4. 启动/暂停/恢复/超时不触发 AI，Action 完成不触发 AI 评价——这是硬约束，重构时不得放松。
+5. `teach_step` / `evaluate_submission` 的上下文构建未走 `modules.context.build`（P3.2 修正）。
+6. `skipBlock` / `getAccumulatedSeconds` 仍使用 block API（Q1 修正）。
+7. `LearnerContextModule` / `LearningBranchModule` 存在接口与实现差距。
 
 ---
 
@@ -286,3 +297,103 @@ prompt_profiles → prompt_versions (可编辑、可版本化的 5 档 profile)
 | 页面信息架构、交互与视觉规则  | `docs/UI_GUIDELINES.md`               |
 | 测试、迁移、schema 变更规范   | `docs/TESTING_AND_MIGRATIONS.md`      |
 | 新对话短交接                  | `docs/PROJECT_MEMORY.md`（按需）       |
+| 执行计划与阶段验收            | `docs/EXECUTION_PLAN_TO_HIGH_USABILITY_2026-07-11.md` |
+
+---
+
+## 11. 主链调用映射（P0 同步，2026-07-11）
+
+以下映射展示核心学习闭环的 IPC → AppService → Module → Store 调用链。
+
+### 11.1 学习日准备（Planning）
+
+```text
+guides.prepareCurrentLearningDay
+  → AppService.prepareCurrentLearningDay
+    → modules.planning.prepareCurrentLearningDay
+      → store.getUsedShortPlanDayIds / getActiveStageForGoal / createDailyGuide / saveAiReview
+
+guides.startNextSession
+  → AppService.startNextSession
+    → modules.planning.advanceLearningDay
+      → store.confirmDailyGuide / getDaySnapshot / closeDailyGuide / prepareCurrentLearningDay
+
+guides.generateRollingPlan
+  → AppService.generateRollingPlan
+    → modules.planning.generateRollingPlan({ params }, deps)
+      → store.getPendingShortPlanDaysForGoal / updateShortPlanDay / saveAiReview
+```
+
+### 11.2 学习执行（Runtime）
+
+```text
+sessions.start
+  → AppService.startSession(taskId)
+    → modules.runtime.session.start(taskId) → store.startSession
+    → focusMonitor.start / flashFrame / pushSessionState
+
+sessions.pause
+  → AppService.pauseSession(sessionId)
+    → focusMonitor.stop
+    → modules.runtime.session.pause(sessionId) → store.pauseSession
+
+learning.completeCurrentAction
+  → modules.runtime.dispatch({ type: 'completeCurrentAction' })
+    → store.completeCurrentAction (execution-state-machine)
+
+learning.skipCurrentAction
+  → modules.runtime.dispatch({ type: 'skipCurrentAction' })
+
+learning.skipCurrentTask
+  → modules.runtime.dispatch({ type: 'skipCurrentTask' })
+
+learning.terminateLearning
+  → modules.runtime.dispatch({ type: 'endCurrentSession' })
+    → store.pauseSession (可恢复)
+```
+
+### 11.3 评价与知识流（Context + Runtime + Planning）
+
+```text
+learning.submitLearningResult
+  → AppService.submitLearningResult
+    → contextBuilder.build('evaluate_submission')  ← 未走 modules.context.build
+    → store.createSubmission (waiting)
+    → evaluationAgent.run → store.saveEvaluationAndDecision
+    → modules.context.processEvaluationResult  ← 走模块
+      → store.recordKnowledgeItems / resolveKnowledgeItems
+    → modules.runtime.completeSession (if passed)
+    → modules.planning.closeCompletedLearningDay (if all tasks done)
+```
+
+### 11.4 访谈与计划（AppService 直连 Store）
+
+```text
+onboarding.sendMessage
+  → AppService.sendOnboardingMessage
+    → store.getCurrentGoalIntake / addGoalIntakeMessage / saveAiReview
+
+guides.generateLayeredPlan
+  → AppService.generateLayeredPlan
+    → roadmapAgent + shortPlanAgent + dailyGuideAgent
+    → store.saveLayeredPlan
+```
+
+### 11.5 待修正的遗留路径
+
+| 路径 | 问题 | 归属 Phase |
+|------|------|-----------|
+| `sessions.skip` → `skipBlock(blockId)` | block 概念已废弃，renderer 应使用 skipCurrentTask | Q1 |
+| `sessions.getAccumulated(blockId)` | 按 block 聚合应改为按 task | Q1 |
+| `contextBuilder.build()` 直接调用 | `teach_step`/`evaluate_submission` 未走 `modules.context.build` | P3.2 |
+| `store.buildContext()` | 每次 new ContextBuilder，与 AppService.contextBuilder 重复 | P3.2 |
+
+### 11.6 模块接口清单
+
+| 模块 | Interface 方法 | AppService 调用 |
+|------|---------------|----------------|
+| `PlanningModule` | `prepareCurrentLearningDay` / `advanceLearningDay` / `generateRollingPlan` / `closeCompletedLearningDay` / `isPreparing` | ✅ 全部走模块 |
+| `LearningRuntimeModule` | `getSnapshot` / `dispatch` / `session.start` / `session.pause` / `session.complete` | ✅ 全部走模块 |
+| `LearnerContextModule` | `build` / `proposeFact` / `confirmFact` / `processEvaluationResult` | ⚠️ build 被绕过 |
+| `LearningBranchModule` | `open` / `append` / `resolve` / `promote` | ❌ 全部空实现 |
+| `LearningHistoryModule` | `getTaskTimeline` / `getGoalTimeline` | ⚠️ 仅 timeline 读取 |
