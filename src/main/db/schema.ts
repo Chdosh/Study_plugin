@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 export const rawImports = sqliteTable('raw_imports', {
   id: text('id').primaryKey(),
@@ -50,7 +50,7 @@ export const roadmapStages = sqliteTable('roadmap_stages', {
   objective: text('objective').notNull(),
   direction: text('direction').notNull(),
   successCriteria: text('success_criteria').notNull(),
-  status: text('status', { enum: ['pending', 'active', 'completed', 'blocked', 'adjusted'] }).notNull().default('pending'),
+  status: text('status', { enum: ['pending', 'active', 'ready_for_review', 'completed', 'blocked', 'adjusted'] }).notNull().default('pending'),
   position: integer('position').notNull(),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull()
@@ -316,6 +316,8 @@ export const questionThreads = sqliteTable('question_threads', {
   stepId: text('step_id').references(() => learningSteps.id),
   dailyGuideActionId: text('daily_guide_action_id').references(() => dailyGuideActions.id),
   status: text('status', { enum: ['open', 'resolved'] }).notNull().default('open'),
+  kind: text('kind', { enum: ['question', 'debug', 'practice'] }).notNull().default('question'),
+  metadata: text('metadata'),
   question: text('question').notNull(),
   resolutionSummary: text('resolution_summary'),
   createdAt: text('created_at').notNull(),
@@ -340,8 +342,13 @@ export const learningSubmissions = sqliteTable('learning_submissions', {
   sessionId: text('session_id').references(() => studySessions.id),
   content: text('content').notNull(),
   evaluationStatus: text('evaluation_status', {
-    enum: ['waiting', 'completed', 'failed']
+    enum: ['waiting', 'evaluating', 'completed', 'failed']
   }).notNull().default('completed'),
+  applicationStatus: text('application_status', {
+    enum: ['pending', 'applied', 'failed']
+  }).notNull().default('applied'),
+  applicationError: text('application_error'),
+  appliedAt: text('applied_at'),
   createdAt: text('created_at').notNull()
 });
 
@@ -365,6 +372,19 @@ export const learningEvaluations = sqliteTable('learning_evaluations', {
   decision: text('decision', { enum: ['advance', 'stay', 'remediate', 'replan'] }).notNull().default('stay'),
   aiReviewId: text('ai_review_id'),
   createdAt: text('created_at').notNull()
+});
+
+export const learnerFacts = sqliteTable('learner_facts', {
+  id: text('id').primaryKey(),
+  goalId: text('goal_id').references(() => goals.id),
+  taskId: text('task_id').references(() => dailyGuideTasks.id),
+  scope: text('scope', { enum: ['task', 'goal', 'global'] }).notNull().default('goal'),
+  key: text('key').notNull(),
+  value: text('value').notNull(),
+  source: text('source', { enum: ['user_stated', 'inferred', 'confirmed'] }).notNull(),
+  confidence: real('confidence').notNull().default(0.8),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull()
 });
 
 export const knowledgeItemEvidence = sqliteTable(
