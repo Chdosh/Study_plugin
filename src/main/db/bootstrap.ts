@@ -111,6 +111,21 @@ const CURRENT_SCHEMA_SQL = `
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS learner_facts (
+      id TEXT PRIMARY KEY,
+      goal_id TEXT REFERENCES goals(id),
+      task_id TEXT REFERENCES daily_guide_tasks(id),
+      scope TEXT NOT NULL DEFAULT 'goal',
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      source TEXT NOT NULL,
+      confidence REAL NOT NULL DEFAULT 0.8,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS learner_facts_goal_scope_key_idx
+      ON learner_facts(goal_id, scope, key);
+
     CREATE TABLE IF NOT EXISTS daily_plans (
       id TEXT PRIMARY KEY,
       date TEXT NOT NULL,
