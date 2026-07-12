@@ -15,12 +15,17 @@ import type {
   KnowledgeItem,
   KnowledgeItemSourceType,
   KnowledgeItemStatus,
+  LearnerFact,
+  LearnerFactScope,
+  LearnerFactSource,
   LearningRuntimeSnapshot,
   LearningRuntimeState,
   LearningStep,
   LearningSubmission,
   LearningSummary,
   PlanAdjustmentProposal,
+  PlanProposalInput,
+  PlanVersionEntry,
   PlanStage,
   PreviousLearningDayResult,
   PromptProfile,
@@ -67,6 +72,7 @@ import {
   goals,
   knowledgeItems,
   knowledgeItemEvidence,
+  learnerFacts,
   learningEvaluations,
   learningRuntimeStates,
   learningSteps,
@@ -599,7 +605,7 @@ export class StudyStore {
     return { goal: params.goal, roadmap: roadmapRows, shortPlan: shortRows, guide };
   }
 
-  async findActiveOrActivateStage(goalId: string): Promise<RoadmapStage | 'goal_completed' | null> {
+  async findActiveOrActivateStage(goalId: string): Promise<RoadmapStage | 'goal_completed' | 'stage_review_required' | null> {
     const activeRows = await this.db
       .select()
       .from(roadmapStages)
@@ -619,6 +625,13 @@ export class StudyStore {
     }
 
     if (activeRows.length === 1) return mapRoadmapStage(activeRows[0]);
+
+    const reviewRows = await this.db
+      .select({ id: roadmapStages.id })
+      .from(roadmapStages)
+      .where(and(eq(roadmapStages.goalId, goalId), eq(roadmapStages.status, 'ready_for_review')))
+      .limit(1);
+    if (reviewRows.length > 0) return 'stage_review_required';
 
     const pendingRows = await this.db
       .select()
@@ -866,7 +879,7 @@ export class StudyStore {
     if (state.activeStageId && state.activeGoalId) {
       const stageRows = await this.db.select({ id: roadmapStages.id, goalId: roadmapStages.goalId, status: roadmapStages.status })
         .from(roadmapStages).where(eq(roadmapStages.id, state.activeStageId)).limit(1);
-      if (stageRows.length === 0 || stageRows[0].goalId !== state.activeGoalId || stageRows[0].status !== 'active') {
+      if (stageRows.length === 0 || stageRows[0].goalId !== state.activeGoalId || !['active', 'ready_for_review'].includes(stageRows[0].status)) {
         const activeStageRows = await this.db.select({ id: roadmapStages.id })
           .from(roadmapStages).where(and(eq(roadmapStages.goalId, state.activeGoalId), eq(roadmapStages.status, 'active'))).limit(1);
         if (activeStageRows.length === 1) {
@@ -975,6 +988,63 @@ export class StudyStore {
     return rows.map(mapKnowledgeItem);
   }
 
+  async getTokenCostStats(opts: { goalId?: string; operation?: string; fromDate?: string; toDate?: string }): Promise<{
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalCalls: number;
+    byOperation: Record<string, { inputTokens: number; outputTokens: number; calls: number }>;
+    byDate: Record<string, { inputTokens: number; outputTokens: number; calls: number }>;
+  }> {
+    const conditions = [sql`${aiReviews.inputTokens} IS NOT NULL`];
+    if (opts.fromDate) {
+      conditions.push(sql`${aiReviews.date} >= ${opts.fromDate}`);
+    }
+    if (opts.toDate) {
+      conditions.push(sql`${aiReviews.date} <= ${opts.toDate}`);
+    }
+    const rows = await this.db
+      .select({
+        kind: aiReviews.kind,
+        date: aiReviews.date,
+        inputTokens: sql<number>`COALESCE(SUM(${aiReviews.inputTokens}), 0)`,
+        outputTokens: sql<number>`COALESCE(SUM(${aiReviews.outputTokens}), 0)`,
+        calls: sql<number>`COUNT(*)`
+      })
+      .from(aiReviews)
+      .where(and(...conditions))
+      .groupBy(aiReviews.kind, aiReviews.date);
+
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let totalCalls = 0;
+    const byOperation: Record<string, { inputTokens: number; outputTokens: number; calls: number }> = {};
+    const byDate: Record<string, { inputTokens: number; outputTokens: number; calls: number }> = {};
+
+    for (const row of rows) {
+      totalInputTokens += row.inputTokens;
+      totalOutputTokens += row.outputTokens;
+      totalCalls += row.calls;
+
+      const kind = row.kind ?? 'unknown';
+      if (!byOperation[kind]) {
+        byOperation[kind] = { inputTokens: 0, outputTokens: 0, calls: 0 };
+      }
+      byOperation[kind].inputTokens += row.inputTokens;
+      byOperation[kind].outputTokens += row.outputTokens;
+      byOperation[kind].calls += row.calls;
+
+      const date = row.date ?? 'unknown';
+      if (!byDate[date]) {
+        byDate[date] = { inputTokens: 0, outputTokens: 0, calls: 0 };
+      }
+      byDate[date].inputTokens += row.inputTokens;
+      byDate[date].outputTokens += row.outputTokens;
+      byDate[date].calls += row.calls;
+    }
+
+    return { totalInputTokens, totalOutputTokens, totalCalls, byOperation, byDate };
+  }
+
   async getKnowledgeContextForGoal(goalId: string): Promise<{ knowledgeItems: KnowledgeItem[]; reviewKnowledgeItems: KnowledgeItem[] }> {
     const [knowledgeItems, reviewKnowledgeItems] = await Promise.all([
       this.getKnowledgeItemsForGoal({ goalId, status: 'active', limit: 3 }),
@@ -1016,6 +1086,152 @@ export class StudyStore {
           .where(eq(knowledgeItems.id, item.id));
       }
     }
+  }
+
+  async proposeFact(goalId: string, fact: { scope: LearnerFactScope; taskId?: string; key: string; value: string; source: LearnerFactSource; confidence?: number }): Promise<LearnerFact> {
+    if (fact.scope === 'task' && !fact.taskId) {
+      throw new Error('任务级学习事实必须绑定具体主任务。');
+    }
+    const factGoalId = fact.scope === 'global' ? null : goalId;
+    const taskId = fact.scope === 'task' ? fact.taskId! : null;
+    const now = nowIso();
+    const existingRows = await this.db
+      .select()
+      .from(learnerFacts)
+      .where(and(
+        factGoalId ? eq(learnerFacts.goalId, factGoalId) : isNull(learnerFacts.goalId),
+        eq(learnerFacts.scope, fact.scope),
+        eq(learnerFacts.key, fact.key),
+        taskId ? eq(learnerFacts.taskId, taskId) : isNull(learnerFacts.taskId)
+      ))
+      .limit(1);
+    const existing = existingRows[0];
+    if (existing) {
+      // 已确认事实只能被另一个显式确认值覆盖。AI 推断和待确认的用户陈述
+      // 不得静默降级或改写已经影响后续学习行为的稳定事实。
+      if (existing.source === 'confirmed' && fact.source !== 'confirmed') {
+        return {
+          id: existing.id,
+          goalId: existing.goalId,
+          taskId: existing.taskId,
+          scope: existing.scope as LearnerFactScope,
+          key: existing.key,
+          value: existing.value,
+          source: existing.source as LearnerFactSource,
+          confidence: existing.confidence,
+          createdAt: existing.createdAt,
+          updatedAt: existing.updatedAt
+        };
+      }
+      await this.db
+        .update(learnerFacts)
+        .set({
+          value: fact.value,
+          source: fact.source,
+          confidence: fact.confidence ?? existing.confidence,
+          updatedAt: now
+        })
+        .where(eq(learnerFacts.id, existing.id));
+      return {
+        id: existing.id,
+        goalId: existing.goalId,
+        taskId: existing.taskId,
+        scope: existing.scope as LearnerFactScope,
+        key: existing.key,
+        value: fact.value,
+        source: fact.source,
+        confidence: fact.confidence ?? existing.confidence,
+        createdAt: existing.createdAt,
+        updatedAt: now
+      };
+    }
+    const id = createId('learner_fact');
+    await this.db.insert(learnerFacts).values({
+      id,
+      goalId: factGoalId,
+      taskId,
+      scope: fact.scope,
+      key: fact.key,
+      value: fact.value,
+      source: fact.source,
+      confidence: fact.confidence ?? 0.8,
+      createdAt: now,
+      updatedAt: now
+    });
+    return {
+      id,
+      goalId: factGoalId,
+      taskId,
+      scope: fact.scope,
+      key: fact.key,
+      value: fact.value,
+      source: fact.source,
+      confidence: fact.confidence ?? 0.8,
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+
+  async getFact(goalId: string, key: string, scope: LearnerFactScope, taskId?: string): Promise<LearnerFact | null> {
+    const goalCondition = scope === 'global' ? isNull(learnerFacts.goalId) : eq(learnerFacts.goalId, goalId);
+    const rows = await this.db
+      .select()
+      .from(learnerFacts)
+      .where(and(
+        goalCondition,
+        eq(learnerFacts.key, key),
+        eq(learnerFacts.scope, scope),
+        scope === 'task' && taskId ? eq(learnerFacts.taskId, taskId) : isNull(learnerFacts.taskId)
+      ))
+      .limit(1);
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      id: row.id,
+      goalId: row.goalId,
+      taskId: row.taskId,
+      scope: row.scope as LearnerFactScope,
+      key: row.key,
+      value: row.value,
+      source: row.source as LearnerFactSource,
+      confidence: row.confidence,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt
+    };
+  }
+
+  async listFactsForGoal(goalId: string, scope?: LearnerFactScope): Promise<LearnerFact[]> {
+    const conditions = [or(eq(learnerFacts.goalId, goalId), and(isNull(learnerFacts.goalId), eq(learnerFacts.scope, 'global')))];
+    if (scope) conditions.push(eq(learnerFacts.scope, scope));
+    const rows = await this.db
+      .select()
+      .from(learnerFacts)
+      .where(and(...conditions))
+      .orderBy(asc(learnerFacts.scope), asc(learnerFacts.key));
+    return rows.map((row) => ({
+      id: row.id,
+      goalId: row.goalId,
+      taskId: row.taskId,
+      scope: row.scope as LearnerFactScope,
+      key: row.key,
+      value: row.value,
+      source: row.source as LearnerFactSource,
+      confidence: row.confidence,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt
+    }));
+  }
+
+  async deleteFact(goalId: string, key: string, scope: LearnerFactScope, taskId?: string): Promise<void> {
+    const goalCondition = scope === 'global' ? isNull(learnerFacts.goalId) : eq(learnerFacts.goalId, goalId);
+    await this.db
+      .delete(learnerFacts)
+      .where(and(
+        goalCondition,
+        eq(learnerFacts.key, key),
+        eq(learnerFacts.scope, scope),
+        scope === 'task' && taskId ? eq(learnerFacts.taskId, taskId) : isNull(learnerFacts.taskId)
+      ));
   }
 
   async confirmDailyGuide(guideId: string): Promise<DailyGuide> {
@@ -1432,6 +1648,41 @@ export class StudyStore {
     const guide = guideRows[0];
     await this.db.update(dailyGuides).set({ status: 'completed', sessionStatus: 'closed' }).where(eq(dailyGuides.id, guideId));
     await this.db.update(dailyPlans).set({ status: 'completed' }).where(eq(dailyPlans.id, guide.planId));
+    await this.markRoadmapStageReadyForReview(guide.goalId);
+  }
+
+  async getPendingEvaluationIdsForGoal(goalId: string): Promise<string[]> {
+    const guideRows = await this.db
+      .select({ id: dailyGuides.id })
+      .from(dailyGuides)
+      .where(and(eq(dailyGuides.goalId, goalId), inArray(dailyGuides.status, ['draft', 'confirmed', 'completed'])))
+      .orderBy(desc(dailyGuides.createdAt))
+      .limit(1);
+    const activeGuide = guideRows[0];
+    if (!activeGuide) return [];
+
+    const taskRows = await this.db
+      .select({ id: dailyGuideTasks.id })
+      .from(dailyGuideTasks)
+      .where(eq(dailyGuideTasks.guideId, activeGuide.id));
+    if (taskRows.length === 0) return [];
+
+    const taskIds = taskRows.map((t) => t.id);
+    const actionRows = await this.db
+      .select({ id: dailyGuideActions.id })
+      .from(dailyGuideActions)
+      .where(inArray(dailyGuideActions.taskId, taskIds));
+    if (actionRows.length === 0) return [];
+
+    const actionIds = actionRows.map((a) => a.id);
+    const submissionRows = await this.db
+      .select({ id: learningSubmissions.id })
+      .from(learningSubmissions)
+      .where(and(
+        inArray(learningSubmissions.dailyGuideActionId, actionIds),
+        inArray(learningSubmissions.evaluationStatus, ['waiting', 'evaluating'])
+      ));
+    return submissionRows.map((s) => s.id);
   }
 
   async getActiveGuide(activeOnly: boolean = false): Promise<{ goal: LearningGoal | null; roadmap: RoadmapStage[]; shortPlan: ShortPlanDay[]; guide: DailyGuide | null }> {
@@ -1518,6 +1769,89 @@ export class StudyStore {
       .update(questionThreads)
       .set({ resolutionSummary: `Promoted to task ${target.taskId}`, updatedAt: new Date().toISOString() })
       .where(eq(questionThreads.id, threadId));
+  }
+
+  async updateQuestionThreadKind(threadId: string, kind: 'question' | 'debug' | 'practice'): Promise<void> {
+    await this.db
+      .update(questionThreads)
+      .set({ kind, updatedAt: nowIso() })
+      .where(eq(questionThreads.id, threadId));
+  }
+
+  async updateQuestionThreadMetadata(threadId: string, metadata: Record<string, unknown>): Promise<void> {
+    await this.db
+      .update(questionThreads)
+      .set({ metadata: JSON.stringify(metadata), updatedAt: nowIso() })
+      .where(eq(questionThreads.id, threadId));
+  }
+
+  async createTaskFromBranch(branchSummary: string, anchor: { goalId: string; taskId: string }): Promise<string> {
+    const now = nowIso();
+    const guideTask = await this.getDailyGuideTaskById(anchor.taskId);
+    if (!guideTask) throw new Error(`Task not found: ${anchor.taskId}`);
+    const guideId = guideTask.guideId;
+
+    const existingTasks = await this.db
+      .select({ position: dailyGuideTasks.position })
+      .from(dailyGuideTasks)
+      .where(eq(dailyGuideTasks.guideId, guideId))
+      .orderBy(desc(dailyGuideTasks.position))
+      .limit(1);
+    const nextPosition = (existingTasks[0]?.position ?? 0) + 1;
+
+    const newTaskId = createId('daily_guide_task');
+    await this.db.insert(dailyGuideTasks).values({
+      id: newTaskId,
+      guideId,
+      roadmapStageId: guideTask.roadmapStageId,
+      legacyPlanBlockId: null,
+      title: branchSummary.slice(0, 30),
+      objective: `分支提升任务：${branchSummary.slice(0, 60)}`,
+      scope: '分支提升',
+      estimatedMinMinutes: 15,
+      estimatedTargetMinutes: 30,
+      estimatedMaxMinutes: 45,
+      deliverable: branchSummary.slice(0, 60),
+      doneWhenJson: JSON.stringify([`完成：${branchSummary.slice(0, 30)}`]),
+      quickHint: '',
+      evaluationMode: 'local',
+      submissionPolicy: 'once_after_task',
+      carryoverAllowed: true,
+      status: 'planned',
+      progressPercent: 0,
+      currentActionId: null,
+      nextStartPoint: null,
+      totalElapsedMinutes: 0,
+      position: nextPosition,
+      createdAt: now,
+      updatedAt: now
+    });
+
+    await this.db.insert(dailyGuideActions).values({
+      id: createId('daily_guide_action'),
+      taskId: newTaskId,
+      title: '执行分支任务',
+      instruction: branchSummary.slice(0, 200),
+      checkpoint: '完成分支目标',
+      status: 'planned',
+      progressNote: null,
+      completedAt: null,
+      position: 0
+    });
+
+    return newTaskId;
+  }
+
+  async extractKnowledgeFromBranch(summary: string, sourceId: string, goalId: string): Promise<void> {
+    await this.recordKnowledgeItems({
+      goalId,
+      items: [{
+        key: `branch_${sourceId.slice(0, 8)}`,
+        summary: summary.slice(0, 100),
+        sourceType: 'insight',
+        sourceId
+      }]
+    });
   }
 
   async closeCurrentSession(guideId: string): Promise<void> {
@@ -1786,24 +2120,6 @@ export class StudyStore {
     };
   }
 
-  async updateCurrentStepFromTeaching(stepId: string, output: TeachStepAgentOutput): Promise<LearningStep> {
-    await this.db
-      .update(learningSteps)
-      .set({
-        title: output.title,
-        objective: output.objective,
-        instruction: output.instruction,
-        expectedOutput: output.expectedOutput,
-        successCriteria: output.successCriteria,
-        status: output.requiresSubmission ? 'waiting_for_submission' : 'active',
-        updatedAt: nowIso()
-      })
-      .where(eq(learningSteps.id, stepId));
-    const step = await this.getLearningStep(stepId);
-    if (!step) throw new Error(`Step not found after teaching update: ${stepId}`);
-    return step;
-  }
-
   async completeCurrentAction(): Promise<LearningRuntimeSnapshot> {
     const snapshot = await this.getLearningRuntimeSnapshot();
     const taskId = snapshot.state.activeDailyTaskId;
@@ -1904,17 +2220,19 @@ export class StudyStore {
     return this.getLearningRuntimeSnapshot();
   }
 
-  async openQuestion(actionId: string, question: string): Promise<QuestionThread> {
+  async openQuestion(actionId: string | null, question: string, opts?: { goalId?: string; taskId?: string; kind?: 'question' | 'debug' | 'practice'; metadata?: Record<string, unknown> }): Promise<QuestionThread> {
     const now = nowIso();
     const threadId = createId('question');
     await this.db.insert(questionThreads).values({
       id: threadId,
-      goalId: null,
+      goalId: opts?.goalId ?? null,
       stageId: null,
-      taskId: null,
+      taskId: opts?.taskId ?? null,
       stepId: null,
       dailyGuideActionId: actionId,
       status: 'open',
+      kind: opts?.kind ?? 'question',
+      metadata: opts?.metadata ? JSON.stringify(opts.metadata) : null,
       question,
       resolutionSummary: null,
       createdAt: now,
@@ -1931,36 +2249,6 @@ export class StudyStore {
     await this.upsertRuntimeState({ activeQuestionThreadId: threadId });
     const thread = await this.getQuestionThread(threadId);
     if (!thread) throw new Error('Question thread was not saved.');
-    return thread;
-  }
-
-  private async __old_openQuestion_placeholder(stepId: string, question: string): Promise<QuestionThread> {
-    // Placeholder to consume the old method body that follows
-    const now = nowIso();
-    const threadId = createId('question');
-    await this.db.insert(questionThreads).values({
-      id: threadId,
-      goalId: null,
-      stageId: null,
-      taskId: null,
-      stepId,
-      status: 'open',
-      question,
-      resolutionSummary: null,
-      createdAt: now,
-      updatedAt: now,
-      resolvedAt: null
-    });
-    await this.db.insert(questionMessages).values({
-      id: createId('question_message'),
-      threadId,
-      role: 'user',
-      content: question,
-      createdAt: now
-    });
-    await this.upsertRuntimeState({ activeQuestionThreadId: threadId });
-    const thread = await this.getQuestionThread(threadId);
-    if (!thread) throw new Error(`Question thread not found after create: ${threadId}`);
     return thread;
   }
 
@@ -2025,6 +2313,57 @@ export class StudyStore {
     }
   }
 
+  async beginLearningSummary(kind: LearningSummary['kind'], refId: string): Promise<LearningSummary> {
+    const existingRows = await this.db
+      .select()
+      .from(learningSummaries)
+      .where(and(eq(learningSummaries.kind, kind), eq(learningSummaries.refId, refId), eq(learningSummaries.status, 'pending')))
+      .orderBy(desc(learningSummaries.createdAt))
+      .limit(1);
+    if (existingRows[0]) return mapLearningSummary(existingRows[0]);
+
+    const row = {
+      id: createId('summary'),
+      kind,
+      refId,
+      status: 'pending' as const,
+      summaryJson: JSON.stringify({}),
+      createdAt: nowIso()
+    };
+    await this.db.insert(learningSummaries).values(row);
+    return mapLearningSummary(row);
+  }
+
+  async completeLearningSummary(summaryId: string, summary: unknown): Promise<LearningSummary> {
+    await this.db
+      .update(learningSummaries)
+      .set({ status: 'ready', summaryJson: JSON.stringify(summary) })
+      .where(eq(learningSummaries.id, summaryId));
+    const rows = await this.db.select().from(learningSummaries).where(eq(learningSummaries.id, summaryId)).limit(1);
+    if (!rows[0]) throw new Error(`Learning summary not found: ${summaryId}`);
+    return mapLearningSummary(rows[0]);
+  }
+
+  async failLearningSummary(summaryId: string, errorCategory: string): Promise<LearningSummary> {
+    await this.db
+      .update(learningSummaries)
+      .set({ status: 'failed', summaryJson: JSON.stringify({ errorCategory }) })
+      .where(eq(learningSummaries.id, summaryId));
+    const rows = await this.db.select().from(learningSummaries).where(eq(learningSummaries.id, summaryId)).limit(1);
+    if (!rows[0]) throw new Error(`Learning summary not found: ${summaryId}`);
+    return mapLearningSummary(rows[0]);
+  }
+
+  async getLatestLearningSummary(kind: LearningSummary['kind'], refId: string): Promise<LearningSummary | null> {
+    const rows = await this.db
+      .select()
+      .from(learningSummaries)
+      .where(and(eq(learningSummaries.kind, kind), eq(learningSummaries.refId, refId)))
+      .orderBy(desc(learningSummaries.createdAt))
+      .limit(1);
+    return rows[0] ? mapLearningSummary(rows[0]) : null;
+  }
+
   async createSubmission(
     actionId: string,
     sessionId: string | null,
@@ -2037,6 +2376,9 @@ export class StudyStore {
       sessionId,
       content,
       evaluationStatus: 'waiting',
+      applicationStatus: 'pending',
+      applicationError: null,
+      appliedAt: null,
       createdAt: nowIso()
     };
     await this.db.insert(learningSubmissions).values(row);
@@ -2054,7 +2396,7 @@ export class StudyStore {
 
   async markSubmissionEvaluation(
     submissionId: string,
-    status: 'completed' | 'failed'
+    status: 'evaluating' | 'completed' | 'failed'
   ): Promise<void> {
     await this.db
       .update(learningSubmissions)
@@ -2098,111 +2440,168 @@ export class StudyStore {
     evaluationAiReviewId?: string;
     decisionAiReviewId?: string;
   }): Promise<{ evaluation: LearningEvaluation; decision: StoredNextStepDecision; nextAction: DailyGuideAction | null }> {
-    const now = nowIso();
-    const evaluationId = createId('evaluation');
-    await this.db.insert(learningEvaluations).values({
-      id: evaluationId,
-      submissionId: params.submission.id,
-      stepId: null,
-      dailyGuideActionId: params.submission.dailyGuideActionId ?? null,
-      result: params.evaluationOutput.result,
-      mastery: params.evaluationOutput.mastery,
-      evidenceJson: JSON.stringify(params.evaluationOutput.evidence),
-      correctPartsJson: JSON.stringify(params.evaluationOutput.correctParts),
-      misconceptionsJson: JSON.stringify(params.evaluationOutput.misconceptions),
-      missingRequirementsJson: JSON.stringify(params.evaluationOutput.missingRequirements),
-      feedback: params.evaluationOutput.feedback,
-      recommendedAction: params.evaluationOutput.recommendedAction,
-      decision: params.evaluationOutput.decision,
-      aiReviewId: params.evaluationAiReviewId ?? null,
-      createdAt: now
-    });
-
-    const decisionId = createId('decision');
-    await this.db.insert(nextStepDecisions).values({
-      id: decisionId,
-      evaluationId,
-      stepId: null,
-      decision: params.decisionOutput.decision,
-      reason: params.decisionOutput.reason,
-      taskCompleted: params.decisionOutput.taskCompleted,
-      nextStepJson: params.decisionOutput.nextStep ? JSON.stringify(params.decisionOutput.nextStep) : null,
-      remediationJson: params.decisionOutput.remediation ? JSON.stringify(params.decisionOutput.remediation) : null,
-      carryForward: params.decisionOutput.carryForward || null,
-      aiReviewId: params.decisionAiReviewId ?? null,
-      createdAt: now
-    });
-
-    // Get current state from runtime snapshot
+    // 读取当前状态（事务外，仅用于获取 task/action 信息来推进后续逻辑）
     const snapshot = await this.getLearningRuntimeSnapshot();
-    const task = snapshot.dailyGuideTask;
     const action = snapshot.dailyGuideAction;
-    if (!task) throw new Error('当前没有进行中的主任务。');
+    if (!snapshot.dailyGuideTask) throw new Error('当前没有进行中的主任务。');
     if (!action) throw new Error('当前没有进行中的学习步骤。');
 
-    // Mark submission evaluation completed (covers both pass and fail paths)
-    await this.markSubmissionEvaluation(params.submission.id, 'completed');
+    // 获取 task 原始 DB 行（advanceAfterPassingEvaluation 需要 currentActionId 等字段）
+    const taskRows = await this.db
+      .select()
+      .from(dailyGuideTasks)
+      .where(eq(dailyGuideTasks.id, snapshot.dailyGuideTask.id))
+      .limit(1);
+    if (taskRows.length === 0) throw new Error('主任务不存在。');
+    const task = taskRows[0];
+
+    const now = nowIso();
+    const evaluationId = createId('evaluation');
+    const decisionId = createId('decision');
+
+    // 事务：evaluation INSERT + decision INSERT + submission UPDATE 三处写入原子化
+    await this.db.transaction(async (tx) => {
+      await tx.insert(learningEvaluations).values({
+        id: evaluationId,
+        submissionId: params.submission.id,
+        stepId: null,
+        dailyGuideActionId: params.submission.dailyGuideActionId ?? null,
+        result: params.evaluationOutput.result,
+        mastery: params.evaluationOutput.mastery,
+        evidenceJson: JSON.stringify(params.evaluationOutput.evidence),
+        correctPartsJson: JSON.stringify(params.evaluationOutput.correctParts),
+        misconceptionsJson: JSON.stringify(params.evaluationOutput.misconceptions),
+        missingRequirementsJson: JSON.stringify(params.evaluationOutput.missingRequirements),
+        feedback: params.evaluationOutput.feedback,
+        recommendedAction: params.evaluationOutput.recommendedAction,
+        decision: params.evaluationOutput.decision,
+        aiReviewId: params.evaluationAiReviewId ?? null,
+        createdAt: now
+      });
+
+      await tx.insert(nextStepDecisions).values({
+        id: decisionId,
+        evaluationId,
+        stepId: null,
+        decision: params.decisionOutput.decision,
+        reason: params.decisionOutput.reason,
+        taskCompleted: params.decisionOutput.taskCompleted,
+        nextStepJson: params.decisionOutput.nextStep ? JSON.stringify(params.decisionOutput.nextStep) : null,
+        remediationJson: params.decisionOutput.remediation ? JSON.stringify(params.decisionOutput.remediation) : null,
+        carryForward: params.decisionOutput.carryForward || null,
+        aiReviewId: params.decisionAiReviewId ?? null,
+        createdAt: now
+      });
+
+      await tx.update(learningSubmissions)
+        .set({ evaluationStatus: 'completed', applicationStatus: 'pending', applicationError: null, appliedAt: null })
+        .where(eq(learningSubmissions.id, params.submission.id));
+    });
 
     const passed = isPassingEvaluation(params.evaluationOutput);
 
     // ── NOT passed: keep current state, allow retry ──
     if (!passed) {
+      await this.markSubmissionApplication(params.submission.id, 'applied');
       const evaluation = await this.getEvaluation(evaluationId);
       const decision = await this.getDecision(decisionId);
       if (!evaluation || !decision) throw new Error('Evaluation or decision was not saved.');
       return { evaluation, decision, nextAction: null };
     }
 
-    // ── PASSED: mark current action done ──
-    await this.db
-      .update(dailyGuideActions)
-      .set({ status: 'done', completedAt: now })
-      .where(eq(dailyGuideActions.id, action.id));
+    // ── PASSED: 事务外推进（崩溃后由 recoverPendingEvaluationProgress 恢复）──
+    let nextAction: DailyGuideAction | null;
+    try {
+      ({ nextAction } = await this.advanceAfterPassingEvaluation(task, action.id));
+      await this.markSubmissionApplication(params.submission.id, 'applied');
+    } catch (error) {
+      await this.markSubmissionApplication(params.submission.id, 'failed', 'state_application_failed');
+      throw error;
+    }
 
-    // Load all actions for this task to find the next one
+    const evaluation = await this.getEvaluation(evaluationId);
+    const decision = await this.getDecision(decisionId);
+    if (!evaluation || !decision) throw new Error('Evaluation or decision was not saved.');
+    return { evaluation, decision, nextAction };
+  }
+
+  /**
+   * 事务外推进：标记 action done → 同 task 下一 action 或 task done → 下一 task 或 guide close。
+   * 幂等设计：每个步骤前置状态检查，重复调用不会产生重复状态变更。
+   * 返回 { nextAction, changed }：changed 表示是否实际写入/修改了状态。
+   */
+  private async advanceAfterPassingEvaluation(
+    task: typeof dailyGuideTasks.$inferSelect,
+    actionId: string
+  ): Promise<{ nextAction: DailyGuideAction | null; changed: boolean }> {
+    const now = nowIso();
+    let changed = false;
+
     const allActions = await this.db
       .select()
       .from(dailyGuideActions)
       .where(eq(dailyGuideActions.taskId, task.id))
       .orderBy(asc(dailyGuideActions.position));
+
+    // 标记当前 action done（幂等：仅当非 done 时写入）
+    const currentAction = allActions.find((a) => a.id === actionId);
+    if (currentAction && currentAction.status !== 'done') {
+      await this.db
+        .update(dailyGuideActions)
+        .set({ status: 'done', completedAt: now })
+        .where(eq(dailyGuideActions.id, actionId));
+      changed = true;
+    }
+
     const nextAction = allActions.find(
-      (a) => a.id !== action.id && a.status !== 'done' && a.status !== 'skipped'
+      (a) => a.id !== actionId && a.status !== 'done' && a.status !== 'skipped'
     ) ?? null;
 
     // ── Same task, next action exists ──
     if (nextAction) {
-      const nextActionMapped = mapDailyGuideAction(nextAction);
-      await this.db
-        .update(dailyGuideTasks)
-        .set({ currentActionId: nextAction.id, updatedAt: now })
-        .where(eq(dailyGuideTasks.id, task.id));
-      await this.upsertRuntimeState({
-        activeStepId: nextAction.id,
-        activeDailyTaskId: task.id,
-        activeQuestionThreadId: null,
-        sessionStatus: 'active'
-      });
-      const evaluation = await this.getEvaluation(evaluationId);
-      const decision = await this.getDecision(decisionId);
-      if (!evaluation || !decision) throw new Error('Evaluation or decision was not saved.');
-      return { evaluation, decision, nextAction: nextActionMapped };
+      if (task.currentActionId !== nextAction.id) {
+        await this.db
+          .update(dailyGuideTasks)
+          .set({ currentActionId: nextAction.id, updatedAt: now })
+          .where(eq(dailyGuideTasks.id, task.id));
+        await this.upsertRuntimeState({
+          activeStepId: nextAction.id,
+          activeDailyTaskId: task.id,
+          activeQuestionThreadId: null,
+          sessionStatus: 'active'
+        });
+        changed = true;
+      }
+      return { nextAction: mapDailyGuideAction(nextAction), changed };
     }
 
     // ── Task done: mark task complete, find next task ──
-    const completedCount = allActions.filter((a) => a.status === 'done').length;
+    const completedCount = allActions.filter((a) => a.status === 'done' || a.id === actionId).length;
     const progressPercent = allActions.length > 0
       ? Math.round((completedCount / allActions.length) * 100)
       : 100;
-    await this.db
-      .update(dailyGuideTasks)
-      .set({
-        status: 'done',
-        progressPercent,
-        currentActionId: null,
-        nextStartPoint: null,
-        updatedAt: now
-      })
-      .where(eq(dailyGuideTasks.id, task.id));
+    if (task.status !== 'done') {
+      await this.db
+        .update(dailyGuideTasks)
+        .set({
+          status: 'done',
+          progressPercent,
+          currentActionId: null,
+          nextStartPoint: null,
+          updatedAt: now
+        })
+        .where(eq(dailyGuideTasks.id, task.id));
+      changed = true;
+    }
+
+    const resumableSessions = await this.db
+      .select({ id: studySessions.id })
+      .from(studySessions)
+      .where(and(eq(studySessions.taskId, task.id), inArray(studySessions.status, ['active', 'paused'])));
+    for (const session of resumableSessions) {
+      await this.completeSession(session.id, '主任务已通过评价');
+      changed = true;
+    }
 
     // Load all tasks for this guide
     const allTasks = await this.db
@@ -2226,32 +2625,28 @@ export class StudyStore {
       ) ?? null;
       const firstActionId = firstAction?.id ?? null;
 
-      await this.db
-        .update(dailyGuideTasks)
-        .set({
-          status: 'active',
-          currentActionId: firstActionId,
-          updatedAt: now
-        })
-        .where(eq(dailyGuideTasks.id, nextTaskRow.id));
+      if (nextTaskRow.status !== 'active' || nextTaskRow.currentActionId !== firstActionId) {
+        await this.db
+          .update(dailyGuideTasks)
+          .set({
+            status: 'active',
+            currentActionId: firstActionId,
+            updatedAt: now
+          })
+          .where(eq(dailyGuideTasks.id, nextTaskRow.id));
+        await this.upsertRuntimeState({
+          activeDailyTaskId: nextTaskRow.id,
+          activeStepId: firstActionId,
+          activeQuestionThreadId: null,
+          sessionStatus: 'active'
+        });
+        changed = true;
+      }
 
-      await this.upsertRuntimeState({
-        activeDailyTaskId: nextTaskRow.id,
-        activeStepId: firstActionId,
-        activeQuestionThreadId: null,
-        sessionStatus: 'active'
-      });
-
-      const nextTask = mapDailyGuideTask(nextTaskRow,
-        nextTaskActions.map(mapDailyGuideAction));
-      const evaluation = await this.getEvaluation(evaluationId);
-      const decision = await this.getDecision(decisionId);
-      if (!evaluation || !decision) throw new Error('Evaluation or decision was not saved.');
-      return {
-        evaluation,
-        decision,
-        nextAction: nextTask.currentAction ?? nextTask.actions[0] ?? null
-      };
+      if (firstAction) {
+        return { nextAction: mapDailyGuideAction(firstAction), changed };
+      }
+      return { nextAction: nextTaskActions[0] ? mapDailyGuideAction(nextTaskActions[0]) : null, changed };
     }
 
     // ── Guide complete ──
@@ -2263,128 +2658,108 @@ export class StudyStore {
       sessionStatus: 'completed'
     });
 
-    const evaluation = await this.getEvaluation(evaluationId);
-    const decision = await this.getDecision(decisionId);
-    if (!evaluation || !decision) throw new Error('Evaluation or decision was not saved.');
-
-    const guide = await this.getDailyGuideById(task.guideId);
-    if (guide) {
-      const goalRows = await this.db.select().from(goals).where(eq(goals.id, guide.goalId)).limit(1);
-      if (goalRows[0]) {
-        await this.applyEvaluationDecisionToRoadmap({
-          goalId: goalRows[0].id,
-          taskId: task.id,
-          decision: params.evaluationOutput.decision,
-          taskCompleted: params.decisionOutput.taskCompleted
-        });
-      }
-    }
-
-    return { evaluation, decision, nextAction: null };
+    return { nextAction: null, changed: true };
   }
 
-  async applyEvaluationDecisionToRoadmap(params: {
-    goalId: string;
-    taskId: string;
-    decision: 'advance' | 'stay' | 'remediate' | 'replan';
-    taskCompleted: boolean;
-  }): Promise<void> {
-    if (!params.goalId) return;
+  /**
+   * 崩溃恢复：查找 evaluation 已保存（taskCompleted=true）但 task 未完成的 submission，幂等推进。
+   * 在 AppService.initialize() 启动时调用。
+   */
+  async recoverPendingEvaluationProgress(): Promise<{ recovered: number; conflicts: string[] }> {
+    const conflicts: string[] = [];
+    let recovered = 0;
 
-    const taskRows = await this.db
-      .select()
-      .from(dailyGuideTasks)
-      .where(eq(dailyGuideTasks.id, params.taskId))
-      .limit(1);
-    const task = taskRows[0];
-    if (!task) return;
-
-    const stageId = task.roadmapStageId;
-    if (!stageId) return;
-
-    const now = nowIso();
-
-    // Idempotency: if this stage is already completed, don't re-apply
-    const stageRows = await this.db
-      .select({ status: roadmapStages.status })
-      .from(roadmapStages)
-      .where(eq(roadmapStages.id, stageId))
-      .limit(1);
-    const currentStageStatus = stageRows[0]?.status;
-
-    if (params.decision === 'advance' && params.taskCompleted) {
-      if (currentStageStatus === 'completed') return;
-      await this.db
-        .update(roadmapStages)
-        .set({ status: 'completed', updatedAt: now })
-        .where(eq(roadmapStages.id, stageId));
-
-      const currentStageRows = await this.db
-        .select({ position: roadmapStages.position })
-        .from(roadmapStages)
-        .where(eq(roadmapStages.id, stageId))
-        .limit(1);
-      if (currentStageRows[0]) {
-        const nextStageRows = await this.db
-          .select()
-          .from(roadmapStages)
-          .where(and(eq(roadmapStages.goalId, params.goalId), gt(roadmapStages.position, currentStageRows[0].position)))
-          .orderBy(asc(roadmapStages.position))
-          .limit(1);
-        if (nextStageRows[0]) {
-          await this.db
-            .update(roadmapStages)
-            .set({ status: 'active', updatedAt: now })
-            .where(eq(roadmapStages.id, nextStageRows[0].id));
-        }
-      }
-    } else if (params.decision === 'stay' || params.decision === 'remediate') {
-      await this.db
-        .update(roadmapStages)
-        .set({ status: 'active', updatedAt: now })
-        .where(eq(roadmapStages.id, stageId));
-    } else if (params.decision === 'replan') {
-      await this.db
-        .update(roadmapStages)
-        .set({ status: 'adjusted', updatedAt: now })
-        .where(eq(roadmapStages.id, stageId));
-    }
-  }
-
-  async syncRoadmapProgressBeforeRollingPlan(goalId: string): Promise<void> {
-    const latestEvalRows = await this.db
-      .select()
-      .from(learningEvaluations)
-      .orderBy(desc(learningEvaluations.createdAt))
-      .limit(1);
-    if (latestEvalRows.length === 0) return;
-
-    const latestEval = latestEvalRows[0];
-    if (!latestEval.decision || latestEval.decision === 'stay') return;
-
-    const submissionRows = await this.db
+    const completedSubmissions = await this.db
       .select()
       .from(learningSubmissions)
-      .where(eq(learningSubmissions.id, latestEval.submissionId))
-      .limit(1);
-    if (submissionRows.length === 0) return;
+      .where(and(
+        eq(learningSubmissions.evaluationStatus, 'completed'),
+        inArray(learningSubmissions.applicationStatus, ['pending', 'failed'])
+      ));
 
-    const actionId = submissionRows[0].dailyGuideActionId;
-    if (!actionId) return;
+    for (const submission of completedSubmissions) {
+      if (!submission.dailyGuideActionId) continue;
 
-    const actionRows = await this.db
-      .select({ taskId: dailyGuideActions.taskId })
-      .from(dailyGuideActions)
-      .where(eq(dailyGuideActions.id, actionId))
-      .limit(1);
-    if (actionRows.length === 0 || !actionRows[0].taskId) return;
+      const evaluations = await this.db
+        .select()
+        .from(learningEvaluations)
+        .where(eq(learningEvaluations.submissionId, submission.id))
+        .orderBy(desc(learningEvaluations.createdAt))
+        .limit(1);
+      if (evaluations.length === 0) continue;
 
-    await this.applyEvaluationDecisionToRoadmap({
-      goalId,
-      taskId: actionRows[0].taskId,
-      decision: latestEval.decision as 'advance' | 'stay' | 'remediate' | 'replan',
-      taskCompleted: true
-    });
+      const decisions = await this.db
+        .select()
+        .from(nextStepDecisions)
+        .where(eq(nextStepDecisions.evaluationId, evaluations[0].id))
+        .orderBy(desc(nextStepDecisions.createdAt))
+        .limit(1);
+      if (decisions.length === 0) {
+        await this.markSubmissionApplication(submission.id, 'failed', 'missing_decision');
+        conflicts.push(`submission:${submission.id}:missing_decision`);
+        continue;
+      }
+      if (!decisions[0].taskCompleted) {
+        await this.markSubmissionApplication(submission.id, 'applied');
+        recovered++;
+        continue;
+      }
+
+      const actionRows = await this.db
+        .select()
+        .from(dailyGuideActions)
+        .where(eq(dailyGuideActions.id, submission.dailyGuideActionId))
+        .limit(1);
+      if (actionRows.length === 0) {
+        await this.markSubmissionApplication(submission.id, 'failed', 'missing_action');
+        conflicts.push(`submission:${submission.id}:missing_action`);
+        continue;
+      }
+
+      const taskRows = await this.db
+        .select()
+        .from(dailyGuideTasks)
+        .where(eq(dailyGuideTasks.id, actionRows[0].taskId))
+        .limit(1);
+      if (taskRows.length === 0) {
+        await this.markSubmissionApplication(submission.id, 'failed', 'missing_task');
+        conflicts.push(`submission:${submission.id}:missing_task`);
+        continue;
+      }
+
+      const task = taskRows[0];
+      if (task.status === 'done') {
+        await this.markSubmissionApplication(submission.id, 'applied');
+        recovered++;
+        continue;
+      }
+
+      try {
+        await this.advanceAfterPassingEvaluation(task, submission.dailyGuideActionId);
+        await this.markSubmissionApplication(submission.id, 'applied');
+        recovered++;
+      } catch {
+        await this.markSubmissionApplication(submission.id, 'failed', 'state_application_failed');
+        conflicts.push(`submission:${submission.id}:state_application_failed`);
+      }
+    }
+
+    return { recovered, conflicts };
+  }
+
+  private async markSubmissionApplication(
+    submissionId: string,
+    status: 'applied' | 'failed',
+    error: string | null = null
+  ): Promise<void> {
+    await this.db
+      .update(learningSubmissions)
+      .set({
+        applicationStatus: status,
+        applicationError: error,
+        appliedAt: status === 'applied' ? nowIso() : null
+      })
+      .where(eq(learningSubmissions.id, submissionId));
   }
 
   async getPlanAdjustmentProposal(proposalId: string): Promise<PlanAdjustmentProposal | null> {
@@ -2398,13 +2773,93 @@ export class StudyStore {
   }
 
   async getEvaluationsForTask(taskId: string): Promise<LearningEvaluation[]> {
-    const submissionRows = await this.db.select().from(learningSubmissions).where(eq(learningSubmissions.dailyGuideActionId, taskId));
+    const actionRows = await this.db
+      .select({ id: dailyGuideActions.id })
+      .from(dailyGuideActions)
+      .where(eq(dailyGuideActions.taskId, taskId));
+    if (actionRows.length === 0) return [];
+    const submissionRows = await this.db
+      .select()
+      .from(learningSubmissions)
+      .where(inArray(learningSubmissions.dailyGuideActionId, actionRows.map((action) => action.id)));
     const evaluations: LearningEvaluation[] = [];
     for (const sub of submissionRows) {
       const evRows = await this.db.select().from(learningEvaluations).where(eq(learningEvaluations.submissionId, sub.id)).orderBy(desc(learningEvaluations.createdAt));
       evaluations.push(...evRows.map(mapEvaluation));
     }
     return evaluations;
+  }
+
+  /** 当阶段内的学习单元全部完成时，只进入待复核，不自动宣告能力达成。 */
+  async markRoadmapStageReadyForReview(goalId: string): Promise<void> {
+    if (!goalId) return;
+
+    const activeStageRows = await this.db
+      .select()
+      .from(roadmapStages)
+      .where(and(eq(roadmapStages.goalId, goalId), eq(roadmapStages.status, 'active')))
+      .orderBy(asc(roadmapStages.position))
+      .limit(1);
+    const activeStage = activeStageRows[0];
+    if (!activeStage) return;
+
+    const spDayRows = await this.db
+      .select({ id: shortPlanDays.id, sessionStatus: shortPlanDays.sessionStatus })
+      .from(shortPlanDays)
+      .where(and(eq(shortPlanDays.goalId, goalId), eq(shortPlanDays.roadmapStageId, activeStage.id)));
+    const spDayIdsForStage = new Set(spDayRows.map((d) => d.id));
+
+    const guideRows = await this.db
+      .select({ id: dailyGuides.id, sessionStatus: dailyGuides.sessionStatus, shortPlanDayId: dailyGuides.shortPlanDayId })
+      .from(dailyGuides)
+      .where(eq(dailyGuides.goalId, goalId));
+    const guidesForStage = guideRows.filter((g) => g.shortPlanDayId && spDayIdsForStage.has(g.shortPlanDayId));
+
+    // 阶段推进条件：阶段下所有 short plan day 都已有 guide（已激活）且全部 closed
+    const allDaysActivated = spDayRows.every((d) => {
+      if (d.sessionStatus === 'pending') return false;
+      return guidesForStage.some((g) => g.shortPlanDayId === d.id);
+    });
+    const allGuidesComplete = allDaysActivated && guidesForStage.length > 0 && guidesForStage.every((g) => g.sessionStatus === 'closed');
+
+    if (!allGuidesComplete) return;
+
+    const now = nowIso();
+    await this.db
+      .update(roadmapStages)
+      .set({ status: 'ready_for_review', updatedAt: now })
+      .where(eq(roadmapStages.id, activeStage.id));
+  }
+
+  async confirmRoadmapStageCompletion(goalId: string, stageId: string): Promise<RoadmapStage[]> {
+    await this.db.transaction(async (tx) => {
+      const stageRows = await tx
+        .select()
+        .from(roadmapStages)
+        .where(and(eq(roadmapStages.id, stageId), eq(roadmapStages.goalId, goalId)))
+        .limit(1);
+      const stage = stageRows[0];
+      if (!stage) throw new Error('找不到需要复核的学习阶段。');
+      if (stage.status === 'completed') return;
+      if (stage.status !== 'ready_for_review') throw new Error('当前阶段尚未达到待复核状态。');
+
+      const now = nowIso();
+      await tx.update(roadmapStages).set({ status: 'completed', updatedAt: now }).where(eq(roadmapStages.id, stage.id));
+      const nextRows = await tx
+        .select()
+        .from(roadmapStages)
+        .where(and(eq(roadmapStages.goalId, goalId), eq(roadmapStages.status, 'pending'), gt(roadmapStages.position, stage.position)))
+        .orderBy(asc(roadmapStages.position))
+        .limit(1);
+      const next = nextRows[0];
+      if (next) {
+        await tx.update(roadmapStages).set({ status: 'active', updatedAt: now }).where(eq(roadmapStages.id, next.id));
+        await tx.update(learningRuntimeStates).set({ activeStageId: next.id, updatedAt: now }).where(eq(learningRuntimeStates.id, 'default'));
+      } else {
+        await tx.update(learningRuntimeStates).set({ activeStageId: null, updatedAt: now }).where(eq(learningRuntimeStates.id, 'default'));
+      }
+    });
+    return this.listRoadmap(goalId);
   }
 
   async buildContext(operation: LearningAiOperation, extra: Record<string, unknown> = {}): Promise<BuiltLearningContext> {
@@ -2570,7 +3025,7 @@ export class StudyStore {
     return rows.map(mapShortPlanDay);
   }
 
-  async getPlanVersionsForGoal(goalId: string): Promise<Array<{ version: number; changeSummary: string; createdAt: string; snapshot: unknown }>> {
+  async getPlanVersionsForGoal(goalId: string): Promise<PlanVersionEntry[]> {
     const rows = await this.db
       .select({ version: planVersions.version, changeSummary: planVersions.changeSummary, createdAt: planVersions.createdAt, snapshotJson: planVersions.snapshotJson })
       .from(planVersions)
@@ -2579,12 +3034,134 @@ export class StudyStore {
       .where(eq(dailyGuides.goalId, goalId))
       .orderBy(desc(planVersions.createdAt))
       .limit(10);
-    return rows.map((r) => ({
-      version: r.version,
-      changeSummary: r.changeSummary ?? '',
-      createdAt: r.createdAt,
-      snapshot: r.snapshotJson ? JSON.parse(r.snapshotJson) : null
+    return rows.map((r) => {
+      let snapshot: PlanVersionEntry['snapshot'] = null;
+      try {
+        const raw = r.snapshotJson ? JSON.parse(r.snapshotJson) : null;
+        if (raw && typeof raw === 'object') {
+          const record = raw as Record<string, unknown>;
+          const sp = record.shortPlan;
+          const shortPlan = Array.isArray(sp) ? sp.map((d: Record<string, unknown>) => ({
+            dayIndex: Number(d.dayIndex) || 0,
+            title: String(d.title ?? ''),
+            focus: String(d.focus ?? ''),
+            expectedOutput: String(d.expectedOutput ?? ''),
+            successCriteria: String(d.successCriteria ?? '')
+          })) : undefined;
+          snapshot = { shortPlan, reason: typeof record.reason === 'string' ? record.reason : undefined };
+        }
+      } catch {
+        snapshot = null;
+      }
+      return {
+        version: r.version,
+        changeSummary: r.changeSummary ?? '',
+        createdAt: r.createdAt,
+        snapshot
+      };
+    });
+  }
+
+  async createProposal(goalId: string, proposal: PlanProposalInput): Promise<PlanAdjustmentProposal> {
+    const now = nowIso();
+    const id = createId('pap');
+    await this.db.insert(planAdjustmentProposals).values({
+      id,
+      goalId,
+      stageId: null,
+      taskId: null,
+      sourceDecisionId: null,
+      status: 'pending',
+      reason: proposal.reason,
+      proposedChangesJson: JSON.stringify({ adjustments: proposal.adjustments }),
+      appliedTaskId: null,
+      createdAt: now,
+      decidedAt: null,
+      appliedAt: null
+    });
+    const rows = await this.db.select().from(planAdjustmentProposals).where(eq(planAdjustmentProposals.id, id)).limit(1);
+    return mapPlanAdjustmentProposal(rows[0]);
+  }
+
+  async confirmProposal(proposalId: string): Promise<PlanAdjustmentProposal> {
+    const existingRows = await this.db
+      .select()
+      .from(planAdjustmentProposals)
+      .where(eq(planAdjustmentProposals.id, proposalId))
+      .limit(1);
+    if (!existingRows[0]) throw new Error(`Plan adjustment proposal not found: ${proposalId}`);
+
+    const existing = mapPlanAdjustmentProposal(existingRows[0]);
+    if (existing.status === 'accepted') return existing;
+    if (existing.status === 'rejected') throw new Error('Cannot confirm a rejected proposal');
+
+    const proposed = (typeof existing.proposedChanges === 'string'
+      ? JSON.parse(existing.proposedChanges)
+      : existing.proposedChanges) as { adjustments: Array<{ dayIndex: number; title: string; focus: string; expectedOutput: string; successCriteria: string; reason?: string }> };
+    const adjustments = (proposed.adjustments ?? []).map((adj) => ({
+      dayIndex: adj.dayIndex,
+      title: adj.title,
+      focus: adj.focus,
+      expectedOutput: adj.expectedOutput,
+      successCriteria: adj.successCriteria,
+      reason: adj.reason ?? existing.reason
     }));
+
+    const updated = await this.applyReviewPlanAdjustments({ goalId: existing.goalId!, adjustments });
+
+    const now = nowIso();
+    const planId = await this.findLatestPlanIdForGoal(existing.goalId!);
+    if (planId && updated.length > 0) {
+      const maxVersionRow = await this.db
+        .select({ maxVersion: sql<number>`max(${planVersions.version})` })
+        .from(planVersions)
+        .where(eq(planVersions.planId, planId))
+        .limit(1);
+      const nextVersion = ((maxVersionRow[0]?.maxVersion as number) ?? 0) + 1;
+      await this.db.insert(planVersions).values({
+        id: createId('plan_version'),
+        planId,
+        version: nextVersion,
+        changeSummary: `应用计划调整：${existing.reason}`,
+        snapshotJson: JSON.stringify({ reason: existing.reason, shortPlan: adjustments.map((a) => ({ dayIndex: a.dayIndex, title: a.title, focus: a.focus, expectedOutput: a.expectedOutput, successCriteria: a.successCriteria })) }),
+        createdAt: now
+      });
+    }
+
+    await this.db
+      .update(planAdjustmentProposals)
+      .set({ status: 'accepted', decidedAt: now, appliedAt: updated.length > 0 ? now : null })
+      .where(eq(planAdjustmentProposals.id, proposalId));
+    const rows = await this.db.select().from(planAdjustmentProposals).where(eq(planAdjustmentProposals.id, proposalId)).limit(1);
+    return mapPlanAdjustmentProposal(rows[0]);
+  }
+
+  async rejectProposal(proposalId: string): Promise<PlanAdjustmentProposal> {
+    const existingRows = await this.db
+      .select()
+      .from(planAdjustmentProposals)
+      .where(eq(planAdjustmentProposals.id, proposalId))
+      .limit(1);
+    if (!existingRows[0]) throw new Error(`Plan adjustment proposal not found: ${proposalId}`);
+
+    const now = nowIso();
+    await this.db
+      .update(planAdjustmentProposals)
+      .set({ status: 'rejected', decidedAt: now })
+      .where(eq(planAdjustmentProposals.id, proposalId));
+    const rows = await this.db.select().from(planAdjustmentProposals).where(eq(planAdjustmentProposals.id, proposalId)).limit(1);
+    return mapPlanAdjustmentProposal(rows[0]);
+  }
+
+  private async findLatestPlanIdForGoal(goalId: string): Promise<string | null> {
+    const rows = await this.db
+      .select({ planId: dailyPlans.id })
+      .from(dailyPlans)
+      .innerJoin(dailyGuides, eq(dailyGuides.planId, dailyPlans.id))
+      .where(eq(dailyGuides.goalId, goalId))
+      .orderBy(desc(dailyPlans.createdAt))
+      .limit(1);
+    return rows[0]?.planId ?? null;
   }
 
   async getDailyGuideById(guideId: string): Promise<DailyGuide | null> {
@@ -2695,61 +3272,6 @@ export class StudyStore {
     }
   }
 
-  private async createStepForActiveExecutionTask(
-    state: ExecutionState,
-    currentStep: LearningStep
-  ): Promise<LearningStep | null> {
-    const activeTask = state.activeDailyTaskId
-      ? state.tasks.find((task) => task.id === state.activeDailyTaskId || task.legacyPlanBlockId === state.activeDailyTaskId) ?? null
-      : null;
-    const nextAction = activeTask?.currentAction ?? null;
-    if (!activeTask?.legacyPlanBlockId || !nextAction) {
-      await this.upsertRuntimeState({
-        activeDailyTaskId: null,
-        activeStepId: null,
-        activeQuestionThreadId: null,
-        sessionStatus: 'completed'
-      });
-      return null;
-    }
-
-    const nextBlockRows = await this.db
-      .select()
-      .from(dailyPlanBlocks)
-      .where(eq(dailyPlanBlocks.id, activeTask.legacyPlanBlockId))
-      .limit(1);
-    const nextBlock = nextBlockRows[0] ?? null;
-
-    await this.db
-      .update(dailyPlanBlocks)
-      .set({ status: 'active' })
-      .where(eq(dailyPlanBlocks.id, activeTask.legacyPlanBlockId));
-
-    const nextStep = await this.createLearningStep({
-      goalId: currentStep.goalId,
-      stageId: currentStep.stageId,
-      taskId: nextBlock?.taskId ?? null,
-      blockId: activeTask.legacyPlanBlockId,
-      title: nextAction.title,
-      objective: activeTask.objective,
-      instruction: nextAction.instruction,
-      expectedOutput: activeTask.deliverable,
-      successCriteria: nextAction.checkpoint,
-      status: 'active',
-      attempt: 1,
-      position: nextAction.position
-    });
-
-    await this.upsertRuntimeState({
-      activeDailyTaskId: activeTask.legacyPlanBlockId,
-      activeStepId: nextStep.id,
-      activeQuestionThreadId: null,
-      sessionStatus: 'idle'
-    });
-
-    return nextStep;
-  }
-
   private async getTask(taskId: string): Promise<TaskItem | null> {
     const rows = await this.db.select().from(taskItems).where(eq(taskItems.id, taskId)).limit(1);
     return rows[0] ? mapTask(rows[0]) : null;
@@ -2813,11 +3335,6 @@ export class StudyStore {
     return rows[0] ? mapDecision(rows[0]) : null;
   }
 
-  private async getLearningStep(stepId: string): Promise<LearningStep | null> {
-    const rows = await this.db.select().from(learningSteps).where(eq(learningSteps.id, stepId)).limit(1);
-    return rows[0] ? mapLearningStep(rows[0]) : null;
-  }
-
   private async getOrCreateRuntimeState(): Promise<LearningRuntimeState> {
     const rows = await this.db
       .select()
@@ -2866,76 +3383,6 @@ export class StudyStore {
     return next;
   }
 
-  private async getOrCreateActiveStepForAction(params: {
-    blockId: string;
-    taskId: string | null;
-    guideTask: DailyGuideTask;
-    action: DailyGuideAction;
-    goal: LearningGoal | null;
-    stage: PlanStage | null;
-  }): Promise<LearningStep> {
-    const rows = await this.db
-      .select()
-      .from(learningSteps)
-      .where(eq(learningSteps.blockId, params.blockId))
-      .orderBy(asc(learningSteps.position));
-    const active = rows
-      .map(mapLearningStep)
-      .find((step) => ['active', 'waiting_for_submission', 'needs_revision'].includes(step.status));
-    if (active) return active;
-    return this.createLearningStep({
-      goalId: params.goal?.id ?? null,
-      stageId: params.stage?.id ?? null,
-      taskId: params.taskId,
-      blockId: params.blockId,
-      title: params.action.title,
-      objective: params.guideTask.objective,
-      instruction: params.action.instruction,
-      expectedOutput: params.guideTask.deliverable,
-      successCriteria: params.action.checkpoint,
-      status: 'active',
-      attempt: 1,
-      position: params.action.position
-    });
-  }
-
-  private async createLearningStep(params: {
-    goalId: string | null;
-    stageId: string | null;
-    taskId: string | null;
-    blockId: string | null;
-    title: string;
-    objective: string;
-    instruction: string;
-    expectedOutput: string;
-    successCriteria: string;
-    status: LearningStep['status'];
-    attempt: number;
-    position: number;
-  }): Promise<LearningStep> {
-    const now = nowIso();
-    const row = {
-      id: createId('step'),
-      goalId: params.goalId,
-      stageId: params.stageId,
-      taskId: params.taskId,
-      blockId: params.blockId,
-      title: params.title,
-      objective: params.objective,
-      instruction: params.instruction,
-      expectedOutput: params.expectedOutput,
-      successCriteria: params.successCriteria,
-      status: params.status,
-      attempt: params.attempt,
-      position: params.position,
-      summary: null,
-      createdAt: now,
-      updatedAt: now
-    };
-    await this.db.insert(learningSteps).values(row);
-    return row;
-  }
-
   async getQuestionThread(threadId: string): Promise<QuestionThread | null> {
     const rows = await this.db.select().from(questionThreads).where(eq(questionThreads.id, threadId)).limit(1);
     return rows[0] ? mapQuestionThread(rows[0]) : null;
@@ -2948,27 +3395,6 @@ export class StudyStore {
       .where(eq(questionMessages.threadId, threadId))
       .orderBy(asc(questionMessages.createdAt));
     return rows.map(mapQuestionMessage);
-  }
-
-  private async listRecentStepSummaries(blockId: string, activeStepId: string): Promise<LearningSummary[]> {
-    const steps = await this.db
-      .select()
-      .from(learningSteps)
-      .where(eq(learningSteps.blockId, blockId))
-      .orderBy(desc(learningSteps.position));
-    const summaries: LearningSummary[] = [];
-    for (const step of steps) {
-      if (step.id === activeStepId) continue;
-      const rows = await this.db
-        .select()
-        .from(learningSummaries)
-        .where(eq(learningSummaries.refId, step.id))
-        .orderBy(desc(learningSummaries.createdAt))
-        .limit(1);
-      if (rows[0]) summaries.push(mapLearningSummary(rows[0]));
-      if (summaries.length >= 3) break;
-    }
-    return summaries;
   }
 
   private async getLatestSubmission(stepId: string): Promise<LearningSubmission | null> {
@@ -3269,8 +3695,9 @@ export class StudyStore {
       const latestStep = steps.length > 0 ? mapLearningStep(steps[steps.length - 1]) : null;
       const latestSubmission = latestStep ? await this.getLatestSubmission(latestStep.id) : null;
       const latestEvaluation = latestStep ? await this.getLatestEvaluation(latestStep.id) : null;
-      const questionRows = steps.length > 0
-        ? await this.db.select().from(questionThreads).where(eq(questionThreads.stepId, steps[steps.length - 1].id))
+      const actionIds = guideTask.actions.map((action) => action.id);
+      const questionRows = actionIds.length > 0
+        ? await this.db.select().from(questionThreads).where(inArray(questionThreads.dailyGuideActionId, actionIds))
         : [];
       guideTasks.push({
         id: guideTask.id,
@@ -3623,7 +4050,7 @@ function mapQuestionMessage(row: typeof questionMessages.$inferSelect): Question
   };
 }
 
-function mapSubmission(row: { id: string; stepId: string | null; dailyGuideActionId?: string | null; sessionId: string | null; content: string; createdAt: string; evaluationStatus?: string | null }): LearningSubmission {
+function mapSubmission(row: { id: string; stepId: string | null; dailyGuideActionId?: string | null; sessionId: string | null; content: string; createdAt: string; evaluationStatus?: string | null; applicationStatus?: string | null; applicationError?: string | null; appliedAt?: string | null }): LearningSubmission {
   return {
     id: row.id,
     stepId: row.stepId,
@@ -3631,6 +4058,9 @@ function mapSubmission(row: { id: string; stepId: string | null; dailyGuideActio
     sessionId: row.sessionId,
     content: row.content,
     evaluationStatus: (row.evaluationStatus ?? 'completed') as LearningSubmission['evaluationStatus'],
+    applicationStatus: (row.applicationStatus ?? 'applied') as LearningSubmission['applicationStatus'],
+    applicationError: row.applicationError ?? null,
+    appliedAt: row.appliedAt ?? null,
     createdAt: row.createdAt
   };
 }
@@ -3643,6 +4073,9 @@ function mapSubmissionOld(row: typeof learningSubmissions.$inferSelect): Learnin
     sessionId: row.sessionId,
     content: row.content,
     evaluationStatus: (row.evaluationStatus ?? 'completed') as LearningSubmission['evaluationStatus'],
+    applicationStatus: row.applicationStatus,
+    applicationError: row.applicationError,
+    appliedAt: row.appliedAt,
     createdAt: row.createdAt
   };
 }
