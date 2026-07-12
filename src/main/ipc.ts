@@ -30,9 +30,7 @@ export function registerIpcHandlers(appService: AppService): void {
   ipcMain.handle(ipcChannels.guidesListToday, () => appService.listTodayGuide());
   ipcMain.handle(ipcChannels.sessionsStart, (_event, payload) => appService.startSession(payload.taskId));
   ipcMain.handle(ipcChannels.sessionsPause, (_event, payload) => appService.pauseSession(payload.sessionId));
-  ipcMain.handle(ipcChannels.sessionsSkip, (_event, payload) =>
-    appService.skipBlock(payload.blockId, payload.reason)
-  );
+  ipcMain.handle(ipcChannels.sessionsSkip, () => appService.skipCurrentTask());
   ipcMain.handle(ipcChannels.sessionsGetAccumulated, (_event, payload) =>
     appService.getAccumulatedSeconds(payload.blockId, payload.excludeSessionId)
   );
@@ -61,10 +59,24 @@ export function registerIpcHandlers(appService: AppService): void {
   );
   ipcMain.handle(ipcChannels.reviewsGenerate, (_event, payload) => appService.generateReview(payload.date));
   ipcMain.handle(ipcChannels.reviewsGetLatest, (_event, payload) => appService.getLatestReview(payload?.date));
-  ipcMain.handle(ipcChannels.reviewsApplyAdjustments, (_event, payload) => appService.applyReviewPlanAdjustments(payload));
   ipcMain.handle(ipcChannels.knowledgeListForGoal, (_event, payload) => appService.getKnowledgeItemsForGoal(payload));
+  ipcMain.handle(ipcChannels.learnerContextProposeFact, (_event, payload) => appService.proposeLearnerFact(payload.goalId, payload.fact));
+  ipcMain.handle(ipcChannels.learnerContextListForGoal, (_event, payload) => appService.listLearnerFacts(payload.goalId, payload?.scope));
+  ipcMain.handle(ipcChannels.learnerContextConfirmFact, (_event, payload) => appService.confirmLearnerFact(payload.goalId, payload.key, payload.scope, payload.taskId));
+  ipcMain.handle(ipcChannels.learnerContextDeleteFact, (_event, payload) => appService.deleteLearnerFact(payload.goalId, payload.key, payload.scope, payload.taskId));
+  ipcMain.handle(ipcChannels.branchOpen, (_event, payload) => appService.createBranch(payload.kind, payload.anchor, payload.initialContent));
+  ipcMain.handle(ipcChannels.branchAppend, (_event, payload) => appService.appendBranchMessage(payload.threadId, payload.role, payload.content));
+  ipcMain.handle(ipcChannels.branchClose, (_event, payload) => appService.closeBranch(payload.threadId, payload.strategy, payload.options));
+  ipcMain.handle(ipcChannels.branchPromote, (_event, payload) => appService.promoteBranch(payload.threadId, payload.taskId, payload.summary));
+  ipcMain.handle(ipcChannels.branchGetThread, (_event, payload) => appService.getBranchThread(payload.threadId));
+  ipcMain.handle(ipcChannels.branchGetMessages, (_event, payload) => appService.getBranchMessages(payload.threadId));
   ipcMain.handle(ipcChannels.systemAuditRuntime, () => appService.auditRuntimeConsistency());
   ipcMain.handle(ipcChannels.dataExportGoal, (_event, payload) => appService.exportGoalData(payload.goalId));
+  ipcMain.handle(ipcChannels.dataGetPlanVersions, (_event, payload) => appService.getPlanVersionsForGoal(payload.goalId));
+  ipcMain.handle(ipcChannels.dataCreatePlanProposal, (_event, payload) => appService.createPlanProposal(payload.goalId, payload.proposal));
+  ipcMain.handle(ipcChannels.dataConfirmPlanProposal, (_event, payload) => appService.confirmPlanProposal(payload.proposalId));
+  ipcMain.handle(ipcChannels.dataRejectPlanProposal, (_event, payload) => appService.rejectPlanProposal(payload.proposalId));
+  ipcMain.handle(ipcChannels.dataConfirmRoadmapStage, (_event, payload) => appService.confirmRoadmapStage(payload.goalId, payload.stageId));
   ipcMain.handle(ipcChannels.promptsList, () => appService.listPrompts());
   ipcMain.handle(ipcChannels.promptsUpdate, (_event, payload) =>
     appService.updatePrompt(payload.profileId, payload.content)
@@ -72,4 +84,5 @@ export function registerIpcHandlers(appService: AppService): void {
   ipcMain.handle(ipcChannels.sessionGetActive, () => appService.getActiveSession());
   ipcMain.handle(ipcChannels.historyListAll, () => appService.listHistory());
   ipcMain.handle(ipcChannels.historyGetById, (_event, payload) => appService.getHistoryIntake(payload.intakeId));
+  ipcMain.handle(ipcChannels.statsGetTokenCost, (_event, payload) => appService.getTokenCostStats(payload ?? {}));
 }
