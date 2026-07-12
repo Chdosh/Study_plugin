@@ -1,0 +1,42 @@
+{
+  "taskId": "TASK-20260711-p4-ui-baseline",
+  "startedAt": "2026-07-11T21:55:00+08:00",
+  "finishedAt": "2026-07-11T22:05:00+08:00",
+  "workingDirectory": "D:\\work\\study_plugin",
+  "commands": [
+    {
+      "name": "typecheck",
+      "exitCode": 0,
+      "log": "typecheck.log"
+    },
+    {
+      "name": "test",
+      "exitCode": 0,
+      "log": "test-full.log"
+    },
+    {
+      "name": "test-command-policy",
+      "exitCode": 0,
+      "log": "test-command-policy.log"
+    },
+    {
+      "name": "build",
+      "exitCode": 0,
+      "log": "build.log"
+    }
+  ],
+  "evidenceFiles": [
+    "pre-status.txt",
+    "pre-untracked.txt",
+    "post-status.txt",
+    "post-untracked.txt",
+    "diff-name-status.txt",
+    "diff-stat.txt",
+    "typecheck.log",
+    "test.log",
+    "test-command-policy.log",
+    "test-full.log",
+    "build.log"
+  ],
+  "executor": "executor-agent"
+}

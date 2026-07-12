@@ -1,40 +1,64 @@
-# TASK-20260629-float-window-sync Delivery
+# DELIVERY.md — TASK-20260711-p31-plan-proposal
 
-## 完成内容
+## 完成状态：已完成
 
-- 修复浮动窗口拖拽后鼠标释放可能误触发展开或打开主程序的问题。
-- 统一主窗口和浮动窗口的学习计时计算，避免打开主程序后 Study 页面显示旧 session 时间。
-- 打开主程序或导航到 Study 页面时主动同步当前活跃学习 session。
-- 增加浮窗行为纯函数回归测试，覆盖拖拽阈值、拖拽后激活抑制、session elapsed seconds 计算。
+## 交付内容
 
-## 修改文件
+### 1. IPC 通道（shared/ipc.ts）
+- `dataGetPlanVersions: 'data:getPlanVersions'`
+- `dataCreatePlanProposal: 'data:createPlanProposal'`
+- `dataConfirmPlanProposal: 'data:confirmPlanProposal'`
+- `dataRejectPlanProposal: 'data:rejectPlanProposal'`
 
-- `src/renderer/src/float-behavior.ts`
-- `src/renderer/src/float-behavior.test.ts`
-- `src/renderer/src/float-main.tsx`
-- `src/renderer/src/main.tsx`
-- `src/shared/types.ts`
-- `src/preload/index.ts`
-- `src/main/ipc.ts`
-- `docs/PROJECT_MEMORY.md`
+### 2. IPC handlers（main/ipc.ts）
+- `dataGetPlanVersions` → `appService.getPlanVersionsForGoal`
+- `dataCreatePlanProposal` → `appService.createPlanProposal`
+- `dataConfirmPlanProposal` → `appService.confirmPlanProposal`
+- `dataRejectPlanProposal` → `appService.rejectPlanProposal`
 
-## 关键实现
+### 3. AppService adapter（app-service.ts）
+- `getPlanVersionsForGoal(goalId)` → `modules.planning.getPlanVersionsForGoal`
+- `createPlanProposal(goalId, proposal)` → `modules.planning.proposePlanChange`
+- `confirmPlanProposal(proposalId)` → `modules.planning.confirmPlanChange`
+- `rejectPlanProposal(proposalId)` → `modules.planning.rejectPlanChange`
 
-- 使用 4px 阈值区分真实拖拽和普通点击。
-- 拖拽结束后短时间抑制 click/double-click，防止拖动动作被解释为展开或打开主程序。
-- 将计时公式集中到 `getSessionElapsedSeconds`，主窗口和浮窗共用同一计算来源。
-- `StudyAppApi.sessions` 新增 `getActive`，Renderer 可在初始加载和页面导航时读取主进程当前活跃 session。
-- `floatOpenMain` 在打开/聚焦主窗口后推送最新 session 状态。
+### 4. Store 方法（store.ts）
+- `getPlanVersionsForGoal(goalId)` — 按 goal 读取最近 10 个 plan version，含 snapshot 解析
+- `createProposal(goalId, proposal)` — 写入 pending proposal
+- `confirmProposal(proposalId)` — 应用变更 + 写 plan version + 标记 accepted（幂等）
+- `rejectProposal(proposalId)` — 标记 rejected
+- `findLatestPlanIdForGoal(goalId)` — 辅助方法
+
+### 5. PlanningModule（planning.ts）
+- `proposePlanChange(goalId, proposal)` → 调用 store.createProposal
+- `confirmPlanChange(proposalId)` → 调用 store.confirmProposal
+- `rejectPlanChange(proposalId)` → 调用 store.rejectProposal
+- `getPlanVersionsForGoal(goalId)` → 调用 store.getPlanVersionsForGoal
+
+### 6. Preload 暴露（preload/index.ts）
+- `data.getPlanVersions(goalId)`
+- `data.createPlanProposal(goalId, proposal)`
+- `data.confirmPlanProposal(proposalId)`
+- `data.rejectPlanProposal(proposalId)`
+
+### 7. ReviewPage UI
+- "计划变更历史"卡片：展示版本号、变更摘要、时间
+- 空状态显示"尚无计划变更记录"
+- 加载状态处理
+
+### 8. 测试覆盖（store.test.ts）
+- `createProposal writes a pending proposal`
+- `confirmProposal applies changes and writes plan version`
+- `confirmProposal is idempotent — repeated call does not create duplicate version`
+- `rejectProposal does not modify any plan`
+- `confirmProposal skips locked days`
 
 ## 验证结果
 
-- `npm.cmd test -- src/renderer/src/float-behavior.test.ts`：先红后绿，最终通过 3/3。
-- `npm.cmd run typecheck`：通过。
-- `npm.cmd test`：通过 12/12。
-- `npm.cmd run build`：通过。
+```
+Test Files  12 passed | 1 skipped (13)
+     Tests  128 passed | 6 skipped (134)
+```
 
-完整日志位于 `.agent/evidence/TASK-20260629-float-window-sync/`。
-
-## 未完成
-
-- 未执行真实桌面 GUI 手工冒烟。当前验证覆盖静态行为、类型、单元测试和生产构建。
+- `npm run typecheck` — 通过
+- `npm run build` — 通过

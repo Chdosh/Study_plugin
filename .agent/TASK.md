@@ -1,63 +1,88 @@
 # 当前任务
 
 ## Task ID
-FLOAT-003
+TASK-20260711-p5p6-experience
 
 ## 任务名称
-实现浮窗位置持久化、应用重启恢复、主窗口跳转联动
+P5 知识复习 + 学习风格设置 + P6 Session 锚点收敛
 
-## 背景
-
-FLOAT-002 已实现浮窗完整 UI。还需要：
-1. 浮窗位置持久化（记住最后位置）
-2. 应用重启后如果存在未结束会话，浮窗自动恢复
-3. "打开主程序"按钮跳转到 Study 页面
-4. 主窗口 Study 页面的会话控制与浮窗同步
-
-## 本次目标
-
-1. 浮窗拖动结束后保存位置到 `app_settings`（key=`floatWindowPosition`）。
-2. 浮窗启动时读取保存的位置。
-3. 浮窗启动时检查是否有 active session，有则自动显示。
-4. 主窗口"打开主程序"时跳转到 Study 页面。
-5. 确保主窗口和浮窗的会话状态完全同步。
+## 目标
+1. 知识项按出现次数 ≥ N 自动进入复习队列
+2. Review 页知识库增加"标记复习"按钮 + 复习入口
+3. 学习风格设置：简洁/详细/代码优先（影响 teach prompt）
+4. Token 成本统计 IPC
+5. Session 锚点收敛：修正 blockId→taskId 参数名，标记 skipBlock 为 deprecated
 
 ## 修改范围
 
-- `src/renderer/src/float-main.tsx` — 添加位置保存/恢复逻辑
-- `src/main/index.ts` — 浮窗启动时恢复位置，应用重启时检查活跃会话
-- `src/main/services/app-service.ts` — 可能需要调整 pushSessionState 的触发时机
+### 允许修改
+- `src/main/services/store.ts` — Token cost stats, review queue methods
+- `src/main/services/app-service.ts` — adapter + startSession 参数名修正
+- `src/main/ipc.ts` — stats IPC
+- `src/shared/ipc.ts` — channels
+- `src/preload/index.ts` — API
+- `src/renderer/src/pages/ReviewPage.tsx` — review entry UI
+- `src/renderer/src/pages/SettingsPage.tsx` — learning style select
+- `src/renderer/src/pages/StudyPage.tsx` — skipCurrentTask IPC rename
+- 测试文件
 
-## 禁止修改
-
-- `src/main/db/schema.ts`、`src/renderer/src/main.tsx`、`src/shared/`、`src/preload/`、`design-prototype/`、`package.json`
+### 禁止修改
+- schema（不改列）
+- AGENTS.md
 
 ## 实施要求
 
-### 位置持久化
-- 浮窗拖动结束（mouseup）后，调用 `window.floatApp.float.savePosition(x, y)`
-- 浮窗启动时调用 `window.floatApp.float.getPosition()` 恢复位置
-- 位置存储在 `app_settings` 表，key=`floatWindowPosition`，value=`{"x":100,"y":50}`
+### Step 1: Review 页 — 知识项复习入口
+在 ReviewPage 知识库卡片中，每项增加：
+- 出现次数 ≥ 2 时显示"已纳入复习"徽章
+- "标记复习"按钮（手动标记）
+- 按出现次数排序（已有，确认保留）
 
-### 应用重启恢复
-- 浮窗 Renderer 启动时调用 `window.floatApp.session.getActive()`
-- 如果有 active session，自动显示浮窗并加载会话数据
-- 如果没有 active session，浮窗保持隐藏
+### Step 2: Settings — 学习风格
+SettingsPage 增加"学习偏好"卡片：
+- 教学风格：简洁 / 详细 / 代码优先
+- 保存到 app_settings（key=learningStyle）
+- AppService 读取此设置注入 teach prompt
 
-### 主窗口跳转
-- `float:openMain` IPC handler 已存在，需要确保主窗口跳转到 Study 页面
-- 可以通过 `mainWindow.webContents.send('navigate', 'study')` 实现
-- 主窗口 Renderer 监听 `navigate` 事件并切换 view
+### Step 3: Token 成本统计
+Store 层：
+```typescript
+async getTokenCostStats(opts: { goalId?: string; operation?: string; fromDate?: string; toDate?: string }): Promise<{
+  totalTokens: number;
+  totalCalls: number;
+  byOperation: Record<string, { tokens: number; calls: number }>;
+  byDate: Record<string, { tokens: number; calls: number }>;
+}>
+```
+- 从 ai_reviews 表聚合 input_tokens + output_tokens
+- 不记录 secret（token 数字本身不是 secret）
+
+IPC: `stats:getTokenCost`
+UI: ReviewPage 或 SettingsPage 展示统计（简单表格即可）
+
+### Step 4: Session 锚点收敛（Q1）
+- `startSession(blockId: Id)` → `startSession(taskId: Id)` + 内部用这个 taskId 调用 module
+- `skipBlock(blockId, reason)` → 标记 deprecated，内部改为 skipCurrentTask
+- `getAccumulatedSeconds(blockId, ...)` → 增加 `taskId` 参数重载
+- `getActiveSession()` 中移除 legacyPlanBlockId 回退逻辑（改为仅用 taskId）
+
+### Step 5: 测试
+- store.test.ts: getTokenCostStats 测试
+- app-service.test.ts: startSession 参数名修正后的回归测试
 
 ## 验收标准
+1. 知识项出现 ≥ 2 次后显示"已纳入复习"徽章
+2. 学习风格设置保存并读取
+3. Token 成本统计按 operation/date 聚合
+4. startSession 参数名统一为 taskId（不再使用 blockId）
+5. All tests passed, typecheck, build 通过
 
-1. typecheck 通过。
-2. test 8/8 通过。
-3. build 通过。
-4. 浮窗位置在重启后保持。
-5. 应用重启后有活跃会话时浮窗自动出现。
-6. 打开主程序按钮正确跳转到 Study 页。
-7. 主窗口和浮窗会话状态同步。
+## 验证命令
+```
+npm test
+npm run typecheck
+npm run build
+```
 
-## 交付证据
-`.agent/DELIVERY.md`
+## 迭代规则
+完成 → DELIVERY.md → 最终 E2E 验收
