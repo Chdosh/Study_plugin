@@ -444,3 +444,33 @@
     padding-left: 0;
   }
 }
+
+.knowledge-item-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.micro-button {
+  padding: 3px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+
+.micro-button:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.micro-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.knowledge-item.in-review {
+  border-color: var(--color-warning-border, var(--color-border));
+}

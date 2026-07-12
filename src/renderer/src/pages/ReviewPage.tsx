@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -12,7 +12,8 @@ import {
   Sparkles,
   TrendingUp
 } from 'lucide-react';
-import type { KnowledgeItem, PlanAdjustmentProposal, ReviewResult, TodayGuideState } from '../../../shared/types';
+import type { KnowledgeItem, PlanAdjustmentProposal, PlanVersionEntry, ReviewResult, TodayGuideState } from '../../../shared/types';
+import { computeProgress } from '../../../shared/progress';
 
 export function ReviewPage({
   review,
@@ -23,6 +24,7 @@ export function ReviewPage({
   hasApiKey,
   onDecideAdjustment,
   onGenerateRollingPlan,
+  onConfirmRoadmapStage,
   onApplyPlanAdjustments
 }: {
   review: ReviewResult | null;
@@ -33,6 +35,7 @@ export function ReviewPage({
   hasApiKey: boolean;
   onDecideAdjustment: (proposalId: string, status: 'accepted' | 'rejected') => Promise<void>;
   onGenerateRollingPlan?: () => Promise<void>;
+  onConfirmRoadmapStage?: (stageId: string) => Promise<void>;
   onApplyPlanAdjustments?: (adjustments: ReviewResult['planAdjustments']) => Promise<number>;
 }): JSX.Element {
   const [generating, setGenerating] = useState(false);
@@ -40,6 +43,11 @@ export function ReviewPage({
   const [adjustmentApplyResult, setAdjustmentApplyResult] = useState<'idle' | 'applied' | 'none'>('idle');
   const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
   const [knowledgeFilter, setKnowledgeFilter] = useState<'all' | 'active' | 'resolved'>('active');
+  const [planVersions, setPlanVersions] = useState<PlanVersionEntry[]>([]);
+  const [loadingVersions, setLoadingVersions] = useState(false);
+  const [proposalBusy, setProposalBusy] = useState<string | null>(null);
+  const [stageBusy, setStageBusy] = useState(false);
+  const stageReadyForReview = todayGuide?.roadmap.find((stage) => stage.status === 'ready_for_review') ?? null;
 
   useEffect(() => {
     setAdjustmentApplyResult('idle');
@@ -51,6 +59,17 @@ export function ReviewPage({
         .listForGoal(todayGuide.goal.id)
         .then((items) => setKnowledgeItems(items.sort((a, b) => b.occurrenceCount - a.occurrenceCount)))
         .catch(() => {});
+    }
+  }, [todayGuide?.goal?.id]);
+
+  useEffect(() => {
+    if (todayGuide?.goal?.id && window.studyApp?.data?.getPlanVersions) {
+      setLoadingVersions(true);
+      void window.studyApp.data
+        .getPlanVersions(todayGuide.goal.id)
+        .then((versions) => setPlanVersions(versions))
+        .catch(() => {})
+        .finally(() => setLoadingVersions(false));
     }
   }, [todayGuide?.goal?.id]);
 
@@ -70,15 +89,10 @@ export function ReviewPage({
   const recordedMinutes = guideTasks.reduce((sum, task) => sum + (task.totalElapsedMinutes || 0), 0);
   const focusScore = review?.focusScore ?? 0;
 
-  const plannedTasksTotal = displayGuide?.guide?.tasks.length ?? 0;
-  const tasksTotal = plannedTasksTotal;
-  const tasksDone = guideTasks.filter((task) => task.status === 'done').length;
-  // AI review 的 completionScore 仅作复盘评分参考，不覆盖基于 task status 的事实统计
-  const completionScore = review
-    ? review.completionScore
-    : plannedTasksTotal > 0
-      ? Math.round((tasksDone / plannedTasksTotal) * 100)
-      : 0;
+  const guideProgress = useMemo(() => computeProgress(guideTasks), [guideTasks]);
+  const completionScore = review ? review.completionScore : guideProgress.percent;
+  const tasksTotal = guideProgress.total;
+  const tasksDone = guideProgress.completed;
   const todayLabel = `${new Date().getMonth() + 1}/${String(new Date().getDate()).padStart(2, '0')}`;
   const last7Days = [
     { label: '—', value: 0 },
@@ -184,6 +198,50 @@ export function ReviewPage({
             )}
           </div>
         </section>
+
+        {stageReadyForReview && onConfirmRoadmapStage && (
+          <section className="surface review-adjustment-card">
+            <h3><ClipboardCheck size={16} /> 阶段成果待确认</h3>
+            <p>“{stageReadyForReview.title}”下的计划单元已经完成，但这不自动代表阶段目标已经达成。</p>
+            <p className="muted">完成标准：{stageReadyForReview.successCriteria}</p>
+            <button
+              className="primary-action"
+              type="button"
+              disabled={stageBusy}
+              onClick={() => {
+                setStageBusy(true);
+                void onConfirmRoadmapStage(stageReadyForReview.id).finally(() => setStageBusy(false));
+              }}
+            >
+              {stageBusy ? <Loader2 className="spin" size={16} /> : <CheckCircle2 size={16} />}
+              我已复核，进入下一阶段
+            </button>
+          </section>
+        )}
+
+        {planVersions.length > 0 && (
+          <section className="surface review-adjustment-card">
+            <h3><FileText size={16} /> 计划变更历史</h3>
+            <p className="muted">已保存的计划快照，最多显示最近 10 个版本。</p>
+            <div className="adjustment-items">
+              {planVersions.map((v) => (
+                <div key={v.version} className="adjustment-item">
+                  <strong>v{v.version} · {v.changeSummary || '计划快照'}</strong>
+                  <span className="muted">{new Date(v.createdAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                  {v.snapshot?.shortPlan && v.snapshot.shortPlan.length > 0 && (
+                    <span>变更单元：{v.snapshot.shortPlan.map((d) => `第${d.dayIndex}单元`).join('、')}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+        {!loadingVersions && planVersions.length === 0 && todayGuide?.goal?.id && (
+          <section className="surface review-adjustment-card">
+            <h3><FileText size={16} /> 计划变更历史</h3>
+            <p className="muted">尚无计划变更记录。应用 AI 调整建议后会在这里保存快照。</p>
+          </section>
+        )}
 
         {pendingAdjustment?.status === 'pending' && (
           <section className="surface review-adjustment-card">
@@ -317,19 +375,31 @@ export function ReviewPage({
               <p className="muted">该筛选条件下没有知识项。</p>
             ) : (
               <div className="knowledge-items">
-                {filteredKnowledgeItems.map((item) => (
-                  <div key={item.id} className={`knowledge-item ${item.status === 'resolved' ? 'resolved' : ''}`}>
-                    <div className="knowledge-item-head">
-                      <strong>{item.key}</strong>
-                      <span className={`knowledge-badge type-${item.sourceType}`}>{knowledgeTypeLabel(item.sourceType)}</span>
-                      {item.occurrenceCount >= 2 && (
-                        <span className="knowledge-badge review-worthy">{item.occurrenceCount}×</span>
-                      )}
+                {filteredKnowledgeItems.map((item) => {
+                  const isInReviewQueue = item.occurrenceCount >= 2;
+                  return (
+                    <div key={item.id} className={`knowledge-item ${item.status === 'resolved' ? 'resolved' : ''} ${isInReviewQueue ? 'in-review' : ''}`}>
+                      <div className="knowledge-item-head">
+                        <strong>{item.key}</strong>
+                        <span className={`knowledge-badge type-${item.sourceType}`}>{knowledgeTypeLabel(item.sourceType)}</span>
+                        {isInReviewQueue && (
+                          <span className="knowledge-badge review-worthy">已纳入复习</span>
+                        )}
+                      </div>
+                      <span className="knowledge-item-summary">{item.summary}</span>
+                      {item.sourceId && <span className="knowledge-item-source">来源: {item.sourceId}</span>}
+                      <div className="knowledge-item-actions">
+                        <button
+                          type="button"
+                          className="micro-button"
+                          disabled={isInReviewQueue}
+                        >
+                          {isInReviewQueue ? '已标记' : '标记复习'}
+                        </button>
+                      </div>
                     </div>
-                    <span className="knowledge-item-summary">{item.summary}</span>
-                    {item.sourceId && <span className="knowledge-item-source">来源: {item.sourceId}</span>}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>
