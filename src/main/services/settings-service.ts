@@ -1,5 +1,5 @@
 import { app, safeStorage } from 'electron';
-import type { AppSettings, StudyWindow } from '../../shared/types';
+import type { AppSettings, LearningStyle, StudyWindow } from '../../shared/types';
 import type { StudyStore } from './store';
 
 const defaultWindows: StudyWindow[] = [{ start: '20:00', end: '22:00' }];
@@ -8,13 +8,14 @@ export class SettingsService {
   constructor(private readonly store: StudyStore) {}
 
   async getAppSettings(): Promise<AppSettings> {
-    const [baseUrl, model, autoLaunch, blockMinutes, windowsJson, encryptedKey] = await Promise.all([
+    const [baseUrl, model, autoLaunch, blockMinutes, windowsJson, encryptedKey, learningStyle] = await Promise.all([
       this.store.getSetting('deepseekBaseUrl'),
       this.store.getSetting('deepseekModel'),
       this.store.getSetting('autoLaunch'),
       this.store.getSetting('defaultBlockMinutes'),
       this.store.getSetting('dailyStudyWindows'),
-      this.store.getSetting('deepseekApiKeyEncrypted')
+      this.store.getSetting('deepseekApiKeyEncrypted'),
+      this.store.getSetting('learningStyle')
     ]);
 
     return {
@@ -23,7 +24,8 @@ export class SettingsService {
       hasDeepseekApiKey: Boolean(encryptedKey),
       autoLaunch: autoLaunch === 'true',
       defaultBlockMinutes: Number(blockMinutes ?? 10),
-      dailyStudyWindows: parseWindows(windowsJson)
+      dailyStudyWindows: parseWindows(windowsJson),
+      learningStyle: parseLearningStyle(learningStyle)
     };
   }
 
@@ -53,6 +55,9 @@ export class SettingsService {
       app.setLoginItemSettings({
         openAtLogin: patch.autoLaunch
       });
+    }
+    if (typeof patch.learningStyle === 'string') {
+      await this.store.putSetting('learningStyle', patch.learningStyle);
     }
     if (typeof patch.deepseekApiKey === 'string' && patch.deepseekApiKey.trim()) {
       await this.store.putSetting('deepseekApiKeyEncrypted', encryptSecret(patch.deepseekApiKey.trim()));
@@ -90,6 +95,11 @@ function parseWindows(value: string | null): StudyWindow[] {
   } catch {
     return defaultWindows;
   }
+}
+
+function parseLearningStyle(value: string | null): LearningStyle {
+  if (value === 'concise' || value === 'code_first') return value;
+  return 'detailed';
 }
 
 function isStudyWindow(value: unknown): value is StudyWindow {
