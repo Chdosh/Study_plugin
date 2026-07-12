@@ -17,6 +17,7 @@ function fixture(overrides: Partial<PlanningStore> = {}) {
     saveAiReview: vi.fn().mockResolvedValue('review-1'),
     saveDailyGuideWithTransaction: vi.fn().mockResolvedValue({ guide: { id: 'guide-1' } }),
     ensureDraftDailyGuide: vi.fn().mockResolvedValue({ id: 'guide-draft', sessionStatus: 'draft', tasks: [] }),
+    buildContext: vi.fn().mockResolvedValue({ operation: 'generate_daily_guide', snapshot: {}, context: {}, contextSourceIds: [] }),
     acquireGenerationLock: vi.fn().mockResolvedValue(true),
     releaseGenerationLock: vi.fn().mockResolvedValue(undefined),
     closeCurrentSession: vi.fn().mockResolvedValue(undefined),
