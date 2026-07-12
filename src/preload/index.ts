@@ -7,12 +7,17 @@ import type {
   GenerateRollingPlanResult,
   HistoryIntakeSummary,
   Id,
+  LearnerFact,
+  LearnerFactScope,
+  LearnerFactSource,
   LearningRuntimeSnapshot,
   LearningGoal,
   GoalIntake,
   GoalIntakeState,
   LayeredPlanResult,
   PlanAdjustmentProposal,
+  PlanProposalInput,
+  PlanVersionEntry,
   PrepareCurrentLearningDayResult,
   QuestionAnswerResult,
   StudyAppApi,
@@ -91,28 +96,53 @@ const api: StudyAppApi = {
   reviews: {
     generate: (date: string) => ipcRenderer.invoke(ipcChannels.reviewsGenerate, { date }),
     getLatest: (date?: string) => ipcRenderer.invoke(ipcChannels.reviewsGetLatest, { date }),
-    applyAdjustments: (goalId: string, adjustments: Array<{
-      dayIndex: number;
-      title: string;
-      focus: string;
-      expectedOutput: string;
-      successCriteria: string;
-      reason: string;
-    }>) => ipcRenderer.invoke(ipcChannels.reviewsApplyAdjustments, { goalId, adjustments })
   },
   knowledge: {
     listForGoal: (goalId: string) => ipcRenderer.invoke(ipcChannels.knowledgeListForGoal, { goalId })
+  },
+  learnerContext: {
+    proposeFact: (goalId: string, fact: { scope: LearnerFactScope; taskId?: string; key: string; value: string; source: LearnerFactSource; confidence?: number }) =>
+      ipcRenderer.invoke(ipcChannels.learnerContextProposeFact, { goalId, fact }),
+    listForGoal: (goalId: string, scope?: LearnerFactScope) =>
+      ipcRenderer.invoke(ipcChannels.learnerContextListForGoal, { goalId, scope }),
+    confirmFact: (goalId: string, key: string, scope: LearnerFactScope, taskId?: string) =>
+      ipcRenderer.invoke(ipcChannels.learnerContextConfirmFact, { goalId, key, scope, taskId }),
+    deleteFact: (goalId: string, key: string, scope: LearnerFactScope, taskId?: string) =>
+      ipcRenderer.invoke(ipcChannels.learnerContextDeleteFact, { goalId, key, scope, taskId })
+  },
+  branch: {
+    open: (kind: 'question' | 'debug' | 'practice', anchor: { goalId: string; taskId: string; actionId: string | null }, initialContent?: string) =>
+      ipcRenderer.invoke(ipcChannels.branchOpen, { kind, anchor, initialContent }),
+    append: (threadId: string, role: 'user' | 'assistant', content: string) =>
+      ipcRenderer.invoke(ipcChannels.branchAppend, { threadId, role, content }),
+    close: (threadId: string, strategy: string, options?: { summary?: string; factProposal?: any; promoteTaskId?: string }) =>
+      ipcRenderer.invoke(ipcChannels.branchClose, { threadId, strategy, options }),
+    promote: (threadId: string, taskId: string, summary?: string) =>
+      ipcRenderer.invoke(ipcChannels.branchPromote, { threadId, taskId, summary }),
+    getThread: (threadId: string) =>
+      ipcRenderer.invoke(ipcChannels.branchGetThread, { threadId }),
+    getMessages: (threadId: string) =>
+      ipcRenderer.invoke(ipcChannels.branchGetMessages, { threadId })
   },
   system: {
     auditRuntime: () => ipcRenderer.invoke(ipcChannels.systemAuditRuntime)
   },
   data: {
-    exportGoal: (goalId: string) => ipcRenderer.invoke(ipcChannels.dataExportGoal, { goalId })
+    exportGoal: (goalId: string) => ipcRenderer.invoke(ipcChannels.dataExportGoal, { goalId }),
+    getPlanVersions: (goalId: string) => ipcRenderer.invoke(ipcChannels.dataGetPlanVersions, { goalId }),
+    createPlanProposal: (goalId: string, proposal: PlanProposalInput) => ipcRenderer.invoke(ipcChannels.dataCreatePlanProposal, { goalId, proposal }),
+    confirmPlanProposal: (proposalId: string) => ipcRenderer.invoke(ipcChannels.dataConfirmPlanProposal, { proposalId }),
+    rejectPlanProposal: (proposalId: string) => ipcRenderer.invoke(ipcChannels.dataRejectPlanProposal, { proposalId }),
+    confirmRoadmapStage: (goalId: string, stageId: string) => ipcRenderer.invoke(ipcChannels.dataConfirmRoadmapStage, { goalId, stageId })
   },
   prompts: {
     list: () => ipcRenderer.invoke(ipcChannels.promptsList),
     update: (profileId: Id, content: string) =>
       ipcRenderer.invoke(ipcChannels.promptsUpdate, { profileId, content })
+  },
+  stats: {
+    getTokenCost: (opts?: { goalId?: string; operation?: string; fromDate?: string; toDate?: string }) =>
+      ipcRenderer.invoke(ipcChannels.statsGetTokenCost, opts ?? {})
   },
   onSessionStateChanged: (callback: (data: { session: StudySession | null; block: DailyPlanBlock | null }) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, data: { session: StudySession | null; block: DailyPlanBlock | null }) => {
