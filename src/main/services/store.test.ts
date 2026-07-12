@@ -19,7 +19,10 @@ import {
   learningRuntimeStates,
   learningSteps,
   learningSubmissions,
+  nextStepDecisions,
+  planAdjustmentProposals,
   planStages,
+  planVersions,
   roadmapStages,
   shortPlanDays,
   studySessions
@@ -571,44 +574,6 @@ describe('Runtime convergence', () => {
     expect(JSON.parse(nextStageDay.tasksJson)).toEqual(['不能被改']);
   });
 
-  it('applyEvaluationDecisionToRoadmap is idempotent', async () => {
-    const goal = await store.createGoal('test', 'test');
-    const result = await store.saveLayeredPlan({
-      goal,
-      brief: null,
-      date: '2026-07-05',
-      windows: [{ start: '10:00', end: '12:00' }],
-      roadmap: {
-        goalSummary: 'test',
-        stages: [
-          { title: '项目接管基础', objective: '能跑通项目并讲清主流程', direction: '先理解已有项目', successCriteria: '能讲清' },
-          { title: '功能演示', objective: '能演示核心功能', direction: '做演示', successCriteria: '能演示' }
-        ]
-      },
-      shortPlan: { weekFocus: 'test', days: [{ dayIndex: 1, title: 'T1', focus: 'F1', tasks: ['task1'], expectedOutput: 'EO1', successCriteria: 'SC1' }] },
-      dailyGuide: { date: '2026-07-05', todayGoal: 'test', deliverables: [], boundaries: [], acceptanceCriteria: [], tomorrowActions: [], tasks: [{ title: 'Task1', objective: 'Obj1', scope: 'Scope1', estimatedMinutes: { min: 30, target: 45, max: 60 }, actions: [{ title: 'A1', instruction: 'Do A1', checkpoint: 'Done' }], deliverable: 'Del1', doneWhen: ['Done'], quickHint: 'Hint', evaluationMode: 'local', submissionPolicy: 'once_after_task', carryoverAllowed: true }] }
-    });
-
-    const guideRows = await store.db.select({ id: dailyGuides.id }).from(dailyGuides).where(eq(dailyGuides.goalId, goal.id)).orderBy(desc(dailyGuides.createdAt)).limit(1);
-    const taskRows = await store.db.select({ id: dailyGuideTasks.id }).from(dailyGuideTasks).where(eq(dailyGuideTasks.guideId, guideRows[0].id)).limit(1);
-    const taskId = taskRows[0].id;
-    const stages = await store.db.select().from(roadmapStages).where(eq(roadmapStages.goalId, goal.id)).orderBy(asc(roadmapStages.position));
-    expect(stages.length).toBe(2);
-    expect(stages[0].status).toBe('active');
-    expect(stages[1].status).toBe('pending');
-
-    await store.applyEvaluationDecisionToRoadmap({ goalId: goal.id, taskId, decision: 'advance', taskCompleted: true });
-    const afterFirst = await store.db.select().from(roadmapStages).where(eq(roadmapStages.goalId, goal.id));
-    expect(afterFirst.find((s) => s.id === stages[0].id)?.status).toBe('completed');
-    expect(afterFirst.find((s) => s.id === stages[1].id)?.status).toBe('active');
-
-    await store.applyEvaluationDecisionToRoadmap({ goalId: goal.id, taskId, decision: 'advance', taskCompleted: true });
-    const afterSecond = await store.db.select().from(roadmapStages).where(eq(roadmapStages.goalId, goal.id));
-    expect(afterSecond.find((s) => s.id === stages[0].id)?.status).toBe('completed');
-    const activeCount = afterSecond.filter((s) => s.status === 'active').length;
-    expect(activeCount).toBe(1);
-  });
-
   it('getLatestReview excludes rolling_plan records', async () => {
     await store.db.insert(aiReviews).values({
       id: 'r-rolling',
@@ -850,6 +815,197 @@ describe('Runtime convergence', () => {
     expect(stateItem?.status).toBe('active');
   });
 
+  describe('P2 evaluation transaction and recovery', () => {
+    it('saveEvaluationAndDecision writes evaluation, decision, and submission status atomically', async () => {
+      const guide = await createConfirmedGuide();
+      const taskId = guide.tasks[0].id;
+      await store.startSession(taskId);
+      const mid = await store.getLearningRuntimeSnapshot();
+      const actionId = mid.dailyGuideAction!.id;
+      const session = (await store.listSessions())[0];
+      const submission = await store.createSubmission(actionId, session.id, '提交内容测试。');
+
+      const result = await store.saveEvaluationAndDecision({
+        submission,
+        evaluationOutput: {
+          result: 'passed', mastery: 85, evidence: ['完成'],
+          correctParts: ['能跑通'], misconceptions: [], missingRequirements: [],
+          feedback: '通过。', recommendedAction: 'complete_task', decision: 'advance'
+        },
+        decisionOutput: {
+          decision: 'complete_task', reason: '已完成。',
+          taskCompleted: true, nextStep: null, remediation: null, carryForward: ''
+        }
+      });
+
+      // 验证 evaluation 已写入
+      const evalRows = await db.select().from(learningEvaluations).where(eq(learningEvaluations.submissionId, submission.id));
+      expect(evalRows.length).toBe(1);
+      expect(evalRows[0].result).toBe('passed');
+
+      // 验证 decision 已写入
+      const decisionRows = await db.select().from(nextStepDecisions).where(eq(nextStepDecisions.evaluationId, result.evaluation.id));
+      expect(decisionRows.length).toBe(1);
+      expect(decisionRows[0].taskCompleted).toBe(true);
+
+      // 验证 submission 状态已更新
+      const subRows = await db.select().from(learningSubmissions).where(eq(learningSubmissions.id, submission.id));
+      expect(subRows[0].evaluationStatus).toBe('completed');
+      expect(subRows[0].applicationStatus).toBe('applied');
+      expect(subRows[0].appliedAt).not.toBeNull();
+    });
+
+    it('applies the final evaluation through task, focus session, guide and runtime state', async () => {
+      const guide = await createConfirmedGuide();
+      const taskId = guide.tasks[0].id;
+      const session = await store.startSession(taskId);
+      await store.completeCurrentAction();
+      const beforeFinal = await store.getLearningRuntimeSnapshot();
+      const finalActionId = beforeFinal.dailyGuideAction!.id;
+      await db.update(dailyGuideTasks).set({ status: 'skipped' }).where(eq(dailyGuideTasks.id, guide.tasks[1].id));
+      const submission = await store.createSubmission(finalActionId, session.id, '最终成果。');
+
+      await store.saveEvaluationAndDecision({
+        submission,
+        evaluationOutput: {
+          result: 'passed', mastery: 90, evidence: ['完成'], correctParts: ['符合标准'],
+          misconceptions: [], missingRequirements: [], feedback: '通过。', recommendedAction: 'complete_task', decision: 'advance'
+        },
+        decisionOutput: {
+          decision: 'complete_task', reason: '完成主任务。', taskCompleted: true,
+          nextStep: null, remediation: null, carryForward: ''
+        }
+      });
+
+      expect((await store.getSubmissionById(submission.id))?.applicationStatus).toBe('applied');
+      expect((await store.listSessions()).find((item) => item.id === session.id)?.status).toBe('completed');
+      expect((await store.getDailyGuideById(guide.id))?.sessionStatus).toBe('closed');
+      const runtime = await store.getLearningRuntimeSnapshot();
+      expect(runtime.state.sessionStatus).toBe('completed');
+      expect(runtime.state.activeDailyTaskId).toBeNull();
+    });
+
+    it('recoverPendingEvaluationProgress recovers evaluation-saved-but-task-not-done scenario', async () => {
+      const guide = await createConfirmedGuide();
+      const taskId = guide.tasks[0].id;
+      await store.startSession(taskId);
+      const mid = await store.getLearningRuntimeSnapshot();
+      const actionId = mid.dailyGuideAction!.id;
+      const session = (await store.listSessions())[0];
+      const submission = await store.createSubmission(actionId, session.id, '最后一步提交内容。');
+
+      // 手动模拟事务提交后的状态：evaluation + decision 已写入，但 task 未推进
+      const evaluationId = 'test-eval-passed';
+      await db.insert(learningEvaluations).values({
+        id: evaluationId, submissionId: submission.id, stepId: null,
+        dailyGuideActionId: actionId, result: 'passed', mastery: 90,
+        evidenceJson: '["完成"]', correctPartsJson: '["能跑通"]',
+        misconceptionsJson: '[]', missingRequirementsJson: '[]',
+        feedback: '通过。', recommendedAction: 'complete_task',
+        decision: 'advance', aiReviewId: null, createdAt: '2026-07-11T00:00:00.000Z'
+      });
+      await db.insert(nextStepDecisions).values({
+        id: 'test-decision-passed', evaluationId, stepId: null,
+        decision: 'complete_task', reason: '已完成。', taskCompleted: true,
+        nextStepJson: null, remediationJson: null, carryForward: null,
+        aiReviewId: null, createdAt: '2026-07-11T00:00:00.000Z'
+      });
+      await db.update(learningSubmissions).set({ evaluationStatus: 'completed' }).where(eq(learningSubmissions.id, submission.id));
+
+      // 恢复前：action 仍为 planned（崩溃在事务后、推进前）
+      const actionBefore = await db.select().from(dailyGuideActions).where(eq(dailyGuideActions.id, actionId)).limit(1);
+      expect(actionBefore[0].status).toBe('planned');
+
+      const recovery = await store.recoverPendingEvaluationProgress();
+      expect(recovery.recovered).toBe(1);
+
+      // 恢复后：action 已标记 done
+      const actionAfter = await db.select().from(dailyGuideActions).where(eq(dailyGuideActions.id, actionId)).limit(1);
+      expect(actionAfter[0].status).toBe('done');
+
+      // 同 task 内推进到下一个 action（第二个 action）
+      // 注意：task 的 DB status 保持 planned，仅 currentActionId 前进
+      const taskAfter = await db.select().from(dailyGuideTasks).where(eq(dailyGuideTasks.id, taskId)).limit(1);
+      expect(taskAfter[0].currentActionId).toBe(guide.tasks[0].actions[1].id);
+
+      // runtime 推进到同 task 的下一个 action
+      const runtimeAfter = await store.getLearningRuntimeSnapshot();
+      expect(runtimeAfter.dailyGuideAction?.id).toBe(guide.tasks[0].actions[1].id);
+    });
+
+    it('recoverPendingEvaluationProgress is idempotent — multiple calls produce same result', async () => {
+      const guide = await createConfirmedGuide();
+      const taskId = guide.tasks[0].id;
+      await store.startSession(taskId);
+      const mid = await store.getLearningRuntimeSnapshot();
+      const actionId = mid.dailyGuideAction!.id;
+      const session = (await store.listSessions())[0];
+      const submission = await store.createSubmission(actionId, session.id, '最后一步提交内容。');
+
+      const evaluationId = 'test-eval-idempotent';
+      await db.insert(learningEvaluations).values({
+        id: evaluationId, submissionId: submission.id, stepId: null,
+        dailyGuideActionId: actionId, result: 'passed', mastery: 90,
+        evidenceJson: '["完成"]', correctPartsJson: '["能跑通"]',
+        misconceptionsJson: '[]', missingRequirementsJson: '[]',
+        feedback: '通过。', recommendedAction: 'complete_task',
+        decision: 'advance', aiReviewId: null, createdAt: '2026-07-11T00:00:00.000Z'
+      });
+      await db.insert(nextStepDecisions).values({
+        id: 'test-decision-idempotent', evaluationId, stepId: null,
+        decision: 'complete_task', reason: '已完成。', taskCompleted: true,
+        nextStepJson: null, remediationJson: null, carryForward: null,
+        aiReviewId: null, createdAt: '2026-07-11T00:00:00.000Z'
+      });
+      await db.update(learningSubmissions).set({ evaluationStatus: 'completed' }).where(eq(learningSubmissions.id, submission.id));
+
+      const first = await store.recoverPendingEvaluationProgress();
+      expect(first.recovered).toBe(1);
+
+      const second = await store.recoverPendingEvaluationProgress();
+      expect(second.recovered).toBe(0);
+
+      const third = await store.recoverPendingEvaluationProgress();
+      expect(third.recovered).toBe(0);
+    });
+
+    it('recoverPendingEvaluationProgress applies not-passed records without advancing the action', async () => {
+      const guide = await createConfirmedGuide();
+      const taskId = guide.tasks[0].id;
+      await store.startSession(taskId);
+      const mid = await store.getLearningRuntimeSnapshot();
+      const actionId = mid.dailyGuideAction!.id;
+      const session = (await store.listSessions())[0];
+      const submission = await store.createSubmission(actionId, session.id, '未通过提交。');
+
+      const evaluationId = 'test-eval-failed';
+      await db.insert(learningEvaluations).values({
+        id: evaluationId, submissionId: submission.id, stepId: null,
+        dailyGuideActionId: actionId, result: 'failed', mastery: 30,
+        evidenceJson: '["不足"]', correctPartsJson: '[]',
+        misconceptionsJson: '["概念混淆"]', missingRequirementsJson: '["缺少步骤"]',
+        feedback: '未通过。', recommendedAction: 'remediate',
+        decision: 'stay', aiReviewId: null, createdAt: '2026-07-11T00:00:00.000Z'
+      });
+      await db.insert(nextStepDecisions).values({
+        id: 'test-decision-failed', evaluationId, stepId: null,
+        decision: 'remediate', reason: '需要补救。', taskCompleted: false,
+        nextStepJson: null, remediationJson: null, carryForward: null,
+        aiReviewId: null, createdAt: '2026-07-11T00:00:00.000Z'
+      });
+      await db.update(learningSubmissions).set({ evaluationStatus: 'completed' }).where(eq(learningSubmissions.id, submission.id));
+
+      const recovery = await store.recoverPendingEvaluationProgress();
+      expect(recovery.recovered).toBe(1);
+
+      // action 应保持 planned（不是 done）
+      const actionAfter = await db.select().from(dailyGuideActions).where(eq(dailyGuideActions.id, actionId)).limit(1);
+      expect(actionAfter[0].status).toBe('planned');
+      const submissionAfter = await db.select().from(learningSubmissions).where(eq(learningSubmissions.id, submission.id)).limit(1);
+      expect(submissionAfter[0].applicationStatus).toBe('applied');
+    });
+  });
+
   it('applyReviewPlanAdjustments skips locked days', async () => {
     const goal = await store.createGoal('test', 'test');
     const result = await store.saveLayeredPlan({
@@ -870,6 +1026,366 @@ describe('Runtime convergence', () => {
       adjustments: [{ dayIndex: 1, title: '新标题', focus: '新重点', expectedOutput: '新产出', successCriteria: '新标准', reason: '原因' }]
     });
     expect(updated.length).toBe(0);
+  });
+});
+
+describe('Plan Proposal', () => {
+  it('createProposal writes a pending proposal', async () => {
+    const goal = await store.createGoal('test', 'test');
+    const proposal = await store.createProposal(goal.id, {
+      reason: '调整节奏',
+      adjustments: [{ dayIndex: 1, title: '新标题', focus: '新重点', expectedOutput: '新产出', successCriteria: '新标准' }]
+    });
+    expect(proposal.status).toBe('pending');
+    expect(proposal.goalId).toBe(goal.id);
+    expect(proposal.reason).toBe('调整节奏');
+  });
+
+  it('confirmProposal applies changes and writes plan version', async () => {
+    const goal = await store.createGoal('test', 'test');
+    const result = await store.saveLayeredPlan({
+      goal,
+      brief: null,
+      date: '2026-07-05',
+      windows: [{ start: '10:00', end: '12:00' }],
+      roadmap: { goalSummary: 'test', stages: [{ title: 'S1', objective: 'O1', direction: 'D1', successCriteria: 'SC1' }] },
+      shortPlan: { weekFocus: 'test', days: [{ dayIndex: 1, title: 'T1', focus: 'F1', tasks: ['task1'], expectedOutput: 'EO1', successCriteria: 'SC1' }] },
+      dailyGuide: { date: '2026-07-05', todayGoal: 'test', deliverables: [], boundaries: [], acceptanceCriteria: [], tomorrowActions: [], tasks: [{ title: 'Task1', objective: 'Obj1', scope: 'Scope1', estimatedMinutes: { min: 30, target: 45, max: 60 }, actions: [{ title: 'A1', instruction: 'Do A1', checkpoint: 'Done' }], deliverable: 'Del1', doneWhen: ['Done'], quickHint: 'Hint', evaluationMode: 'local', submissionPolicy: 'once_after_task', carryoverAllowed: true }] }
+    });
+
+    const proposal = await store.createProposal(goal.id, {
+      reason: '调整节奏',
+      adjustments: [{ dayIndex: 1, title: '更新标题', focus: '更新重点', expectedOutput: '更新产出', successCriteria: '更新标准' }]
+    });
+
+    const decided = await store.confirmProposal(proposal.id);
+    expect(decided.status).toBe('accepted');
+    expect(decided.appliedAt).not.toBeNull();
+
+    const versions = await store.getPlanVersionsForGoal(goal.id);
+    const latestVersion = versions[0];
+    expect(latestVersion).toBeTruthy();
+    expect(latestVersion!.changeSummary).toContain('调整节奏');
+    expect(latestVersion!.snapshot?.shortPlan?.[0]?.title).toBe('更新标题');
+  });
+
+  it('confirmProposal is idempotent — repeated call does not create duplicate version', async () => {
+    const goal = await store.createGoal('test', 'test');
+    await store.saveLayeredPlan({
+      goal,
+      brief: null,
+      date: '2026-07-05',
+      windows: [{ start: '10:00', end: '12:00' }],
+      roadmap: { goalSummary: 'test', stages: [{ title: 'S1', objective: 'O1', direction: 'D1', successCriteria: 'SC1' }] },
+      shortPlan: { weekFocus: 'test', days: [{ dayIndex: 1, title: 'T1', focus: 'F1', tasks: ['task1'], expectedOutput: 'EO1', successCriteria: 'SC1' }] },
+      dailyGuide: { date: '2026-07-05', todayGoal: 'test', deliverables: [], boundaries: [], acceptanceCriteria: [], tomorrowActions: [], tasks: [{ title: 'Task1', objective: 'Obj1', scope: 'Scope1', estimatedMinutes: { min: 30, target: 45, max: 60 }, actions: [{ title: 'A1', instruction: 'Do A1', checkpoint: 'Done' }], deliverable: 'Del1', doneWhen: ['Done'], quickHint: 'Hint', evaluationMode: 'local', submissionPolicy: 'once_after_task', carryoverAllowed: true }] }
+    });
+
+    const proposal = await store.createProposal(goal.id, {
+      reason: '调整',
+      adjustments: [{ dayIndex: 1, title: '新', focus: 'F', expectedOutput: 'EO', successCriteria: 'SC' }]
+    });
+
+    const first = await store.confirmProposal(proposal.id);
+    const second = await store.confirmProposal(proposal.id);
+    expect(first.status).toBe('accepted');
+    expect(second.status).toBe('accepted');
+
+    const versions = await store.getPlanVersionsForGoal(goal.id);
+    const matchingVersions = versions.filter((v) => v.changeSummary.includes('调整'));
+    expect(matchingVersions.length).toBe(1);
+  });
+
+  it('rejectProposal does not modify any plan', async () => {
+    const goal = await store.createGoal('test', 'test');
+    await store.saveLayeredPlan({
+      goal,
+      brief: null,
+      date: '2026-07-05',
+      windows: [{ start: '10:00', end: '12:00' }],
+      roadmap: { goalSummary: 'test', stages: [{ title: 'S1', objective: 'O1', direction: 'D1', successCriteria: 'SC1' }] },
+      shortPlan: { weekFocus: 'test', days: [{ dayIndex: 1, title: '原始标题', focus: '原始重点', tasks: ['task1'], expectedOutput: 'EO1', successCriteria: 'SC1' }] },
+      dailyGuide: { date: '2026-07-05', todayGoal: 'test', deliverables: [], boundaries: [], acceptanceCriteria: [], tomorrowActions: [], tasks: [{ title: 'Task1', objective: 'Obj1', scope: 'Scope1', estimatedMinutes: { min: 30, target: 45, max: 60 }, actions: [{ title: 'A1', instruction: 'Do A1', checkpoint: 'Done' }], deliverable: 'Del1', doneWhen: ['Done'], quickHint: 'Hint', evaluationMode: 'local', submissionPolicy: 'once_after_task', carryoverAllowed: true }] }
+    });
+
+    const proposal = await store.createProposal(goal.id, {
+      reason: '建议调整',
+      adjustments: [{ dayIndex: 1, title: '改动', focus: '改', expectedOutput: '改', successCriteria: '改' }]
+    });
+
+    const decided = await store.rejectProposal(proposal.id);
+    expect(decided.status).toBe('rejected');
+    expect(decided.decidedAt).not.toBeNull();
+
+    const db = (store as any).db as Database;
+    const dayRows = await db.select().from(shortPlanDays).where(eq(shortPlanDays.goalId, goal.id));
+    expect(dayRows[0].title).toBe('原始标题');
+  });
+
+  it('confirmProposal skips locked days', async () => {
+    const goal = await store.createGoal('test', 'test');
+    const result = await store.saveLayeredPlan({
+      goal,
+      brief: null,
+      date: '2026-07-05',
+      windows: [{ start: '10:00', end: '12:00' }],
+      roadmap: { goalSummary: 'test', stages: [{ title: 'S1', objective: 'O1', direction: 'D1', successCriteria: 'SC1' }] },
+      shortPlan: { weekFocus: 'test', days: [{ dayIndex: 1, title: 'T1', focus: 'F1', tasks: ['task1'], expectedOutput: 'EO1', successCriteria: 'SC1' }] },
+      dailyGuide: { date: '2026-07-05', todayGoal: 'test', deliverables: [], boundaries: [], acceptanceCriteria: [], tomorrowActions: [], tasks: [{ title: 'Task1', objective: 'Obj1', scope: 'Scope1', estimatedMinutes: { min: 30, target: 45, max: 60 }, actions: [{ title: 'A1', instruction: 'Do A1', checkpoint: 'Done' }], deliverable: 'Del1', doneWhen: ['Done'], quickHint: 'Hint', evaluationMode: 'local', submissionPolicy: 'once_after_task', carryoverAllowed: true }] }
+    });
+
+    const dayId = result.shortPlan[0].id;
+    await store.db.update(shortPlanDays).set({ locked: true }).where(eq(shortPlanDays.id, dayId));
+
+    const proposal = await store.createProposal(goal.id, {
+      reason: '调整',
+      adjustments: [{ dayIndex: 1, title: '新标题', focus: 'F', expectedOutput: 'EO', successCriteria: 'SC' }]
+    });
+
+    const decided = await store.confirmProposal(proposal.id);
+    expect(decided.status).toBe('accepted');
+    expect(decided.appliedAt).toBeNull();
+  });
+});
+
+describe('LearnerFact store methods', () => {
+  it('proposeFact creates a new fact and upserts on same key+scope', async () => {
+    const goal = await store.createGoal('测试目标');
+    const fact1 = await store.proposeFact(goal.id, { scope: 'goal', key: 'os', value: 'Windows', source: 'user_stated' });
+    expect(fact1.id).toBeTruthy();
+    expect(fact1.value).toBe('Windows');
+    expect(fact1.confidence).toBe(0.8);
+
+    const fact2 = await store.proposeFact(goal.id, { scope: 'goal', key: 'os', value: 'macOS', source: 'inferred', confidence: 0.9 });
+    expect(fact2.id).toBe(fact1.id);
+    expect(fact2.value).toBe('macOS');
+    expect(fact2.source).toBe('inferred');
+    expect(fact2.confidence).toBe(0.9);
+  });
+
+  it('getFact returns the correct fact by key and scope', async () => {
+    const goal = await store.createGoal('测试目标2');
+    await store.proposeFact(goal.id, { scope: 'global', key: 'language', value: 'zh-CN', source: 'user_stated' });
+
+    const found = await store.getFact(goal.id, 'language', 'global');
+    expect(found).not.toBeNull();
+    expect(found?.value).toBe('zh-CN');
+
+    const notFound = await store.getFact(goal.id, 'language', 'goal');
+    expect(notFound).toBeNull();
+  });
+
+  it('listFactsForGoal filters by scope and returns sorted results', async () => {
+    const goal = await store.createGoal('测试目标3');
+    const guide = await createConfirmedGuide();
+    await store.proposeFact(goal.id, { scope: 'goal', key: 'editor', value: 'VS Code', source: 'user_stated' });
+    await store.proposeFact(goal.id, { scope: 'global', key: 'theme', value: 'dark', source: 'inferred' });
+    await store.proposeFact(goal.id, { scope: 'task', taskId: guide.tasks[0].id, key: 'current_task', value: 'React', source: 'user_stated' });
+
+    const allFacts = await store.listFactsForGoal(goal.id);
+    expect(allFacts.length).toBe(3);
+
+    const globalFacts = await store.listFactsForGoal(goal.id, 'global');
+    expect(globalFacts.length).toBe(1);
+    expect(globalFacts[0].key).toBe('theme');
+
+    const goalFacts = await store.listFactsForGoal(goal.id, 'goal');
+    expect(goalFacts.length).toBe(1);
+    expect(goalFacts[0].key).toBe('editor');
+  });
+
+  it('deleteFact removes the fact', async () => {
+    const goal = await store.createGoal('测试目标4');
+    await store.proposeFact(goal.id, { scope: 'goal', key: 'toDelete', value: 'yes', source: 'inferred' });
+
+    let facts = await store.listFactsForGoal(goal.id);
+    expect(facts.length).toBe(1);
+
+    await store.deleteFact(goal.id, 'toDelete', 'goal');
+
+    facts = await store.listFactsForGoal(goal.id);
+    expect(facts.length).toBe(0);
+  });
+
+  it('task-scoped facts do not affect global facts', async () => {
+    const goal = await store.createGoal('测试目标5');
+    const guide = await createConfirmedGuide();
+    await store.proposeFact(goal.id, { scope: 'global', key: 'env', value: 'production', source: 'user_stated' });
+    await store.proposeFact(goal.id, { scope: 'task', taskId: guide.tasks[0].id, key: 'env', value: 'debug', source: 'inferred' });
+
+    const globalFacts = await store.listFactsForGoal(goal.id, 'global');
+    const taskFacts = await store.listFactsForGoal(goal.id, 'task');
+
+    expect(globalFacts.length).toBe(1);
+    expect(globalFacts[0].value).toBe('production');
+    expect(taskFacts.length).toBe(1);
+    expect(taskFacts[0].value).toBe('debug');
+  });
+
+  it('createTaskFromBranch creates a task from branch summary', async () => {
+    const guide = await createConfirmedGuide();
+    const taskId = guide.tasks[0].id;
+
+    const newTaskId = await store.createTaskFromBranch('需要额外练习异步编程', {
+      goalId: 'test-goal-id',
+      taskId
+    });
+
+    expect(newTaskId).toBeTruthy();
+    const runtime = await store.getLearningRuntimeSnapshot();
+    expect(runtime).not.toBeNull();
+  });
+
+  it('extractKnowledgeFromBranch writes knowledge items', async () => {
+    const goal = await store.createGoal('知识提取测试');
+    await store.extractKnowledgeFromBranch('这是一个重要的调试经验', 'branch-source-123', goal.id);
+
+    const items = await store.getKnowledgeItemsForGoal({ goalId: goal.id });
+    expect(items.length).toBeGreaterThanOrEqual(1);
+    expect(items[0].sourceType).toBe('insight');
+  });
+
+  it('updateQuestionThreadKind updates the kind field', async () => {
+    const guide = await createConfirmedGuide();
+    const actionId = guide.tasks[0].actions[0].id;
+    const thread = await store.openQuestion(actionId, '测试问题');
+
+    await store.updateQuestionThreadKind(thread.id, 'debug');
+
+    const updated = await store.getQuestionThread(thread.id);
+    expect(updated).not.toBeNull();
+  });
+
+  it('getPendingEvaluationIdsForGoal returns waiting submission ids for active guide', async () => {
+    const guide = await createConfirmedGuide();
+    const taskId = guide.tasks[0].id;
+    await store.startSession(taskId);
+    const mid = await store.getLearningRuntimeSnapshot();
+    const actionId = mid.dailyGuideAction!.id;
+    const session = (await store.listSessions())[0];
+    const submission = await store.createSubmission(actionId, session.id, '待评价的提交内容。');
+
+    const pending = await store.getPendingEvaluationIdsForGoal(guide.goalId);
+    expect(pending).toContain(submission.id);
+
+    // 评价完成后不再 pending
+    await store.markSubmissionEvaluation(submission.id, 'completed');
+    const pendingAfter = await store.getPendingEvaluationIdsForGoal(guide.goalId);
+    expect(pendingAfter).not.toContain(submission.id);
+  });
+
+  it('marks an exhausted stage ready for review and advances only after user confirmation', async () => {
+    const goal = await store.createGoal('test', 'test');
+    await store.db.insert(roadmapStages).values([
+      { id: 's1', goalId: goal.id, title: 'S1', objective: 'O1', direction: 'D1', successCriteria: 'SC1', position: 0, status: 'active', createdAt: 'now', updatedAt: 'now' },
+      { id: 's2', goalId: goal.id, title: 'S2', objective: 'O2', direction: 'D2', successCriteria: 'SC2', position: 1, status: 'pending', createdAt: 'now', updatedAt: 'now' }
+    ]);
+
+    const spDay: typeof shortPlanDays.$inferInsert = {
+      id: 'day1', goalId: goal.id, roadmapStageId: 's1', dayIndex: 1, date: '2026-07-11',
+      sessionStatus: 'completed', title: 'T1', focus: 'F1', tasksJson: '[]',
+      expectedOutput: 'EO1', successCriteria: 'SC1', locked: true, createdAt: 'now'
+    };
+    await store.db.insert(shortPlanDays).values(spDay);
+
+    const planId = 'plan-1';
+    await store.db.insert(dailyPlans).values({
+      id: planId, date: '2026-07-11', status: 'completed',
+      availableWindowsJson: '[]', shortPlanDayId: 'day1', createdAt: 'now'
+    });
+    await store.db.insert(dailyGuides).values({
+      id: 'guide1', goalId: goal.id, planId, shortPlanDayId: 'day1', date: '2026-07-11',
+      status: 'completed', sessionStatus: 'closed', todayGoal: 'TG',
+      deliverablesJson: '[]', boundariesJson: '[]', acceptanceCriteriaJson: '[]',
+      tomorrowActionsJson: '[]', createdAt: 'now'
+    });
+
+    await store.markRoadmapStageReadyForReview(goal.id);
+
+    const beforeConfirmation = await store.db.select().from(roadmapStages).where(eq(roadmapStages.goalId, goal.id)).orderBy(asc(roadmapStages.position));
+    expect(beforeConfirmation[0].status).toBe('ready_for_review');
+    expect(beforeConfirmation[1].status).toBe('pending');
+    expect(await store.findActiveOrActivateStage(goal.id)).toBe('stage_review_required');
+
+    await store.confirmRoadmapStageCompletion(goal.id, 's1');
+    const afterConfirmation = await store.db.select().from(roadmapStages).where(eq(roadmapStages.goalId, goal.id)).orderBy(asc(roadmapStages.position));
+    expect(afterConfirmation[0].status).toBe('completed');
+    expect(afterConfirmation[1].status).toBe('active');
+
+    await expect(store.confirmRoadmapStageCompletion(goal.id, 's1')).resolves.toBeDefined();
+  });
+
+  it('getDaySnapshot includes questionTopics linked by dailyGuideActionId', async () => {
+    const guide = await createConfirmedGuide();
+    const actionId = guide.tasks[0].actions[0].id;
+    await store.openQuestion(actionId, '如何理解闭包？');
+
+    const snapshot = await store.getDaySnapshot('2026-07-05');
+    const taskSnapshot = snapshot.guideTasks.find((t) => t.id === guide.tasks[0].id);
+    expect(taskSnapshot).toBeTruthy();
+    expect(taskSnapshot!.questionTopics).toContain('如何理解闭包？');
+  });
+});
+
+describe('getTokenCostStats', () => {
+  it('aggregates token usage by operation and date', async () => {
+    const db = (store as any).db as Database;
+    const now = new Date().toISOString();
+
+    await db.insert(aiReviews).values([
+      { id: 'rev-1', kind: 'goal_intake', date: '2026-07-10', provider: 'deepseek', model: 'deepseek-chat', inputSnapshotJson: '{}', outputJson: '{}', outputSchemaVersion: 'v1', status: 'success', inputTokens: 100, outputTokens: 200, createdAt: now },
+      { id: 'rev-2', kind: 'goal_intake', date: '2026-07-10', provider: 'deepseek', model: 'deepseek-chat', inputSnapshotJson: '{}', outputJson: '{}', outputSchemaVersion: 'v1', status: 'success', inputTokens: 150, outputTokens: 250, createdAt: now },
+      { id: 'rev-3', kind: 'daily_guide', date: '2026-07-11', provider: 'deepseek', model: 'deepseek-chat', inputSnapshotJson: '{}', outputJson: '{}', outputSchemaVersion: 'v1', status: 'success', inputTokens: 300, outputTokens: 500, createdAt: now }
+    ]);
+
+    const stats = await store.getTokenCostStats({});
+
+    expect(stats.totalInputTokens).toBe(550);
+    expect(stats.totalOutputTokens).toBe(950);
+    expect(stats.totalCalls).toBe(3);
+    expect(stats.byOperation['goal_intake']).toEqual({ inputTokens: 250, outputTokens: 450, calls: 2 });
+    expect(stats.byOperation['daily_guide']).toEqual({ inputTokens: 300, outputTokens: 500, calls: 1 });
+    expect(stats.byDate['2026-07-10']).toEqual({ inputTokens: 250, outputTokens: 450, calls: 2 });
+    expect(stats.byDate['2026-07-11']).toEqual({ inputTokens: 300, outputTokens: 500, calls: 1 });
+  });
+
+  it('filters by date range', async () => {
+    const db = (store as any).db as Database;
+    const now = new Date().toISOString();
+
+    await db.insert(aiReviews).values([
+      { id: 'rev-4', kind: 'teach_step', date: '2026-07-09', provider: 'deepseek', model: 'deepseek-chat', inputSnapshotJson: '{}', outputJson: '{}', outputSchemaVersion: 'v1', status: 'success', inputTokens: 80, outputTokens: 120, createdAt: now },
+      { id: 'rev-5', kind: 'teach_step', date: '2026-07-12', provider: 'deepseek', model: 'deepseek-chat', inputSnapshotJson: '{}', outputJson: '{}', outputSchemaVersion: 'v1', status: 'success', inputTokens: 90, outputTokens: 130, createdAt: now }
+    ]);
+
+    const stats = await store.getTokenCostStats({ fromDate: '2026-07-10', toDate: '2026-07-12' });
+    expect(stats.totalInputTokens).toBe(90);
+    expect(stats.totalOutputTokens).toBe(130);
+    expect(stats.totalCalls).toBe(1);
+    expect(stats.byDate['2026-07-09']).toBeUndefined();
+    expect(stats.byDate['2026-07-12']).toBeDefined();
+  });
+});
+
+describe('learning summary lifecycle', () => {
+  it('persists pending, ready and failed states without copying raw history on failure', async () => {
+    const pending = await store.beginLearningSummary('day', '2026-07-12');
+    const duplicateBegin = await store.beginLearningSummary('day', '2026-07-12');
+    expect(duplicateBegin.id).toBe(pending.id);
+    expect(pending.status).toBe('pending');
+
+    const ready = await store.completeLearningSummary(pending.id, { summary: '今天完成了 API 调用' });
+    expect(ready.status).toBe('ready');
+    expect(ready.summary).toEqual({ summary: '今天完成了 API 调用' });
+
+    const retry = await store.beginLearningSummary('day', '2026-07-12');
+    expect(retry.id).not.toBe(pending.id);
+    const failed = await store.failLearningSummary(retry.id, 'schema_violation');
+    expect(failed.status).toBe('failed');
+    expect(failed.summary).toEqual({ errorCategory: 'schema_violation' });
+    expect(JSON.stringify(failed.summary)).not.toContain('今天完成了 API 调用');
+
+    expect((await store.getLatestLearningSummary('day', '2026-07-12'))?.id).toBe(retry.id);
   });
 });
 
