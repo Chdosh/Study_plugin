@@ -34,7 +34,7 @@ export interface AgentRunExtras {
 export class ReflectionAgent {
   constructor(private readonly ai: AiClient) {}
 
-  run(params: { date: string; snapshot: unknown; profile: PromptProfile; settings: AgentRuntimeSettings } & AgentRunExtras) {
+  run(params: { date: string; snapshot: unknown; context?: unknown; profile: PromptProfile; settings: AgentRuntimeSettings } & AgentRunExtras) {
     return this.ai.generateJson({
       apiKey: params.settings.deepseekApiKey,
       baseUrl: params.settings.deepseekBaseUrl,
@@ -44,6 +44,7 @@ export class ReflectionAgent {
       user: buildReviewPrompt({
         date: params.date,
         snapshot: params.snapshot,
+        context: params.context,
         profile: params.profile
       }),
       traceId: params.traceId,
@@ -55,7 +56,7 @@ export class ReflectionAgent {
 export class GoalIntakeAgent {
   constructor(private readonly ai: AiClient) {}
 
-  run(params: { messages: GoalIntakeMessage[]; profile: PromptProfile; settings: AgentRuntimeSettings } & AgentRunExtras) {
+  run(params: { messages: GoalIntakeMessage[]; context?: unknown; profile: PromptProfile; settings: AgentRuntimeSettings } & AgentRunExtras) {
     return this.ai.generateJson({
       apiKey: params.settings.deepseekApiKey,
       baseUrl: params.settings.deepseekBaseUrl,
@@ -64,6 +65,7 @@ export class GoalIntakeAgent {
       system: '你是本地优先 AI 学习管家的 goal-intake-agent。只返回合法 JSON。',
       user: buildGoalIntakePrompt({
         messages: params.messages,
+        context: params.context,
         profile: params.profile
       }),
       traceId: params.traceId,
@@ -75,7 +77,7 @@ export class GoalIntakeAgent {
 export class RoadmapAgent {
   constructor(private readonly ai: AiClient) {}
 
-  run(params: { goal: LearningGoal; brief: GoalBrief | null; profile: PromptProfile; settings: AgentRuntimeSettings } & AgentRunExtras) {
+  run(params: { goal: LearningGoal; brief: GoalBrief | null; context?: unknown; profile: PromptProfile; settings: AgentRuntimeSettings } & AgentRunExtras) {
     return this.ai.generateJson({
       apiKey: params.settings.deepseekApiKey,
       baseUrl: params.settings.deepseekBaseUrl,
@@ -85,6 +87,7 @@ export class RoadmapAgent {
       user: buildRoadmapPrompt({
         goal: params.goal,
         brief: params.brief,
+        context: params.context,
         profile: params.profile
       }),
       traceId: params.traceId,
@@ -100,6 +103,7 @@ export class ShortPlanAgent {
     goal: LearningGoal;
     brief: GoalBrief | null;
     roadmap: RoadmapStage[];
+    context?: unknown;
     profile: PromptProfile;
     settings: AgentRuntimeSettings;
   } & AgentRunExtras) {
@@ -113,6 +117,7 @@ export class ShortPlanAgent {
         goal: params.goal,
         brief: params.brief,
         roadmap: params.roadmap,
+        context: params.context,
         profile: params.profile
       }),
       traceId: params.traceId,
@@ -130,6 +135,7 @@ export class ShortPlanAgent {
     settings: AgentRuntimeSettings;
     knowledgeItems?: KnowledgeItem[];
     reviewKnowledgeItems?: KnowledgeItem[];
+    context?: unknown;
   } & AgentRunExtras) {
     return this.ai.generateJson({
       apiKey: params.settings.deepseekApiKey,
@@ -145,7 +151,8 @@ export class ShortPlanAgent {
         reviewSummary: params.reviewSummary,
         profile: params.profile,
         knowledgeItems: params.knowledgeItems,
-        reviewKnowledgeItems: params.reviewKnowledgeItems
+        reviewKnowledgeItems: params.reviewKnowledgeItems,
+        context: params.context
       }),
       traceId: params.traceId,
       onMetrics: params.onMetrics
@@ -172,6 +179,7 @@ export class DailyGuideAgent {
     settings: AgentRuntimeSettings;
     knowledgeItems?: KnowledgeItem[];
     reviewKnowledgeItems?: KnowledgeItem[];
+    context?: unknown;
   } & AgentRunExtras) {
     return this.ai.generateJson({
       apiKey: params.settings.deepseekApiKey,
@@ -191,7 +199,8 @@ export class DailyGuideAgent {
         previousDayResult: params.previousDayResult,
         profile: params.profile,
         knowledgeItems: params.knowledgeItems,
-        reviewKnowledgeItems: params.reviewKnowledgeItems
+        reviewKnowledgeItems: params.reviewKnowledgeItems,
+        context: params.context
       }),
       traceId: params.traceId,
       onMetrics: params.onMetrics

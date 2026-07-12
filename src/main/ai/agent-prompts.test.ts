@@ -90,4 +90,22 @@ describe('agent-prompts', () => {
     });
     expect(prompt).not.toContain('5-10 分钟复习');
   });
+
+  it('buildDailyGuidePrompt carries confirmed bounded learner context into planning', () => {
+    const prompt = buildDailyGuidePrompt({
+      date: '2026-07-12',
+      windows: [{ start: '20:00', end: '21:00' }],
+      blockMinutes: 30,
+      goal: { title: '学习 AI API' },
+      brief: null,
+      roadmap: [],
+      targetDay: { id: 'sp2', goalId: 'g1', roadmapStageId: null, dayIndex: 2, date: null, sessionStatus: 'pending', title: '调用模型', focus: 'API', tasks: ['完成调用'], expectedOutput: '运行结果', successCriteria: '调用成功', locked: false, createdAt: '' },
+      profile: makeProfile(),
+      context: { learnerFacts: [{ key: 'os', value: 'Windows', scope: 'goal' }, { key: 'provider', value: 'DeepSeek', scope: 'goal' }] }
+    });
+
+    expect(prompt).toContain('有界学习上下文');
+    expect(prompt).toContain('Windows');
+    expect(prompt).toContain('DeepSeek');
+  });
 });
