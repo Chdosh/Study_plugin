@@ -3,6 +3,7 @@ import type { GoalBrief, GoalIntakeMessage, KnowledgeItem, PromptProfile, Roadma
 export function buildReviewPrompt(params: {
   date: string;
   snapshot: unknown;
+  context?: unknown;
   profile: PromptProfile;
 }): string {
   return [
@@ -18,12 +19,14 @@ export function buildReviewPrompt(params: {
     '如果今天一切正常，planAdjustments 可以为空数组。',
     '所有自然语言内容使用中文。',
     '',
-    `Snapshot: ${JSON.stringify(params.snapshot)}`
+    `Snapshot: ${JSON.stringify(params.snapshot)}`,
+    `有界学习上下文：${JSON.stringify(params.context ?? {})}`
   ].join('\n');
 }
 
 export function buildGoalIntakePrompt(params: {
   messages: GoalIntakeMessage[];
+  context?: unknown;
   profile: PromptProfile;
 }): string {
   return [
@@ -39,13 +42,15 @@ export function buildGoalIntakePrompt(params: {
     'brief 在 ready 时必须包含 title、targetOutcome、currentLevel、availableTime、deadline、constraints、successCriteria。',
     '所有自然语言内容使用中文。',
     '',
-    `历史访谈：${JSON.stringify(params.messages)}`
+    `历史访谈：${JSON.stringify(params.messages)}`,
+    `有界学习上下文：${JSON.stringify(params.context ?? {})}`
   ].join('\n');
 }
 
 export function buildRoadmapPrompt(params: {
   goal: unknown;
   brief: GoalBrief | null;
+  context?: unknown;
   profile: PromptProfile;
 }): string {
   return [
@@ -58,7 +63,8 @@ export function buildRoadmapPrompt(params: {
     '所有自然语言内容使用中文。',
     '',
     `目标：${JSON.stringify(params.goal)}`,
-    `目标理解：${JSON.stringify(params.brief)}`
+    `目标理解：${JSON.stringify(params.brief)}`,
+    `有界学习上下文：${JSON.stringify(params.context ?? {})}`
   ].join('\n');
 }
 
@@ -66,6 +72,7 @@ export function buildShortPlanPrompt(params: {
   goal: unknown;
   brief: GoalBrief | null;
   roadmap: RoadmapStage[];
+  context?: unknown;
   profile: PromptProfile;
 }): string {
   return [
@@ -80,7 +87,8 @@ export function buildShortPlanPrompt(params: {
     '',
     `目标：${JSON.stringify(params.goal)}`,
     `目标理解：${JSON.stringify(params.brief)}`,
-    `长期大纲：${JSON.stringify(params.roadmap)}`
+    `长期大纲：${JSON.stringify(params.roadmap)}`,
+    `有界学习上下文：${JSON.stringify(params.context ?? {})}`
   ].join('\n');
 }
 
@@ -93,6 +101,7 @@ export function buildRollingPlanPrompt(params: {
   profile: PromptProfile;
   knowledgeItems?: KnowledgeItem[];
   reviewKnowledgeItems?: KnowledgeItem[];
+  context?: unknown;
 }): string {
   const reviewCtx = params.reviewSummary
     ? [`最近复盘摘要：${params.reviewSummary}`, ''].join('\n')
@@ -126,7 +135,8 @@ export function buildRollingPlanPrompt(params: {
     `已完成学习摘要：${params.completedSummary}`,
     reviewCtx,
     knowledgeCtx,
-    reviewQueueCtx
+    reviewQueueCtx,
+    `有界学习上下文：${JSON.stringify(params.context ?? {})}`
   ].filter(Boolean).join('\n');
 }
 
@@ -146,6 +156,7 @@ export function buildDailyGuidePrompt(params: {
   profile: PromptProfile;
   knowledgeItems?: KnowledgeItem[];
   reviewKnowledgeItems?: KnowledgeItem[];
+  context?: unknown;
 }): string {
   const totalMinutes = params.windows.reduce((sum, window) => sum + clockWindowMinutes(window), 0);
   const relevantStages = params.roadmap.slice(0, 2);
@@ -211,7 +222,8 @@ export function buildDailyGuidePrompt(params: {
     `可用学习时间段：${JSON.stringify(params.windows)}`,
     `目标：${JSON.stringify(params.goal)}`,
     `目标理解：${JSON.stringify(briefSummary)}`,
-    `相关长期大纲（当前及下一阶段）：${JSON.stringify(relevantStages)}`
+    `相关长期大纲（当前及下一阶段）：${JSON.stringify(relevantStages)}`,
+    `有界学习上下文：${JSON.stringify(params.context ?? {})}`
   ].filter((line) => line !== '').join('\n');
 }
 
