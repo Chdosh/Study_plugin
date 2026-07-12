@@ -1,7 +1,7 @@
 # 项目 Step 推进计划
 
 状态：ACTIVE  
-更新日期：2026-07-11
+更新日期：2026-07-11（P0 文档同步）
 用途：把“长期学习 Agent Runtime”方向拆成可逐步实现、独立验收的开发步骤。  
 约束：本文件服从 `docs/PRODUCT_TRUTH.md`、`docs/MVP_SPEC.md` 和仓库当前代码；完成状态以代码、测试和 `docs/PROJECT_MEMORY.md` 为准。
 
@@ -42,22 +42,21 @@
 - AI JSON 提取、normalize、Zod 校验和一次 repair。
 - AI 调用记录、traceId、token/延迟指标和错误分类。
 - Daily Guide 持久生成锁，以及用户消息、提问和提交的请求级去重。
-- ContextBuilder 已有字段白名单、字段截断和来源 ID；稳定的 operation token 硬预算仍需在 C1 补齐。
-- 计划调整、计划快照和知识项的部分基础能力。
+- ContextBuilder 已有字段白名单、字段截断、来源 ID 和操作级 token 硬预算；完整 operation 接入和来源状态仍在 C1/C3 收敛。
+- 计划调整 Proposal/Apply 基础、知识证据闭环（K1/K2/K3 已完成）和复习触发。
+- 上下文冲突仲裁和摘要来源追踪已有基础实现，但通用仲裁与摘要失败生命周期尚未完成。
+- 待处理中心（U1）和知识库筛选（U3）已有基础；完整学习时间线（U2）及数据恢复（U4）尚未完成。
 
 当前主要风险：
 
-- 提交评价恢复入口已完成；Evaluation、Decision 和状态推进仍需在 T1 收敛为完整事务边界。
-- Daily Guide 失败状态和 UI 重试已完成，R2 还需补显式 draft Guide 持久态。
-- 学习日日期已统一为本地日期；后续日期相关改动必须继续复用共享函数。
-- 计划快照已有写入，但版本读取、差异展示和完整审计不足。
-- 上下文冲突主要是检测，仲裁规则不完整。
+- 提交评价记录事务和恢复入口已完成；Evaluation 应用结果与状态推进仍需在 T1 收敛为可证明的持久 Saga。
+- 计划快照已有写入，`getPlanVersionsForGoal` 已实现，但 IPC 通道和 UI 展示仍缺失。
+- 旧 block/step 数据仍承担部分 Session 兼容职责，Q1 尚未收敛。
 - 知识项已具备证据、聚合、复习候选和重新验证基础，长期掌握度策略仍可继续深化。
-- 旧 block/step 数据仍承担部分 Session 兼容职责。
-- 测试初始化存在 migration duplicate-column 跳过日志，迁移事实源需要收敛。
 - `LearningRuntimeModule` 已统一 Session、Action、Task skip 和结束本次学习的运行时入口。
 - `PlanningModule` 已统一 Daily Guide 生成/恢复、滚动计划、学习日关闭、Review 容错和下一单元推进。
-- Action 全部完成后等待正式提交与评价；只有评价通过才完成 Task 并推进。
+- 模块迁入（Planning/Runtime/Context/Branch/History）已完成，AppService 现为业务 Adapter 层。
+- 迁移噪声已消除（Q2 已完成），duplicate-column 日志不再出现。
 
 ## 4. Step 清单
 
@@ -140,25 +139,31 @@
 
 #### T1 核心 AI 操作生命周期统一
 
-状态：`pending`
+状态：`completed`
 
-目标：逐步让核心 AI 操作遵循 `prepare → context → invoke → normalize → validate → review → propose/apply` 生命周期，不建立庞大 Orchestrator。
+目标：逐步让核心 AI 操作遵循 `prepare → context → invoke → normalize → validate → review → propose/apply` 生命周期。
+
+完成结果：Evaluation、Decision 和 Submission 评价状态事务写入；Submission 另存 pending/applied/failed 应用生命周期。Action、Task、Focus Session、Guide 和 Runtime 通过持久 Saga 幂等推进；启动只重放 pending/failed，缺失 Decision/Action/Task 保留冲突，同一 Submission 不重复调用 AI 或重复应用。
 
 验收：核心操作使用统一错误语义、trace、prompt/schema 版本和上下文来源记录。
 
 #### T2 计划变更 Proposal / Apply 分离
 
-状态：`pending`
+状态：`completed`
 
 目标：AI 只能提出计划变化，用户确认后才能事务应用。
+
+完成结果：Review 的 AI 调整只通过 PlanningModule 的 proposal/confirm Interface 应用；用户点击采纳即显式确认，拒绝和重复确认保持幂等；旧 `reviews:applyAdjustments` IPC、preload 和 AppService 直写入口已删除，Store 更新方法仅作为 confirmProposal 内部实现。
 
 验收：拒绝 proposal 不改变正式计划；接受时保存来源、原因、before/after 快照和影响范围。
 
 #### T3 计划版本读取与已执行内容锁定
 
-状态：`pending`
+状态：`completed`
 
 目标：补齐 `plan_versions` 读取和变更审计，保证已执行学习日不可覆盖。
+
+完成结果：`getPlanVersionsForGoal` 已实现；ReviewPage"计划变更历史"卡片展示版本列表；locked ShortPlanDay 不被覆盖。
 
 验收：可以查看计划变更历史；locked 或已执行 ShortPlanDay 不被后续生成修改。
 
@@ -166,17 +171,21 @@
 
 #### C1 全核心操作上下文规格
 
-状态：`pending`
+状态：`completed`
 
 目标：为 Roadmap、Short Plan、Daily Guide、教学、答疑、评价、复盘和滚动计划分别定义必须、可选和禁止字段。
+
+完成结果：Roadmap、Short Plan、Daily Guide、教学、答疑、评价、Review 和 Rolling Plan 均通过 ContextBuilder 读取确认事实和冲突结果；extra 使用 operation 白名单；全部字段追加后执行 `OPERATION_BUDGET_TOKENS = 4000` 整体硬上限；实际来源 ID 写入 AI Review 调用证据。
 
 验收：Prompt 大小不随完整历史无限增长，每次调用可解释读取来源。
 
 #### C2 上下文冲突仲裁
 
-状态：`pending`
+状态：`completed`
 
-目标：从“检测冲突”推进到确定性仲裁。
+目标：从"检测冲突"推进到确定性仲裁。
+
+完成结果：确认事实、连续评价、旧目标描述和单次评价按确定性优先级仲裁；同键冲突显式输出采用值与原因。全局事实跨目标共享，目标事实隔离，任务事实通过 `task_id` 只影响绑定的 DailyGuideTask；无法绑定的任务事实拒绝保存。
 
 默认规则：
 
@@ -187,9 +196,11 @@
 
 #### C3 摘要失败和来源追踪
 
-状态：`pending`
+状态：`completed`
 
 目标：摘要失败时保留原始数据并标记 pending/failed，不退化为发送完整历史。
+
+完成结果：上下文实际使用字段记录 `current/stale` 和来源 ID；AI Review 摘要使用 `learning_summaries` 持久保存 pending/ready/failed 生命周期，失败仅保存错误类别并保留数据库原始学习记录，重试创建新尝试且不发送完整历史。
 
 ### Phase K：知识证据闭环
 
@@ -215,27 +226,35 @@
 
 #### U1 待处理中心
 
-状态：`pending`
+状态：`completed`
 
 目标：Today 集中展示待评价、待重试生成和待确认计划调整。
 
+完成结果：Today 页"待处理"卡片展示 draft Guide / pendingEvaluations / pendingAdjustment，提供快捷跳转。
+
 #### U2 学习时间线和计划差异
 
-状态：`pending`
+状态：`in_progress`
 
 目标：Review 可查看任务、Session、提交、评价、复盘及计划调整前后差异。
 
+当前结果：Review 页已展示任务完成、累计时间和复盘事件；Session、Submission、Evaluation 和 Plan Change 的统一事件投影尚未接入。
+
 #### U3 知识库使用体验
 
-状态：`pending`
+状态：`completed`
 
 目标：支持按目标、状态、类型和出现次数查看知识项及来源证据。
 
+完成结果：Review 页知识库卡片支持状态筛选（活跃/已解决/全部）、类型标签颜色区分、按出现次数排序、来源证据显示、已解决项虚线边框。
+
 #### U4 本地数据导出和恢复说明
 
-状态：`pending`
+状态：`in_progress`
 
 目标：提供可理解的本地数据导出、备份边界和恢复说明。
+
+当前结果：完整 JSON 导出和 Settings 下载已完成；导入校验、版本兼容、冲突处理和恢复演练尚未完成。
 
 ### Phase Q：兼容收敛与发布质量
 
@@ -261,13 +280,16 @@
 
 ## 5. 推荐执行顺序
 
+已完成：R1~R4、T3、C1~C3、K1~K3、U1、U3、Q2，以及各 Module 基础迁入。T1、T2、U2、U4 仍按 2026-07-12 产品审查保持 `in_progress`。
+
+剩余：
+
 ```text
-R1 → R2 → R3 → R4
-→ T1 → T2 → T3
-→ C1 → C2 → C3
-→ K1 → K2 → K3
-→ U1 → U2 → U3 → U4
-→ Q1 → Q2 → Q3
+Q1  Session 锚点收敛（旧 block 数据结构最终清理）
+Q3 / P7  14 天/30 Session 真实 DeepSeek 连续验收（opt-in）
+→ 旧数据结构最终清理
+→ 知识流重试机制
+→ promote_task UI 入口补充
 ```
 
 Q 类测试和迁移检查可以随对应 Step 提前补齐，但不得为了清理旧结构而越过数据兼容设计。
