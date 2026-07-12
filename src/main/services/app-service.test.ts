@@ -494,28 +494,30 @@ describe('AppService progressive AI flow', () => {
     expect(rolling.guide.shortPlanDayId).not.toBe(layered.shortPlan[1].id);
   });
 
-  it('applyReviewPlanAdjustments updates only pending plan days', async () => {
+  it('applies review adjustments only through an explicit plan proposal confirmation', async () => {
     installDeterministicAi();
     await appService.sendOnboardingMessage('我想学 React。');
     const confirmed = await appService.confirmOnboardingGoal();
     await appService.generateLayeredPlan(confirmed.goal.id);
 
-    const result = await appService.applyReviewPlanAdjustments({
-      goalId: confirmed.goal.id,
+    const proposal = await appService.createPlanProposal(confirmed.goal.id, {
+      reason: '用户确认采纳复盘建议',
       adjustments: [
         {
-          dayIndex: 1,
+          dayIndex: 2,
           title: '调整后的标题',
           focus: '调整后的重点',
           expectedOutput: '调整后的产出',
-          successCriteria: '调整后的标准',
-          reason: '基础不牢需要回炉'
+          successCriteria: '调整后的标准'
         }
       ]
     });
-    expect(result.length).toBeGreaterThan(0);
-    expect(result[0].title).toBe('调整后的标题');
-    expect(result[0].focus).toBe('调整后的重点');
+    expect(proposal.status).toBe('pending');
+    const accepted = await appService.confirmPlanProposal(proposal.id);
+    expect(accepted.status).toBe('accepted');
+    expect(accepted.appliedAt).not.toBeNull();
+    const today = await appService.listTodayGuide();
+    expect(today.shortPlan.find((day) => day.dayIndex === 2)?.title).toBe('调整后的标题');
   });
 
   it('completeLearningDay is triggered when all tasks are done', async () => {
