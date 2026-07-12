@@ -2,7 +2,7 @@ import type { BrowserWindow } from 'electron';
 import { ipcChannels } from '../../shared/ipc';
 import { localDateIso } from '../../shared/date';
 import type { DailyGuideAgentOutput, NextStepDecisionAgentOutput, SubmissionEvaluationAgentOutput } from '../../shared/schemas';
-import type { AppSettings, DailyGuide, DailyGuideTask, DailyPlanBlock, GenerateRollingPlanResult, GoalBrief, Id, KnowledgeItem, KnowledgeItemStatus, LayeredPlanResult, LearningSubmission, PrepareCurrentLearningDayResult, ReviewResult, RoadmapStage, RuntimeAuditResult, ShortPlanDay, StartNextSessionResult, StudySession, SubmissionEvaluationResult, TodayGuideState, TodayState } from '../../shared/types';
+import type { AppSettings, DailyGuide, DailyGuideTask, DailyPlanBlock, GenerateRollingPlanResult, GoalBrief, Id, KnowledgeItem, KnowledgeItemStatus, LayeredPlanResult, LearnerFactScope, LearnerFactSource, LearningSubmission, PlanProposalInput, PrepareCurrentLearningDayResult, ReviewResult, RoadmapStage, RuntimeAuditResult, ShortPlanDay, StartNextSessionResult, StudySession, SubmissionEvaluationResult, TodayGuideState, TodayState } from '../../shared/types';
 import { AiClient, type AiCallMetrics } from '../ai/ai-client';
 import { CategorizedError } from '../ai/categorized-error';
 import {
@@ -15,7 +15,6 @@ import {
   SubmissionEvaluationAgent,
   TeachStepAgent
 } from '../ai/agents';
-import { ContextBuilder } from './context-builder';
 import { FocusMonitor } from './focus-monitor';
 import type { SettingsService } from './settings-service';
 import type { StudyStore } from './store';
@@ -38,7 +37,6 @@ export class AppService {
   private readonly teachStepAgent = new TeachStepAgent(this.aiClient);
   private readonly questionAgent = new StepQuestionAgent(this.aiClient);
   private readonly evaluationAgent = new SubmissionEvaluationAgent(this.aiClient);
-  private readonly contextBuilder: ContextBuilder;
   private readonly focusMonitor: FocusMonitor;
   private readonly inFlight = new Map<string, Promise<unknown>>();
   private readonly recentResults = new Map<string, { result: unknown; error: boolean; expiresAt: number }>();
@@ -51,12 +49,16 @@ export class AppService {
     private readonly getMainWindow: () => BrowserWindow | null
   ) {
     this.focusMonitor = new FocusMonitor(store);
-    this.contextBuilder = new ContextBuilder(store);
     this.modules = new LearningModules(store);
   }
 
   async initialize(): Promise<void> {
     this.startupRuntimeAudit = await this.runRuntimeAudit();
+    const recovery = await this.store.recoverPendingEvaluationProgress();
+    if (recovery.recovered > 0) {
+      // eslint-disable-next-line no-console
+      console.log(`[P2] recoverPendingEvaluationProgress: recovered=${recovery.recovered}`);
+    }
   }
 
   private dedupe<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
@@ -90,6 +92,14 @@ export class AppService {
     return this.settings.getAppSettings();
   }
 
+  async getLearningStyle(): Promise<'concise' | 'detailed' | 'code_first'> {
+    const value = await this.store.getSetting('learningStyle');
+    if (value === 'concise' || value === 'detailed' || value === 'code_first') {
+      return value;
+    }
+    return 'detailed';
+  }
+
   updateSettings(patch: Partial<AppSettings> & { deepseekApiKey?: string }) {
     return this.settings.updateSettings(patch);
   }
@@ -119,12 +129,17 @@ export class AppService {
       this.settings.getRuntimeSettings()
     ]);
     const recentMessages = nextState.messages.slice(-12);
+    const intakeContext = await this.modules.context.build('goal_intake', {
+      messages: recentMessages,
+      latestUserInput: content
+    });
     const traceId = createTraceId();
     let metrics: AiCallMetrics | undefined;
     let output;
     try {
       output = await this.goalIntakeAgent.run({
         messages: recentMessages,
+        context: intakeContext.context,
         profile,
         settings: runtimeSettings,
         traceId,
@@ -146,7 +161,8 @@ export class AppService {
       promptVersionId: profile.activeVersionId,
       inputSnapshot: {
         intakeId: current.intake.id,
-        messageCount: nextState.messages.length
+        messageCount: nextState.messages.length,
+        contextSourceIds: intakeContext.contextSourceIds
       },
       output,
       outputSchemaVersion: 'goal-intake.v1',
@@ -186,9 +202,14 @@ export class AppService {
 
     const roadmapTraceId = createTraceId();
     let roadmapMetrics: AiCallMetrics | undefined;
+    const roadmapContext = await this.modules.context.build('generate_roadmap', {
+      goalUnderstanding: brief,
+      availableTime: runtimeSettings.dailyStudyWindows
+    });
     const roadmapOutput = await this.roadmapAgent.run({
       goal,
       brief,
+      context: roadmapContext.context,
       profile,
       settings: runtimeSettings,
       traceId: roadmapTraceId,
@@ -200,7 +221,7 @@ export class AppService {
       model: runtimeSettings.deepseekModel,
       promptProfileId: profile.id,
       promptVersionId: profile.activeVersionId,
-      inputSnapshot: { goalId, brief },
+      inputSnapshot: { goalId, brief, contextSourceIds: roadmapContext.contextSourceIds },
       output: roadmapOutput,
       outputSchemaVersion: 'roadmap.v1',
       status: 'success',
@@ -221,10 +242,16 @@ export class AppService {
 
     const shortPlanTraceId = createTraceId();
     let shortPlanMetrics: AiCallMetrics | undefined;
+    const shortPlanContext = await this.modules.context.build('generate_short_plan', {
+      goalUnderstanding: brief,
+      roadmap: draftRoadmap,
+      availableTime: runtimeSettings.dailyStudyWindows
+    });
     const shortPlanOutput = await this.shortPlanAgent.run({
       goal,
       brief,
       roadmap: draftRoadmap,
+      context: shortPlanContext.context,
       profile,
       settings: runtimeSettings,
       traceId: shortPlanTraceId,
@@ -236,7 +263,7 @@ export class AppService {
       model: runtimeSettings.deepseekModel,
       promptProfileId: profile.id,
       promptVersionId: profile.activeVersionId,
-      inputSnapshot: { goalId, brief, roadmap: roadmapOutput },
+      inputSnapshot: { goalId, brief, roadmap: roadmapOutput, contextSourceIds: shortPlanContext.contextSourceIds },
       output: shortPlanOutput,
       outputSchemaVersion: 'short-plan.v1',
       status: 'success',
@@ -261,6 +288,10 @@ export class AppService {
     let dailyGuideOutput: DailyGuideAgentOutput;
     const dailyGuideTraceId = createTraceId();
     let dailyGuideMetrics: AiCallMetrics | undefined;
+    const dailyGuideContext = await this.modules.context.build('generate_daily_guide', {
+      shortPlanDay: draftShortPlan.find((d) => d.dayIndex === 1),
+      availableMinutes: windows
+    });
     try {
       dailyGuideOutput = await this.dailyGuideAgent.run({
         date,
@@ -269,6 +300,7 @@ export class AppService {
         brief,
         roadmap: draftRoadmap,
         targetDay: draftShortPlan.find((d) => d.dayIndex === 1)!,
+        context: dailyGuideContext.context,
         profile,
         settings: runtimeSettings,
         knowledgeItems: initialKnowledge,
@@ -283,7 +315,7 @@ export class AppService {
         model: runtimeSettings.deepseekModel,
         promptProfileId: profile.id,
         promptVersionId: profile.activeVersionId,
-        inputSnapshot: { goalId, brief, roadmap: roadmapOutput, shortPlan: shortPlanOutput },
+        inputSnapshot: { goalId, brief, roadmap: roadmapOutput, shortPlan: shortPlanOutput, contextSourceIds: dailyGuideContext.contextSourceIds },
         output: dailyGuideOutput,
         outputSchemaVersion: 'daily-guide.v2',
         status: 'success',
@@ -301,7 +333,7 @@ export class AppService {
         model: runtimeSettings.deepseekModel,
         promptProfileId: profile.id,
         promptVersionId: profile.activeVersionId,
-        inputSnapshot: { goalId, brief, roadmap: roadmapOutput, shortPlan: shortPlanOutput },
+        inputSnapshot: { goalId, brief, roadmap: roadmapOutput, shortPlan: shortPlanOutput, contextSourceIds: dailyGuideContext.contextSourceIds },
         output: {},
         outputSchemaVersion: 'daily-guide.v2',
         status: 'failed',
@@ -381,14 +413,24 @@ export class AppService {
     ]);
     const traceId = createTraceId();
     let metrics: AiCallMetrics | undefined;
-    const output = await this.reflectionAgent.run({
-      date: guide.date,
-      snapshot,
-      profile,
-      settings: runtimeSettings,
-      traceId,
-      onMetrics: (m) => { metrics = m; }
-    });
+    const reviewContext = await this.modules.context.build('generate_review');
+    const summaryRun = await this.store.beginLearningSummary('day', guide.id);
+    let output;
+    try {
+      output = await this.reflectionAgent.run({
+        date: guide.date,
+        snapshot,
+        context: reviewContext.context,
+        profile,
+        settings: runtimeSettings,
+        traceId,
+        onMetrics: (m) => { metrics = m; }
+      });
+      await this.store.completeLearningSummary(summaryRun.id, output);
+    } catch (error) {
+      await this.store.failLearningSummary(summaryRun.id, error instanceof CategorizedError ? error.category : 'ai_failure');
+      throw error;
+    }
     const reviewId = await this.store.saveAiReview({
       kind: 'reflection',
       date: guide.date,
@@ -396,7 +438,7 @@ export class AppService {
       model: runtimeSettings.deepseekModel,
       promptProfileId: profile.id,
       promptVersionId: profile.activeVersionId,
-      inputSnapshot: snapshot,
+      inputSnapshot: { daySnapshot: snapshot, contextSourceIds: reviewContext.contextSourceIds },
       output,
       outputSchemaVersion: 'review.v1',
       status: 'success',
@@ -473,29 +515,14 @@ export class AppService {
       this.store.getActiveGuide(),
       this.getTodayState()
     ]);
-    return { ...today, todayState, pendingEvaluations: [] as string[] };
+    const pendingEvaluations = today.goal
+      ? await this.store.getPendingEvaluationIdsForGoal(today.goal.id)
+      : [];
+    return { ...today, todayState, pendingEvaluations };
   }
 
   getLatestReview(date?: string): Promise<ReviewResult | null> {
     return this.store.getLatestReview(date);
-  }
-
-  async applyReviewPlanAdjustments(params: {
-    goalId: string;
-    adjustments: Array<{
-      dayIndex: number;
-      title: string;
-      focus: string;
-      expectedOutput: string;
-      successCriteria: string;
-      reason: string;
-    }>;
-  }): Promise<ShortPlanDay[]> {
-    if (params.adjustments.length === 0) return [];
-    return this.store.applyReviewPlanAdjustments({
-      goalId: params.goalId,
-      adjustments: params.adjustments
-    });
   }
 
   getKnowledgeItemsForGoal(params: { goalId: string; status?: KnowledgeItemStatus; limit?: number }): Promise<KnowledgeItem[]> {
@@ -524,8 +551,32 @@ export class AppService {
     return this.store.exportGoalData(goalId);
   }
 
-  async startSession(blockId: Id) {
-    const session = await this.modules.runtime.startSession(blockId);
+  async getPlanVersionsForGoal(goalId: Id) {
+    return this.modules.planning.getPlanVersionsForGoal(goalId);
+  }
+
+  getTokenCostStats(opts: { goalId?: string; operation?: string; fromDate?: string; toDate?: string }) {
+    return this.store.getTokenCostStats(opts);
+  }
+
+  async createPlanProposal(goalId: Id, proposal: PlanProposalInput) {
+    return this.modules.planning.proposePlanChange(goalId, proposal);
+  }
+
+  async confirmPlanProposal(proposalId: Id) {
+    return this.modules.planning.confirmPlanChange(proposalId);
+  }
+
+  async rejectPlanProposal(proposalId: Id) {
+    return this.modules.planning.rejectPlanChange(proposalId);
+  }
+
+  async confirmRoadmapStage(goalId: Id, stageId: Id) {
+    return this.modules.planning.confirmRoadmapStage(goalId, stageId);
+  }
+
+  async startSession(taskId: Id) {
+    const session = await this.modules.runtime.startSession(taskId);
     this.focusMonitor.start(session.id);
     this.getMainWindow()?.flashFrame(true);
     await this.pushSessionState(session);
@@ -539,11 +590,11 @@ export class AppService {
     return session;
   }
 
-  async skipBlock(blockId: Id, reason: string) {
-    if (!reason.trim()) {
-      throw new Error('跳过学习块时必须填写原因。');
-    }
-    return this.store.skipBlock(blockId, reason);
+  /**
+   * @deprecated 使用 skipCurrentTask() 代替。保留仅用于 IPC 兼容。
+   */
+  async skipBlock(_blockId: Id, _reason: string) {
+    return this.modules.runtime.dispatch({ type: 'skipCurrentTask' });
   }
 
   async generateReview(date: string) {
@@ -554,14 +605,24 @@ export class AppService {
     ]);
     const traceId = createTraceId();
     let metrics: AiCallMetrics | undefined;
-    const output = await this.reflectionAgent.run({
-      date,
-      snapshot,
-      profile,
-      settings: runtimeSettings,
-      traceId,
-      onMetrics: (m) => { metrics = m; }
-    });
+    const reviewContext = await this.modules.context.build('generate_review');
+    const summaryRun = await this.store.beginLearningSummary('day', date);
+    let output;
+    try {
+      output = await this.reflectionAgent.run({
+        date,
+        snapshot,
+        context: reviewContext.context,
+        profile,
+        settings: runtimeSettings,
+        traceId,
+        onMetrics: (m) => { metrics = m; }
+      });
+      await this.store.completeLearningSummary(summaryRun.id, output);
+    } catch (error) {
+      await this.store.failLearningSummary(summaryRun.id, error instanceof CategorizedError ? error.category : 'ai_failure');
+      throw error;
+    }
     const reviewId = await this.store.saveAiReview({
       kind: 'reflection',
       date,
@@ -569,7 +630,7 @@ export class AppService {
       model: runtimeSettings.deepseekModel,
       promptProfileId: profile.id,
       promptVersionId: profile.activeVersionId,
-      inputSnapshot: snapshot,
+      inputSnapshot: { daySnapshot: snapshot, contextSourceIds: reviewContext.contextSourceIds },
       output,
       outputSchemaVersion: 'review.v1',
       status: 'success',
@@ -582,7 +643,7 @@ export class AppService {
     };
   }
 
-  async getActiveSession(): Promise<{ session: StudySession; block: DailyPlanBlock } | null> {
+  async getActiveSession(): Promise<{ session: StudySession; block: DailyPlanBlock | null } | null> {
     const sessions = await this.store.listSessions();
     const active = sessions.find((s) => s.status === 'active' || s.status === 'paused');
     if (!active || !active.taskId) return null;
@@ -592,10 +653,7 @@ export class AppService {
     if (guideTask.status === 'done' || guideTask.status === 'skipped' || guideTask.status === 'deferred') {
       return null;
     }
-    const block = guideTask.legacyPlanBlockId
-      ? await this.store.getBlock(guideTask.legacyPlanBlockId)
-      : null;
-    return { session: active, block: block! };
+    return { session: active, block: null };
   }
 
   async getAccumulatedSeconds(blockId: string, excludeSessionId?: string): Promise<number> {
@@ -607,8 +665,9 @@ export class AppService {
   }
 
   async teachCurrentStep(promptProfileId?: Id) {
+    const learningStyle = await this.getLearningStyle();
     const [built, profile, runtimeSettings] = await Promise.all([
-      this.contextBuilder.build('teach_step'),
+      this.modules.context.build('teach_step', { learningStyle }),
       this.store.getPromptProfile(promptProfileId),
       this.settings.getRuntimeSettings()
     ]);
@@ -680,14 +739,20 @@ export class AppService {
   private async _askStepQuestion(question: string, promptProfileId?: Id) {
     const before = await this.store.getLearningRuntimeSnapshot();
     const actionId = before.dailyGuideAction!.id;
-    const thread = before.questionThread?.status === 'open'
-      ? before.questionThread
-      : await this.store.openQuestion(actionId, question);
+    const goalId = before.goal?.id ?? '';
+    const taskId = before.state.activeDailyTaskId ?? '';
+
+    let threadId: string;
     if (before.questionThread?.status === 'open') {
-      await this.store.addQuestionMessage(thread.id, 'user', question);
+      threadId = before.questionThread.id;
+      await this.store.addQuestionMessage(threadId, 'user', question);
+    } else {
+      const handle = await this.modules.branch.open('question', { goalId, taskId, actionId }, question);
+      threadId = handle.threadId;
     }
+
     const [built, profile, runtimeSettings] = await Promise.all([
-      this.contextBuilder.build('answer_step_question', { question }),
+      this.modules.context.build('answer_step_question', { question }),
       this.store.getPromptProfile(promptProfileId),
       this.settings.getRuntimeSettings()
     ]);
@@ -723,8 +788,8 @@ export class AppService {
       status: 'success',
       metrics: questionMetrics
     });
-    const updatedThread = await this.store.saveQuestionAnswer(thread.id, output);
-    const messages = await this.store.getQuestionMessages(thread.id);
+    const updatedThread = await this.store.saveQuestionAnswer(threadId, output);
+    const messages = await this.store.getQuestionMessages(threadId);
     return {
       thread: updatedThread,
       messages,
@@ -737,6 +802,30 @@ export class AppService {
   async resolveQuestion(threadId: Id, summary?: string) {
     await this.store.resolveQuestion(threadId, summary);
     return this.store.getLearningRuntimeSnapshot();
+  }
+
+  async createBranch(kind: 'question' | 'debug' | 'practice', anchor: { goalId: Id; taskId: Id; actionId: Id | null }, initialContent?: string) {
+    return this.modules.branch.open(kind, anchor, initialContent);
+  }
+
+  async appendBranchMessage(threadId: Id, role: 'user' | 'assistant', content: string) {
+    return this.modules.branch.append(threadId, role, content);
+  }
+
+  async closeBranch(threadId: Id, strategy: string, options?: { summary?: string; factProposal?: any; promoteTaskId?: Id }) {
+    return this.modules.branch.close(threadId, strategy as any, options);
+  }
+
+  async promoteBranch(threadId: Id, taskId: Id, summary?: string) {
+    return this.modules.branch.promote(threadId, { taskId, summary });
+  }
+
+  async getBranchThread(threadId: Id) {
+    return this.modules.branch.getThread(threadId);
+  }
+
+  async getBranchMessages(threadId: Id) {
+    return this.modules.branch.getMessages(threadId);
   }
 
   submitLearningResult(content: string, promptProfileId?: Id) {
@@ -800,12 +889,13 @@ export class AppService {
     }
 
     try {
+      await this.store.markSubmissionEvaluation(submission.id, 'evaluating');
       const active = await this.getActiveSession();
     const guideTask = before.dailyGuideTask;
     const activeGuideForEval = await this.store.getActiveGuide(true);
     const goalIdForEval = activeGuideForEval.goal?.id;
     const [evaluationContext, profile, runtimeSettings, evalKnowledgeCtx] = await Promise.all([
-      this.contextBuilder.build('evaluate_submission', { submission: submission.content }),
+      this.modules.context.build('evaluate_submission', { submission: submission.content }),
       this.store.getPromptProfile(promptProfileId),
       this.settings.getRuntimeSettings(),
       goalIdForEval ? this.store.getKnowledgeContextForGoal(goalIdForEval) : Promise.resolve({ knowledgeItems: [], reviewKnowledgeItems: [] })
@@ -872,13 +962,11 @@ export class AppService {
     });
     if (result.decision.taskCompleted && active?.session) {
       this.focusMonitor.stop();
-      const completedSession = await this.modules.runtime.completeSession(active.session.id);
-      await this.pushSessionState(completedSession);
-
-      await this.modules.planning.closeCompletedLearningDay();
     }
+      const appliedSubmission = await this.store.getSubmissionById(submission.id);
+      if (!appliedSubmission) throw new Error('评价已完成，但无法重新读取提交记录。');
       return {
-        submission: { ...submission, evaluationStatus: 'completed' },
+        submission: appliedSubmission,
         evaluation: result.evaluation,
         decision: result.decision,
         nextAction: result.nextAction
@@ -905,6 +993,22 @@ export class AppService {
 
   updatePrompt(profileId: Id, content: string) {
     return this.store.updatePrompt(profileId, content);
+  }
+
+  proposeLearnerFact(goalId: string, fact: { scope: LearnerFactScope; taskId?: string; key: string; value: string; source: LearnerFactSource; confidence?: number }) {
+    return this.modules.context.proposeFact(goalId, fact);
+  }
+
+  listLearnerFacts(goalId: string, scope?: LearnerFactScope) {
+    return this.modules.context.listFactsForGoal(goalId, scope);
+  }
+
+  confirmLearnerFact(goalId: string, key: string, scope: LearnerFactScope, taskId?: string) {
+    return this.modules.context.confirmFact(goalId, key, scope, taskId);
+  }
+
+  deleteLearnerFact(goalId: string, key: string, scope: LearnerFactScope, taskId?: string) {
+    return this.modules.context.deleteFact(goalId, key, scope, taskId);
   }
 }
 
