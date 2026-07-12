@@ -38,6 +38,7 @@ export function AiDrawer({
   onTeachStep,
   onAskQuestion,
   onResolveQuestion,
+  onCloseBranch,
   onSubmitResult,
   onRetrySubmissionEvaluation
 }: {
@@ -51,6 +52,7 @@ export function AiDrawer({
   onTeachStep: () => Promise<void>;
   onAskQuestion: (question: string) => Promise<void>;
   onResolveQuestion: (threadId: string) => Promise<void>;
+  onCloseBranch: (threadId: string, strategy: 'close' | 'extract_knowledge' | 'propose_fact' | 'promote_task', options?: { summary?: string; promoteTaskId?: string; factProposal?: { sourceType: 'insight'; key: string; summary: string } }) => Promise<void>;
   onSubmitResult: (content: string) => Promise<void>;
   onRetrySubmissionEvaluation: (submissionId: string) => Promise<void>;
 }): JSX.Element | null {
@@ -58,6 +60,9 @@ export function AiDrawer({
   const [submission, setSubmission] = useState('');
   const [activeTab, setActiveTab] = useState<'question' | 'submission'>('question');
   const [submitted, setSubmitted] = useState(false);
+  const [showClosureOptions, setShowClosureOptions] = useState(false);
+  const [branchSummary, setBranchSummary] = useState('');
+  const [branchFactKey, setBranchFactKey] = useState('');
   const prevSubmissionResultRef = useRef<SubmissionEvaluationResult | null>(null);
   const activeThread = learningState?.questionThread ?? null;
   const latestEvaluation = submissionResult?.evaluation ?? learningState?.latestEvaluation ?? null;
@@ -148,9 +153,54 @@ export function AiDrawer({
                   </div>
                 )}
                 {activeThread?.status === 'open' && (
-                  <button className="secondary-action full" type="button" onClick={() => void onResolveQuestion(activeThread.id)}>
-                    问题已解决，回到主线
-                  </button>
+                  <>
+                    {!showClosureOptions ? (
+                      <button className="secondary-action full" type="button" onClick={() => setShowClosureOptions(true)}>
+                        关闭分支
+                      </button>
+                    ) : (
+                      <div className="branch-closure-options">
+                        <span className="branch-closure-label">如何处理这个分支？</span>
+                        <label className="assistant-field">
+                          分支总结（可选）
+                          <textarea value={branchSummary} onChange={(event) => setBranchSummary(event.target.value)} placeholder="例如：确认当前项目使用 Windows 和 DeepSeek" />
+                        </label>
+                        <button className="secondary-action full" type="button" onClick={() => {
+                          setShowClosureOptions(false);
+                          void onCloseBranch(activeThread.id, 'close', { summary: branchSummary.trim() || undefined });
+                        }}>
+                          仅关闭
+                        </button>
+                        <button className="secondary-action full" type="button" onClick={() => {
+                          setShowClosureOptions(false);
+                          void onCloseBranch(activeThread.id, 'extract_knowledge', { summary: branchSummary.trim() || undefined });
+                        }}>
+                          提取为知识
+                        </button>
+                        <label className="assistant-field">
+                          长期偏好项目
+                          <input value={branchFactKey} onChange={(event) => setBranchFactKey(event.target.value)} placeholder="例如：操作系统" />
+                        </label>
+                        <button className="secondary-action full" type="button" disabled={!branchFactKey.trim() || !branchSummary.trim()} onClick={() => {
+                          setShowClosureOptions(false);
+                          void onCloseBranch(activeThread.id, 'propose_fact', {
+                            summary: branchSummary.trim(),
+                            factProposal: { sourceType: 'insight', key: branchFactKey.trim(), summary: branchSummary.trim() }
+                          });
+                        }}>
+                          提议为长期偏好（稍后确认）
+                        </button>
+                        <button className="primary-action full" type="button" disabled={!learningState?.dailyGuideTask} onClick={() => {
+                          const taskId = learningState?.dailyGuideTask?.id;
+                          if (!taskId) return;
+                          setShowClosureOptions(false);
+                          void onCloseBranch(activeThread.id, 'promote_task', { summary: branchSummary.trim() || undefined, promoteTaskId: taskId });
+                        }}>
+                          提升为后续正式任务
+                        </button>
+                      </div>
+                    )}
+                  </>
                 )}
               </>
             )}

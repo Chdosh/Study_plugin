@@ -190,10 +190,10 @@ export default function App(): JSX.Element {
       onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
       onSelectView={setView}
 >
-        {notice !== '就绪' && (
-          <div className={`global-notice-bar ${bootError ? 'is-error' : ''}`} role="status" aria-live="polite">
+        {bootError && (
+          <div className="global-notice-bar is-error" role="alert" aria-live="assertive">
             <span className="notice-dot" />
-            {notice}
+            {bootError}
           </div>
         )}
         {runtimeAudit && (
@@ -453,14 +453,25 @@ export default function App(): JSX.Element {
                 setView('study');
               })
             }
+            onConfirmRoadmapStage={(stageId) =>
+              runAction('确认阶段成果', async () => {
+                if (!todayGuide?.goal?.id) throw new Error('没有活跃的学习目标。');
+                await window.studyApp.data.confirmRoadmapStage(todayGuide.goal.id, stageId);
+                await refresh();
+              })
+            }
             onApplyPlanAdjustments={async (adjustments) => {
               return runActionWithResult('应用计划调整', async () => {
                 if (!todayGuide?.goal?.id) {
                   throw new Error('没有活跃的学习目标。');
                 }
-                const updated = await window.studyApp.reviews.applyAdjustments(todayGuide.goal.id, adjustments);
+                const proposal = await window.studyApp.data.createPlanProposal(todayGuide.goal.id, {
+                  reason: '用户在复盘页确认采纳 AI 计划调整建议',
+                  adjustments
+                });
+                const confirmed = await window.studyApp.data.confirmPlanProposal(proposal.id);
                 await refresh();
-                return updated.length;
+                return confirmed.appliedAt ? 1 : 0;
               });
             }}
           />
@@ -497,6 +508,16 @@ export default function App(): JSX.Element {
           onResolveQuestion={(threadId) =>
             runAction('收束问题分支', async () => {
               setLearningState(await window.studyApp.learning.resolveQuestion(threadId));
+            })
+          }
+          onCloseBranch={(threadId, strategy, options) =>
+            runAction('关闭分支', async () => {
+              if (strategy === 'promote_task' && options?.promoteTaskId) {
+                await window.studyApp.branch.promote(threadId, options.promoteTaskId, options.summary);
+              } else {
+                await window.studyApp.branch.close(threadId, strategy, options);
+              }
+              setLearningState(await window.studyApp.learning.getState());
             })
           }
           onSubmitResult={(content) =>

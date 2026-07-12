@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -27,6 +27,8 @@ import type {
 import { TypingDots } from '../components/ai/TypingDots';
 import { HistoryPanel } from '../components/shared/HistoryPanel';
 import { GoalBriefEditor } from '../components/today/GoalBriefEditor';
+import { computeProgress } from '../../../shared/progress';
+import { computeCommandPolicy } from '../domain/command-policy';
 
 export function OverviewPage({
   settings,
@@ -282,6 +284,13 @@ export function OverviewPage({
   const currentUnitTitle = currentShortPlanDay?.title ?? guide.todayGoal;
   const currentUnitLabel = currentShortPlanDay ? '当前学习单元' : null;
 
+  const allTasksDone = guide ? guide.tasks.length > 0 && guide.tasks.every((t) => t.status === 'done') : false;
+  const todayProgress = useMemo(
+    () => (guide ? computeProgress(guide.tasks) : { completed: 0, total: 0, percent: 0 }),
+    [guide]
+  );
+  const todayPolicy = useMemo(() => computeCommandPolicy(learningState), [learningState]);
+
 
   return (
     <section className="overview-layout">
@@ -391,13 +400,13 @@ export function OverviewPage({
           <div className="surface overview-go-study">
             <ListChecks size={18} />
             <span>
-              {hasActiveGuide
-                ? (completedTaskCount === totalTaskCount && totalTaskCount > 0
-                     ? '当前学习单元任务已完成，进入「复盘」页查看总结'
-                    : '进入「学习」页执行当前任务')
-                : currentUnitLabel
-                  ? '当前学习单元准备就绪，进入「学习」页开始'
-                  : '进入「学习」页开始任务'}
+              {allTasksDone
+                ? '当前批次任务已全部完成，进入「复盘」页查看总结'
+                : todayPolicy.sessionStatus === 'active'
+                  ? '正在执行任务，进入「学习」页继续'
+                  : todayPolicy.sessionStatus === 'paused'
+                    ? '任务已暂停，进入「学习」页继续或结束'
+                    : '进入「学习」页开始当前任务'}
             </span>
           </div>
         )}
@@ -413,8 +422,8 @@ export function OverviewPage({
               <span>进度位置</span>
             </div>
             <div className="stat-item">
-              <strong>{totalTaskCount > 0 ? `${completedTaskCount}/${totalTaskCount}` : '—'}</strong>
-              <span>今日任务</span>
+              <strong>{todayProgress.total > 0 ? `${todayProgress.completed}/${todayProgress.total}` : '—'}</strong>
+              <span>步骤进度 ({todayProgress.percent}%)</span>
             </div>
             <div className="stat-item">
               <strong>{totalElapsedMinutes > 0 ? `${totalElapsedMinutes}分钟` : '—'}</strong>
