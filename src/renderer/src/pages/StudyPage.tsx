@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   CheckCircle2,
   ChevronRight,
@@ -23,7 +23,9 @@ import type {
 import { MessageContent } from '../components/ai/MessageContent';
 import { StatePanel } from '../components/shared/StatePanel';
 import { getCurrentGuideTaskSelection } from '../domain/guide-selection';
+import { computeCommandPolicy } from '../domain/command-policy';
 import { getSessionElapsedSeconds } from '../session-time';
+import { computeTaskProgress } from '../../../shared/progress';
 
 function formatElapsedTime(totalSeconds: number): string {
   const hours = Math.floor(totalSeconds / 3600);
@@ -40,6 +42,7 @@ function toCompactTitle(text: string, maxLength = 30): string {
   return firstSegment.length > maxLength ? `${firstSegment.slice(0, maxLength)}…` : firstSegment;
 }
 
+type FeedbackKind = 'success' | 'error';
 
 export function StudyPage({
   todayGuide,
@@ -96,12 +99,6 @@ export function StudyPage({
   const pendingSubmission = learningState?.latestSubmission?.evaluationStatus !== 'completed'
     ? learningState?.latestSubmission ?? null
     : null;
-  const activeActionIndex = taskActions.findIndex((a) =>
-    a.status !== 'done' && a.status !== 'skipped'
-  );
-  const stepIndex = activeActionIndex >= 0 ? activeActionIndex : 0;
-  const totalSteps = Math.max(taskActions.length, 1);
-  const stepPosition = totalSteps > 0 ? Math.min(stepIndex + 1, totalSteps) : 1;
   const allActionsDone = taskActions.length > 0 && taskActions.every((action) => action.status === 'done');
   const taskDone = currentTask?.status === 'done';
   const activeSessionBelongsToCurrent = Boolean(currentTaskId && activeSession?.taskId === currentTaskId);
@@ -114,7 +111,7 @@ export function StudyPage({
     ? guide!.tasks.find((t) => t.status === 'planned' || t.status === 'active') ?? null
     : null;
   const taskTitle = toCompactTitle(currentTask?.title ?? (allTasksDone ? '今日学习' : '当前任务'));
-  const currentAction = taskActions[stepIndex] ?? taskActions[0] ?? null;
+  const currentAction = taskActions.find((a) => a.status !== 'done' && a.status !== 'skipped') ?? taskActions[0] ?? null;
   const taskObjective = currentTask?.objective ?? '';
   const stepTitle = allTasksDone && !currentTask
     ? '今日任务已全部完成'
@@ -149,6 +146,31 @@ export function StudyPage({
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const commandPolicy = computeCommandPolicy(learningState);
+
+  const taskProgress = computeTaskProgress(taskActions);
+  const progressPercent = taskProgress.percent;
+  const stepPosition = taskProgress.completed + 1;
+  const totalSteps = taskProgress.total;
+
+  const [feedback, setFeedback] = useState<{ message: string; kind: FeedbackKind } | null>(null);
+  const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showFeedback = useCallback((message: string, kind: FeedbackKind = 'success') => {
+    if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    setFeedback({ message, kind });
+    feedbackTimerRef.current = setTimeout(() => {
+      setFeedback(null);
+      feedbackTimerRef.current = null;
+    }, 3000);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    };
+  }, []);
+
   // Timer: elapsed = durationMinutes (accumulated) + live active time
   useEffect(() => {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -179,8 +201,6 @@ export function StudyPage({
       </section>
     );
   }
-
-  const progressPercent = totalSteps > 0 ? Math.round((stepPosition / totalSteps) * 100) : 0;
 
   return (
     <section className="study-layout">
@@ -245,7 +265,7 @@ export function StudyPage({
               <span className="focus-eyebrow">当前步骤</span>
               <h2>{stepTitle}</h2>
             </div>
-            <button className="secondary-action help-button" type="button" onClick={() => void onOpenDrawer()}>
+            <button className="secondary-action help-button" type="button" disabled={!commandPolicy.canAskQuestion} onClick={() => void onOpenDrawer()}>
               <HelpCircle size={16} />
               遇到问题
             </button>
@@ -291,14 +311,18 @@ export function StudyPage({
         <div className="context-section">
           <h3>任务大纲</h3>
           <ol className="step-outline-list">
-            {taskActions.map((action, index) => (
-              <li key={action.id} className={action.status === 'done' ? 'done' : index === stepIndex ? 'active' : ''}>
-                <span className="step-outline-marker">
-                  {action.status === 'done' ? <CircleCheck size={14} /> : index === stepIndex ? <CircleDot size={14} /> : <Circle size={14} />}
-                </span>
-                <span className="step-outline-title">{action.title}</span>
-              </li>
-            ))}
+            {taskActions.map((action, index) => {
+              const actionIndex = taskActions.findIndex((a) => a.id === action.id);
+              const activeIdx = taskActions.findIndex((a) => a.status !== 'done' && a.status !== 'skipped');
+              return (
+                <li key={action.id} className={action.status === 'done' ? 'done' : actionIndex === activeIdx ? 'active' : ''}>
+                  <span className="step-outline-marker">
+                    {action.status === 'done' ? <CircleCheck size={14} /> : actionIndex === activeIdx ? <CircleDot size={14} /> : <Circle size={14} />}
+                  </span>
+                  <span className="step-outline-title">{action.title}</span>
+                </li>
+              );
+            })}
           </ol>
         </div>
 
@@ -335,12 +359,18 @@ export function StudyPage({
           <div className="current-progress-bar">
             <div style={{ width: `${progressPercent}%` }} />
           </div>
-          <span>{stepPosition}/{totalSteps} 步骤</span>
+          <span>{taskProgress.completed}/{taskProgress.total} 步骤 · {progressPercent}%</span>
         </div>
       </aside>
 
       <div className="study-fixed-action-bar">
-        <div className="bar-left" />
+        <div className="bar-left">
+          {feedback && (
+            <span className={`inline-feedback ${feedback.kind === 'success' ? 'success' : 'error'}`}>
+              {feedback.kind === 'success' ? '✓ ' : '✗ '}{feedback.message}
+            </span>
+          )}
+        </div>
         <div className="bar-right">
           {pendingSubmission ? (
             <div className="bar-right-group">
@@ -363,37 +393,82 @@ export function StudyPage({
                 生成下一批任务
               </button>
             </div>
-          ) : taskDone ? (
-            <span className="micro-hint" style={{ margin: 0 }}>
-              <CheckCircle2 size={14} />
-              {nextPlannedTask ? `当前任务已完成，下一任务：${toCompactTitle(nextPlannedTask.title)}` : '当前任务已完成。'}
-            </span>
+          ) : commandPolicy.canSubmit && taskDone ? (
+            <div className="bar-right-group">
+              <button className="primary-action" type="button" onClick={() => void onOpenDrawer('submission')}>
+                <CheckCircle2 size={16} />
+                提交最终结果
+              </button>
+            </div>
           ) : (
             <div className="bar-right-group">
-              {isNotStarted && currentTaskId
-                ? <button className="primary-action" type="button" onClick={() => void onStartSession(currentTaskId)}><Play size={16} />开始学习</button>
-                : null}
-              {isActive && allActionsDone && (
-                <button className="secondary-action" type="button" onClick={() => void onSkipCurrentAction()}><SkipForward size={16} />跳过并提交</button>
+              {isNotStarted && currentTaskId && commandPolicy.canStart ? (
+                <button className="primary-action" type="button" onClick={() => {
+                  void onStartSession(currentTaskId!).then(() => showFeedback('已开始任务'));
+                }}>
+                  <Play size={16} />
+                  开始任务
+                </button>
+              ) : null}
+              {isNotStarted && currentTaskId && !commandPolicy.canStart && (
+                <button className="primary-action" type="button" disabled title={commandPolicy.reasons.canStart ?? ''}>
+                  <Play size={16} />
+                  开始任务
+                </button>
               )}
-              {isActive && allActionsDone && (
-                <button className="primary-action" type="button" onClick={() => void onOpenDrawer('submission')}><CheckCircle2 size={16} />提交当前结果</button>
-              )}
-              {isActive && !allActionsDone && (
-                <button className="secondary-action" type="button" onClick={() => void onSkipCurrentAction()}><SkipForward size={16} />跳过步骤</button>
-              )}
-              {isActive && !allActionsDone && (
-                <button className="secondary-action" type="button" onClick={() => void onSkipCurrentTask()}><SkipForward size={16} />跳过此任务</button>
-              )}
-              {isActive && !allActionsDone && (
-                <button className="primary-action" type="button" onClick={() => void onCompleteCurrentAction()}><CheckCircle2 size={16} />完成当前步骤</button>
-              )}
+              {isActive && commandPolicy.canCompleteAction && !allActionsDone ? (
+                <button className="primary-action" type="button" onClick={() => {
+                  void onCompleteCurrentAction().then(() => showFeedback('步骤已完成'));
+                }}>
+                  <CheckCircle2 size={16} />
+                  完成步骤
+                </button>
+              ) : null}
+              {isActive && commandPolicy.canSkipAction && !allActionsDone ? (
+                <button className="secondary-action" type="button" onClick={() => {
+                  void onSkipCurrentAction().then(() => showFeedback('已跳过当前步骤'));
+                }}>
+                  <SkipForward size={16} />
+                  跳过步骤
+                </button>
+              ) : null}
+              {isActive && commandPolicy.canSkipTask && !taskDone ? (
+                <button className="secondary-action" type="button" onClick={() => {
+                  void onSkipCurrentTask().then(() => showFeedback('已跳过此任务'));
+                }}>
+                  <SkipForward size={16} />
+                  跳过此任务
+                </button>
+              ) : null}
+              {isPaused && commandPolicy.canResume ? (
+                <button className="primary-action" type="button" onClick={() => {
+                  void onResumeSession().then(() => showFeedback('已恢复学习'));
+                }}>
+                  <Play size={16} />
+                  继续学习
+                </button>
+              ) : null}
+              {isPaused && commandPolicy.canTerminate ? (
+                <button className="secondary-action danger-outline" type="button" onClick={() => {
+                  void onTerminateLearning().then(() => showFeedback('已结束本次学习'));
+                }}>
+                  结束本次学习
+                </button>
+              ) : null}
+              {isActive && !allActionsDone && commandPolicy.canAskQuestion ? (
+                <button className="secondary-action" type="button" onClick={() => void onOpenDrawer()}>
+                  <HelpCircle size={16} />
+                  遇到问题
+                </button>
+              ) : null}
+              {isActive && allActionsDone && commandPolicy.canSubmit ? (
+                <button className="primary-action" type="button" onClick={() => void onOpenDrawer('submission')}>
+                  <CheckCircle2 size={16} />
+                  提交当前结果
+                </button>
+              ) : null}
             </div>
           )}
-          <button className="secondary-action" type="button" onClick={() => void onOpenDrawer()}>
-            <HelpCircle size={16} />
-            遇到问题
-          </button>
         </div>
       </div>
     </section>

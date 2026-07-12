@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { Brain, Check, Database, Download, Target } from 'lucide-react';
-import type { AppSettings } from '../../../shared/types';
+import { useEffect, useState } from 'react';
+import { Brain, Check, Coins, Database, Download, Target, Trash2 } from 'lucide-react';
+import type { AppSettings, LearnerFact, LearnerFactScope, LearningStyle } from '../../../shared/types';
 
 export function SettingsPage({
   settings,
@@ -15,7 +15,55 @@ export function SettingsPage({
   const [model, setModel] = useState(settings.deepseekModel);
   const [apiKey, setApiKey] = useState('');
   const [blockMinutes, setBlockMinutes] = useState(settings.defaultBlockMinutes);
+  const [learningStyle, setLearningStyle] = useState(settings.learningStyle ?? 'detailed');
   const [saved, setSaved] = useState(false);
+  const [goalId, setGoalId] = useState<string | null>(null);
+  const [learnerFacts, setLearnerFacts] = useState<LearnerFact[]>([]);
+  const [factKey, setFactKey] = useState('');
+  const [factValue, setFactValue] = useState('');
+  const [factScope, setFactScope] = useState<LearnerFactScope>('goal');
+  const [tokenStats, setTokenStats] = useState<{
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalCalls: number;
+    byOperation: Record<string, { inputTokens: number; outputTokens: number; calls: number }>;
+    byDate: Record<string, { inputTokens: number; outputTokens: number; calls: number }>;
+  } | null>(null);
+
+  useEffect(() => {
+    if (window.studyApp?.stats?.getTokenCost) {
+      void window.studyApp.stats.getTokenCost().then(setTokenStats).catch(() => {});
+    }
+    void refreshLearnerFacts();
+  }, []);
+
+  async function refreshLearnerFacts(): Promise<void> {
+    if (!window.studyApp?.learnerContext) return;
+    const today = await window.studyApp.guides.listToday();
+    const currentGoalId = today.goal?.id ?? null;
+    setGoalId(currentGoalId);
+    if (!currentGoalId) {
+      setLearnerFacts([]);
+      return;
+    }
+    setLearnerFacts(await window.studyApp.learnerContext.listForGoal(currentGoalId));
+  }
+
+  async function saveLearnerFact(): Promise<void> {
+    if (!goalId || !factKey.trim() || !factValue.trim()) return;
+    await runAction('保存学习事实', async () => {
+      await window.studyApp.learnerContext.proposeFact(goalId, {
+        scope: factScope,
+        key: factKey.trim(),
+        value: factValue.trim(),
+        source: 'confirmed',
+        confidence: 1
+      });
+      setFactKey('');
+      setFactValue('');
+      await refreshLearnerFacts();
+    });
+  }
 
   async function handleSave(): Promise<void> {
     await runAction('保存设置', async () => {
@@ -25,7 +73,8 @@ export function SettingsPage({
         deepseekApiKey: apiKey,
         defaultBlockMinutes: blockMinutes,
         autoLaunch: settings.autoLaunch,
-        dailyStudyWindows: settings.dailyStudyWindows
+        dailyStudyWindows: settings.dailyStudyWindows,
+        learningStyle
       });
       setApiKey('');
       await onSaved();
@@ -77,6 +126,61 @@ export function SettingsPage({
 
         <section className="settings-card">
           <div className="settings-card-title">
+            <span className="settings-card-icon"><Brain size={22} /></span>
+            <h3>学习上下文</h3>
+          </div>
+          <p className="settings-hint">只有你确认的内容会影响后续教程。AI 推断会先作为待确认项显示，不会直接改变计划。</p>
+          {!goalId ? (
+            <p className="muted">创建学习目标后，可以在这里管理系统记住的环境和偏好。</p>
+          ) : (
+            <>
+              <label className="settings-field">
+                <span>作用范围</span>
+                <select value={factScope} onChange={(event) => setFactScope(event.target.value as LearnerFactScope)}>
+                  <option value="goal">当前目标</option>
+                  <option value="global">所有学习目标</option>
+                </select>
+              </label>
+              <label className="settings-field">
+                <span>项目，例如：操作系统、模型提供商</span>
+                <input value={factKey} onChange={(event) => setFactKey(event.target.value)} placeholder="操作系统" />
+              </label>
+              <label className="settings-field">
+                <span>确认内容</span>
+                <input value={factValue} onChange={(event) => setFactValue(event.target.value)} placeholder="Windows" />
+              </label>
+              <button className="secondary-action full" type="button" disabled={!factKey.trim() || !factValue.trim()} onClick={() => void saveLearnerFact()}>
+                保存为已确认事实
+              </button>
+              <div className="token-cost-table">
+                {learnerFacts.length === 0 && <span className="settings-hint">暂无学习事实</span>}
+                {learnerFacts.map((fact) => (
+                  <div key={fact.id} className="settings-row small">
+                    <span>
+                      <strong>{fact.key}</strong>：{fact.value}
+                      <small className="muted"> · {fact.scope === 'global' ? '全局' : fact.scope === 'goal' ? '当前目标' : '临时任务'} · {fact.source === 'confirmed' ? '已确认' : '待确认'}</small>
+                    </span>
+                    <span>
+                      {fact.source !== 'confirmed' && (
+                        <button className="secondary-action" type="button" onClick={() => void runAction('确认学习事实', async () => {
+                          await window.studyApp.learnerContext.confirmFact(goalId, fact.key, fact.scope, fact.taskId ?? undefined);
+                          await refreshLearnerFacts();
+                        })}>确认</button>
+                      )}
+                      <button className="icon-action" type="button" aria-label={`删除学习事实 ${fact.key}`} onClick={() => void runAction('删除学习事实', async () => {
+                        await window.studyApp.learnerContext.deleteFact(goalId, fact.key, fact.scope, fact.taskId ?? undefined);
+                        await refreshLearnerFacts();
+                      })}><Trash2 size={15} /></button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </section>
+
+        <section className="settings-card">
+          <div className="settings-card-title">
             <span className="settings-card-icon"><Target size={22} /></span>
             <h3>学习偏好</h3>
           </div>
@@ -89,6 +193,17 @@ export function SettingsPage({
               value={blockMinutes}
               onChange={(event) => setBlockMinutes(Number(event.target.value))}
             />
+          </label>
+          <label className="settings-field">
+            <span>教学风格</span>
+            <select
+              value={learningStyle}
+              onChange={(event) => setLearningStyle(event.target.value as LearningStyle)}
+            >
+              <option value="detailed">详细</option>
+              <option value="concise">简洁</option>
+              <option value="code_first">代码优先</option>
+            </select>
           </label>
         </section>
 
@@ -119,6 +234,38 @@ export function SettingsPage({
             导出学习数据
           </button>
         </section>
+
+        {tokenStats && tokenStats.totalCalls > 0 && (
+          <section className="settings-card">
+            <div className="settings-card-title">
+              <span className="settings-card-icon"><Coins size={22} /></span>
+              <h3>Token 用量统计</h3>
+            </div>
+            <div className="settings-row">
+              <span>总输入 tokens</span>
+              <strong>{tokenStats.totalInputTokens.toLocaleString()}</strong>
+            </div>
+            <div className="settings-row">
+              <span>总输出 tokens</span>
+              <strong>{tokenStats.totalOutputTokens.toLocaleString()}</strong>
+            </div>
+            <div className="settings-row">
+              <span>总调用次数</span>
+              <strong>{tokenStats.totalCalls}</strong>
+            </div>
+            {Object.keys(tokenStats.byOperation).length > 0 && (
+              <div className="token-cost-table">
+                <span className="settings-hint">按操作类型</span>
+                {Object.entries(tokenStats.byOperation).map(([op, stat]) => (
+                  <div key={op} className="settings-row small">
+                    <span>{op}</span>
+                    <span className="muted">{stat.calls} 次 · {stat.inputTokens.toLocaleString()} in / {stat.outputTokens.toLocaleString()} out</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
       </div>
     </section>
   );
