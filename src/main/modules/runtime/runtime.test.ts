@@ -22,7 +22,7 @@ describe('LearningRuntimeModule', () => {
     const store = createStore({
       listSessions: vi.fn().mockResolvedValue([activeSession]),
       pauseSession: vi.fn().mockResolvedValue({ ...activeSession, status: 'paused' }),
-      getLearningRuntimeSnapshot: vi.fn().mockResolvedValue(expected)
+      getSnapshot: vi.fn().mockResolvedValue(expected)
     });
     const runtime = new LearningRuntimeModule(store);
 
@@ -37,7 +37,7 @@ function createStore(overrides: Partial<RuntimeStore> = {}): RuntimeStore {
   const current = snapshot(null);
   const defaultSession = session('session-default', 'paused');
   return {
-    getLearningRuntimeSnapshot: vi.fn().mockResolvedValue(current),
+    getSnapshot: vi.fn().mockResolvedValue(current),
     startSession: vi.fn().mockResolvedValue(defaultSession),
     pauseSession: vi.fn().mockResolvedValue(defaultSession),
     completeSession: vi.fn().mockResolvedValue({ ...defaultSession, status: 'completed' }),

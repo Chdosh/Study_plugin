@@ -65,9 +65,8 @@
   display: grid;
   gap: var(--space-3);
   padding: var(--space-4);
-  border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
-  background: var(--color-bg-surface-subtle);
+  background: var(--color-bg-surface-muted);
 }
 
 .goal-brief-editor textarea {
@@ -86,7 +85,8 @@
 
 .intake-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(286px, 340px);
+  grid-template-columns: minmax(0, 820px);
+  justify-content: center;
   gap: clamp(16px, 2vw, 24px);
   align-items: start;
   min-width: 0;
@@ -130,7 +130,8 @@
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   padding: 0;
-  border-color: var(--color-primary-border);
+  background: var(--color-bg-surface-muted);
+  border-radius: var(--radius-lg);
   overflow: hidden;
   box-sizing: border-box;
   min-width: 0;
@@ -153,11 +154,9 @@
   align-items: center;
   margin: 0 14px 14px;
   padding: 12px;
-  border: 1px solid var(--color-primary-border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--color-bg-surface);
-  box-shadow: 0 8px 22px rgba(23, 32, 29, 0.06);
-  border-color: var(--color-primary-border);
+  border: 1px solid var(--color-border);
 }
 
 .intake-input-box {
@@ -197,8 +196,8 @@
   gap: 2px var(--space-3);
   align-items: center;
   padding: var(--space-4);
-  border: 1px solid var(--color-border-default);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface-muted);
   min-height: 108px;
 }
 
@@ -224,24 +223,22 @@
   content: '';
   position: absolute;
   top: 2px;
-  width: 50px;
-  height: 50px;
-  border: 1px solid var(--color-border-default);
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
-  background: #ffffff;
-  left: -58px;
+  background: var(--color-primary-surface);
+  left: -42px;
 }
 
 .intake-message.user::after {
   content: '';
   position: absolute;
   top: 2px;
-  width: 50px;
-  height: 50px;
-  border: 1px solid var(--color-border-default);
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
-  background: #ffffff;
-  right: -58px;
+  background: var(--color-bg-surface-muted);
+  right: -42px;
 }
 
 @media (max-width: 1100px) {
@@ -340,3 +337,6 @@
     justify-content: flex-end;
   }
 }
+
+/* Blueprint: goal intake is one continuous conversation workspace. */
+.intake-workspace { grid-template-columns: minmax(0, 820px); justify-content: center; }

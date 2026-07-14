@@ -21,3 +21,14 @@ tmp/
 temp/
 playwright-report/
 test-results/
+
+# Local review and design artifacts
+.audit/
+.lavish/
+.superdesign/
+.playwright-cli/
+.reasonix/
+output/
+docs/_legacy/
+docs/archive/
+*.corrupt

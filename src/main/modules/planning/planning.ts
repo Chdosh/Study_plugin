@@ -13,6 +13,7 @@ import type {
   StartNextSessionResult
 } from '../../../shared/types';
 import type { AiCallMetrics } from '../../ai/ai-client';
+import { describeError } from '../../ai/categorized-error';
 import type { StudyStore } from '../../services/store';
 
 export type PlanningStore = Pick<StudyStore,
@@ -110,75 +111,108 @@ export class PlanningModule {
       return { todayState: existingGuide.status === 'completed' ? 'completed' : 'active' };
     }
 
-    const usedDayIds = await this.store.getUsedShortPlanDayIds(goal.id);
-    let targetDay = pendingDraft
-      ? shortPlan.find((day) => day.id === existingGuide.shortPlanDayId) ?? null
-      : shortPlan.find((day) => day.sessionStatus === 'active' && !usedDayIds.has(day.id)) ?? null;
-    const isRetry = targetDay !== null;
-    if (!targetDay) {
-      targetDay = shortPlan
-        .filter((day) => day.sessionStatus === 'pending' && day.date === null && !usedDayIds.has(day.id))
-        .sort((a, b) => a.dayIndex - b.dayIndex)[0] ?? null;
-    }
-    if (!targetDay) return { todayState: 'plan_exhausted' };
-
-    if (!isRetry && !await this.store.activateShortPlanDay(targetDay.id)) {
-      return { todayState: 'generating' };
-    }
-
-    const previousDayResult = isRetry
-      ? undefined
-      : await this.store.getPreviousCompletedLearningDayContext(goal.id) ?? undefined;
-    const [brief, profile, settings, knowledge] = await Promise.all([
-      this.store.getGoalBriefForGoal(goal.id),
-      this.store.getPromptProfile(),
-      deps.getRuntimeSettings(),
-      this.store.getKnowledgeContextForGoal(goal.id)
-    ]);
-    await this.store.ensureDraftDailyGuide({
-      goal, date: deps.todayIso(), windows: settings.dailyStudyWindows, shortPlanDayId: targetDay.id
-    });
-
     const traceId = deps.createTraceId();
+    const date = deps.todayIso();
     let metrics: AiCallMetrics | undefined;
     let contextSourceIds: string[] = [];
-    let output: DailyGuideAgentOutput;
+    let targetDay: ShortPlanDay | null = null;
+    let profile: Awaited<ReturnType<PlanningStore['getPromptProfile']>> | undefined;
+    let settings: Awaited<ReturnType<PrepareCurrentLearningDayDeps['getRuntimeSettings']>> | undefined;
+    let phase = 'select_plan_day';
+    let aiRequested = false;
+
     try {
+      const usedDayIds = await this.store.getUsedShortPlanDayIds(goal.id);
+      targetDay = pendingDraft
+        ? shortPlan.find((day) => day.id === existingGuide.shortPlanDayId) ?? null
+        : shortPlan.find((day) => day.sessionStatus === 'active' && !usedDayIds.has(day.id)) ?? null;
+      const isRetry = targetDay !== null;
+      if (!targetDay) {
+        targetDay = shortPlan
+          .filter((day) => day.sessionStatus === 'pending' && day.date === null && !usedDayIds.has(day.id))
+          .sort((a, b) => a.dayIndex - b.dayIndex)[0] ?? null;
+      }
+      if (!targetDay) return { todayState: 'plan_exhausted' };
+
+      phase = 'activate_plan_day';
+      if (!isRetry && !await this.store.activateShortPlanDay(targetDay.id)) {
+        return { todayState: 'generating' };
+      }
+
+      phase = 'prepare_context';
+      const previousDayResult = isRetry
+        ? undefined
+        : await this.store.getPreviousCompletedLearningDayContext(goal.id) ?? undefined;
+      const [brief, loadedProfile, loadedSettings, knowledge] = await Promise.all([
+        this.store.getGoalBriefForGoal(goal.id),
+        this.store.getPromptProfile(),
+        deps.getRuntimeSettings(),
+        this.store.getKnowledgeContextForGoal(goal.id)
+      ]);
+      profile = loadedProfile;
+      settings = loadedSettings;
+
+      phase = 'create_draft';
+      await this.store.ensureDraftDailyGuide({
+        goal, date, windows: settings.dailyStudyWindows, shortPlanDayId: targetDay.id
+      });
+
+      phase = 'build_context';
       const boundedContext = await this.store.buildContext('generate_daily_guide', {
         shortPlanDay: targetDay,
         previousDayResult,
         availableMinutes: settings.dailyStudyWindows
       });
       contextSourceIds = boundedContext.contextSourceIds;
-      output = await deps.dailyGuideAgent.run({
-        date: deps.todayIso(), windows: settings.dailyStudyWindows, goal, brief, roadmap, targetDay,
+
+      phase = 'generate_daily_guide';
+      aiRequested = true;
+      const output: DailyGuideAgentOutput = await deps.dailyGuideAgent.run({
+        date, windows: settings.dailyStudyWindows, goal, brief, roadmap, targetDay,
         previousDayResult, profile, settings, knowledgeItems: knowledge.knowledgeItems,
         reviewKnowledgeItems: knowledge.reviewKnowledgeItems, context: boundedContext.context, traceId,
         onMetrics: (value: AiCallMetrics) => { metrics = value; }
       });
+
+      phase = 'save_daily_guide';
+      const result = await this.store.saveDailyGuideWithTransaction({
+        goal, date, windows: settings.dailyStudyWindows,
+        shortPlanDayId: targetDay.id, dailyGuide: output
+      });
+
       await this.store.saveAiReview({
-        kind: 'daily_guide', date: deps.todayIso(), provider: 'deepseek', model: settings.deepseekModel,
+        kind: 'daily_guide', date, provider: 'deepseek', model: settings.deepseekModel,
         promptProfileId: profile.id, promptVersionId: profile.activeVersionId,
         inputSnapshot: { goalId: goal.id, targetDay: targetDay.title, contextSourceIds }, output,
         outputSchemaVersion: 'daily-guide.v2', status: 'success', metrics
-      });
+      }).catch(() => undefined);
+      return { todayState: 'active', result };
     } catch (error) {
+      const described = describeError(error);
+      const errorCategory = phase === 'create_draft' || phase === 'save_daily_guide'
+        ? 'db_error'
+        : described.category;
+      const failureMetrics: AiCallMetrics = metrics
+        ? { ...metrics, errorCategory: metrics.errorCategory ?? errorCategory }
+        : { traceId, inputTokens: null, outputTokens: null, latencyMs: 0, errorCategory };
       await this.store.saveAiReview({
-        kind: 'daily_guide', date: deps.todayIso(), provider: 'deepseek', model: settings.deepseekModel,
-        promptProfileId: profile.id, promptVersionId: profile.activeVersionId,
-        inputSnapshot: { goalId: goal.id, targetDay: targetDay.title, contextSourceIds }, output: {},
+        kind: 'daily_guide', date, provider: aiRequested ? 'deepseek' : 'local',
+        model: settings?.deepseekModel ?? 'not_loaded',
+        promptProfileId: profile?.id, promptVersionId: profile?.activeVersionId,
+        inputSnapshot: {
+          goalId: goal.id,
+          targetDayId: targetDay?.id,
+          targetDay: targetDay?.title,
+          phase,
+          contextSourceIds
+        },
+        output: {},
         outputSchemaVersion: 'daily-guide.v2', status: 'failed',
-        errorMessage: error instanceof Error ? error.message : String(error),
-        metrics: metrics ? { ...metrics, errorCategory: 'ai_failure' } : undefined
-      });
-      return { todayState: 'generation_failed', errorMessage: error instanceof Error ? error.message : String(error) };
+        errorMessage: described.message,
+        metrics: failureMetrics
+      }).catch(() => undefined);
+      return { todayState: 'generation_failed', errorMessage: described.message };
     }
-
-    const result = await this.store.saveDailyGuideWithTransaction({
-      goal, date: deps.todayIso(), windows: settings.dailyStudyWindows,
-      shortPlanDayId: targetDay.id, dailyGuide: output
-    });
-    return { todayState: 'active', result };
   }
 
   async advanceLearningDay(
@@ -268,9 +302,9 @@ export class PlanningModule {
     const availableStageDays = await this.store.listAvailableShortPlanDaysForStage(goal.id, activeStage.id);
     const existingStageDay = availableStageDays[0] ?? null;
 
-    const reuseDay = async (targetDay: ShortPlanDay) => {
+    const createGuideForActivatedDay = async (targetDay: ShortPlanDay) => {
       const activated = await this.store.activateShortPlanDay(targetDay.id);
-      if (!activated) throw new Error('激活已有计划项失败，请重试。');
+      if (!activated) throw new Error('激活计划项失败，请重试。');
       const activeGuideState = await this.store.getActiveGuide();
       const boundedContext = await this.store.buildContext('generate_daily_guide', {
         shortPlanDay: targetDay,
@@ -299,7 +333,7 @@ export class PlanningModule {
     };
 
     if (existingStageDay) {
-      return reuseDay(existingStageDay);
+      return createGuideForActivatedDay(existingStageDay);
     }
 
     const completedContext = await this.store.getRollingPlanContext(goal.id);
@@ -327,22 +361,7 @@ export class PlanningModule {
     const firstDay = newPlanDays.sort((a: ShortPlanDay, b: ShortPlanDay) => a.dayIndex - b.dayIndex)[0] ?? null;
     if (!firstDay) throw new Error('AI 未返回有效学习任务');
 
-    const activated = await this.store.activateShortPlanDay(firstDay.id);
-    if (!activated) throw new Error('激活新计划项失败，请重试。');
-
-    const activeGuideState = await this.store.getActiveGuide();
-    const dailyGuideContext = await this.store.buildContext('generate_daily_guide', {
-      shortPlanDay: firstDay,
-      availableMinutes: runtimeSettings.dailyStudyWindows
-    });
-    const dailyGuideOutput = await dailyGuideAgent.run({
-      date: todayIso(), windows: runtimeSettings.dailyStudyWindows, goal, brief, roadmap: activeGuideState.roadmap, targetDay: firstDay, profile, settings: runtimeSettings, knowledgeItems: knowledgeItemsForGuide, reviewKnowledgeItems: reviewItemsForGuide, context: dailyGuideContext.context, traceId: createTraceId(), onMetrics: () => {}
-    });
-    const saved = await this.store.saveDailyGuideWithTransaction({
-      goal, date: todayIso(), windows: runtimeSettings.dailyStudyWindows, shortPlanDayId: firstDay.id, dailyGuide: dailyGuideOutput
-    });
-    const fullState = await this.store.getActiveGuide();
-    return { goal, roadmap: fullState.roadmap, shortPlan: fullState.shortPlan, guide: saved.guide, activatedStage: activeStage };
+    return createGuideForActivatedDay(firstDay);
   }
 
   async getPlanVersionsForGoal(goalId: Id): Promise<PlanVersionEntry[]> {

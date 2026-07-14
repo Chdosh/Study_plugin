@@ -41,6 +41,7 @@ export const ipcChannels = {
   branchGetThread: 'branch:getThread',
   branchGetMessages: 'branch:getMessages',
   systemAuditRuntime: 'system:auditRuntime',
+  systemSelectCurrentGuide: 'system:selectCurrentGuide',
   dataExportGoal: 'data:exportGoal',
   dataGetPlanVersions: 'data:getPlanVersions',
   dataCreatePlanProposal: 'data:createPlanProposal',

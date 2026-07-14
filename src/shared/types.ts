@@ -551,12 +551,25 @@ export interface RuntimeConsistencyConflict {
   actual: string;
 }
 
+export interface CurrentGuideChoice {
+  guideId: Id;
+  date: string;
+  dayTitle: string;
+  taskTitle: string;
+  completedTaskCount: number;
+  totalTaskCount: number;
+  hasRecentSession: boolean;
+  isRecommended: boolean;
+  isCurrent: boolean;
+}
+
 export interface RuntimeAuditResult {
   consistent: boolean;
   fixed: string[];
   conflicts: RuntimeConsistencyConflict[];
   checkedAt: string;
   requiresUserAction: boolean;
+  guideChoices: CurrentGuideChoice[];
 }
 
 export interface PlanVersionEntry {
@@ -653,6 +666,7 @@ export interface StudyAppApi {
   };
   system: {
     auditRuntime: () => Promise<RuntimeAuditResult>;
+    selectCurrentGuide: (guideId: Id) => Promise<RuntimeAuditResult>;
   };
   data: {
     exportGoal: (goalId: string) => Promise<Record<string, unknown>>;
