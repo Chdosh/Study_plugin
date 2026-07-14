@@ -111,9 +111,35 @@ describe('LearningBranchModule', () => {
 
     const thread = await branch.getThread(handle.threadId);
     expect(thread).not.toBeNull();
+    expect(thread?.taskId).toBeNull();
     expect(thread!.status).toBe('open');
     expect(thread!.question).toBe('为什么这里会报错？');
-    expect(await branch.getMessages(handle.threadId)).toHaveLength(1);
+    const messages = await branch.getMessages(handle.threadId);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ role: 'user', content: '为什么这里会报错？' });
+    expect(messages[0].content).not.toContain('Branch:');
+  });
+
+  it('uses readable Chinese default content for debug and practice branches', async () => {
+    const result = await createTestGuideWithTask();
+
+    const debugHandle = await branch.open('debug', {
+      goalId: result.goal.id,
+      taskId: result.guide.tasks[0].id,
+      actionId: null
+    });
+    const practiceHandle = await branch.open('practice', {
+      goalId: result.goal.id,
+      taskId: result.guide.tasks[0].id,
+      actionId: null
+    });
+
+    const debugThread = await branch.getThread(debugHandle.threadId);
+    const practiceThread = await branch.getThread(practiceHandle.threadId);
+    expect(debugThread?.question).toBe('排查当前任务问题');
+    expect(practiceThread?.question).toBe('当前任务额外练习');
+    expect(debugThread?.question).not.toContain('Branch:');
+    expect(practiceThread?.question).not.toContain('Branch:');
   });
 
   it('appends messages to a branch thread', async () => {
@@ -180,6 +206,25 @@ describe('LearningBranchModule', () => {
     expect(facts).toEqual(expect.arrayContaining([expect.objectContaining({ key: '模型提供商', value: 'DeepSeek', source: 'inferred' })]));
   });
 
+  it('does not create a fact proposal without explicit key and summary', async () => {
+    const result = await createTestGuideWithTask();
+    const handle = await branch.open('debug', {
+      goalId: result.goal.id,
+      taskId: result.guide.tasks[0].id,
+      actionId: null
+    }, '当前模型提供商是 DeepSeek');
+
+    await expect(
+      branch.close(handle.threadId, 'propose_fact', {
+        summary: 'DeepSeek',
+        factProposal: { sourceType: 'insight', key: '', summary: 'DeepSeek' }
+      })
+    ).rejects.toThrow('提议长期偏好需要填写偏好项目和总结内容');
+
+    expect(await store.listFactsForGoal(result.goal.id)).toHaveLength(0);
+    expect((await branch.getThread(handle.threadId))?.status).toBe('open');
+  });
+
   it('extracts knowledge when closing with extract_knowledge strategy', async () => {
     const result = await createTestGuideWithTask();
     const handle = await branch.open('question', {
@@ -225,6 +270,7 @@ describe('LearningBranchModule', () => {
     const thread = await branch.getThread(handle.threadId);
     expect(thread!.status).toBe('resolved');
     expect(thread!.resolutionSummary).toBe('提升为分支任务');
+    expect(thread!.resolutionSummary).not.toContain('Promoted');
 
     const guide = await store.getDailyGuideById(result.guide.id);
     expect(guide!.tasks.length).toBeGreaterThanOrEqual(2);
@@ -241,5 +287,10 @@ describe('LearningBranchModule', () => {
     await expect(
       branch.close(handle.threadId, 'promote_task', { promoteTaskId: result.guide.tasks[0].id })
     ).rejects.toThrow('需要用户确认');
+  });
+
+  it('returns a Chinese error when the branch does not exist', async () => {
+    await expect(branch.close('missing-thread', 'close')).rejects.toThrow('找不到需要关闭的问题分支');
+    await expect(branch.promote('missing-thread', { taskId: 'task-1' })).rejects.toThrow('找不到需要提升的问题分支');
   });
 });

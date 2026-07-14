@@ -1,25 +1,24 @@
-/* Design tokens */
+/* Design tokens — Claude-style borderless, warm cream palette */
 
 :root {
   color-scheme: light;
 
-  --font-family-base: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-family-base: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-size-xs: 12px;
-  --font-size-sm: 14px;
-  --font-size-md: 16px;
-  --font-size-lg: 18px;
-  --font-size-xl: 22px;
-  --font-size-2xl: 28px;
-  --font-size-3xl: 36px;
+  --font-size-sm: 13px;
+  --font-size-md: 15px;
+  --font-size-lg: 17px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 24px;
+  --font-size-3xl: 32px;
   --font-weight-regular: 400;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --font-weight-bold: 700;
-  --font-weight-heavy: 800;
   --line-height-tight: 1.2;
   --line-height-compact: 1.35;
-  --line-height-normal: 1.55;
-  --line-height-relaxed: 1.7;
+  --line-height-normal: 1.6;
+  --line-height-relaxed: 1.75;
 
   --space-1: 4px;
   --space-2: 8px;
@@ -30,83 +29,67 @@
   --space-7: 40px;
   --space-8: 48px;
 
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
   --radius-pill: 999px;
 
-  --color-bg-page: #fbfcfc;
-  --color-bg-surface: #ffffff;
-  --color-bg-surface-muted: #f2f7f6;
-  --color-bg-surface-subtle: #f8fbfa;
-  --color-bg-sidebar: #ffffff;
-  --color-bg-sidebar-hover: #edf8f6;
+  --color-bg-page: #F8F6F1;
+  --color-bg-surface: #FFFFFF;
+  --color-bg-surface-muted: #F0EDE8;
+  --color-bg-surface-subtle: #F5F3EF;
+  --color-primary-surface-soft: #FFF4F1;
 
-  --color-text-primary: #111b18;
-  --color-text-muted: #60706c;
-  --color-text-subtle: #8b9996;
-  --color-text-inverse: #ffffff;
-  --color-text-inverse-muted: #def4ef;
+  --color-text-primary: #2A2624;
+  --color-text-secondary: #6B6260;
+  --color-text-subtle: #9B8E8E;
+  --color-text-muted: var(--color-text-secondary);
+  --color-text-inverse: #FFFFFF;
 
-  --color-border-default: #dfe8e5;
-  --color-border-strong: #cbd9d5;
-  --color-border-inverse-subtle: rgba(255, 255, 255, 0.16);
+  --color-border: rgba(42, 38, 36, 0.08);
+  --color-border-strong: rgba(42, 38, 36, 0.14);
+  --color-border-default: var(--color-border);
 
-  --color-primary: #07998c;
-  --color-primary-hover: #078a7f;
-  --color-primary-active: #06736a;
-  --color-primary-surface: #e7f7f4;
-  --color-primary-surface-soft: #f3fbf9;
-  --color-primary-border: #b7e2dc;
+  --color-primary: #C75C3F;
+  --color-primary-hover: #B04E34;
+  --color-primary-active: #9E422C;
+  --color-primary-surface: #FDE8E3;
+  --color-primary-border: rgba(199, 92, 63, 0.24);
 
-  --color-neutral-control-hover: #edf3f1;
-  --color-neutral-control-active: #e1ebe8;
-  --color-success: #0b7a60;
-  --color-success-border: #bce2d8;
-  --color-warning: #c97a05;
-  --color-warning-border: #f0cf9d;
-  --color-danger: #d23d52;
-  --color-danger-border: #f1bdc6;
-  --color-info: #2563eb;
-  --color-info-border: #bfd0f7;
+  --color-success: #5B8A5B;
+  --color-success-light: #E8F0E6;
+  --color-warning: #C4913C;
+  --color-warning-light: #FCF3E3;
+  --color-info: #4A7C8A;
+  --color-info-light: #E6F0F3;
+  --color-error: #A83E32;
+  --color-error-light: #FBE9E6;
 
-  --control-height-sm: 32px;
-  --control-height-md: 42px;
-  --control-height-lg: 52px;
+  --control-height-sm: 30px;
+  --control-height-md: 36px;
+  --control-height-lg: 42px;
   --button-padding-md: 0 20px;
-  --button-padding-sm: 0 16px;
-  --badge-height: 30px;
-  --badge-padding: 0 12px;
-  --textarea-min-height: 128px;
-  --empty-state-min-height: 180px;
-  --state-panel-min-height: 56px;
+  --button-padding-sm: 0 14px;
+  --badge-height: 24px;
+  --badge-padding: 0 10px;
+  --textarea-min-height: 100px;
+  --empty-state-min-height: 140px;
+  --state-panel-min-height: 48px;
   --focus-outline: 2px solid var(--color-primary);
   --focus-offset: 2px;
-  --disabled-opacity: 0.55;
-  --shadow-soft: 0 16px 42px rgba(17, 27, 24, 0.05);
-  --shadow-control: 0 12px 24px rgba(7, 153, 140, 0.2);
+  --disabled-opacity: 0.45;
 
-  --sidebar-width: 240px;
-  --context-panel-width: 360px;
-  --today-ai-panel-width: 360px;
-  --study-ai-panel-width: 360px;
-  --page-padding: clamp(28px, 4vw, 64px);
-  --card-padding: 28px;
+  --sidebar-width: 44px;
+  --page-padding: clamp(32px, 5vw, 64px);
+  --card-padding: 24px;
   --section-gap: 28px;
-}
-
-@media (max-width: 1240px) {
-  :root {
-    --sidebar-width: 92px;
-    --context-panel-width: 320px;
-    --card-padding: 22px;
-    --page-padding: 32px;
-  }
 }
 
 @media (max-width: 820px) {
   :root {
     --sidebar-width: 0px;
     --page-padding: 18px;
+    --card-padding: 18px;
   }
 }

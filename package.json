@@ -1,7 +1,24 @@
 {
   "name": "study-supervisor",
   "version": "0.1.0",
-  "description": "Local-first AI study supervisor desktop app.",
+  "description": "Local-first Windows desktop AI learning teacher built with Electron, React and SQLite.",
+  "keywords": [
+    "ai",
+    "desktop",
+    "electron",
+    "learning",
+    "react",
+    "sqlite",
+    "typescript"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Chdosh/Study_plugin.git"
+  },
+  "homepage": "https://github.com/Chdosh/Study_plugin#readme",
+  "bugs": {
+    "url": "https://github.com/Chdosh/Study_plugin/issues"
+  },
   "main": "./out/main/index.js",
   "type": "module",
   "private": true,
@@ -12,10 +29,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "devlog": "node scripts/dev-log.mjs",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "@fontsource/inter": "^5.2.8",
     "@libsql/client": "^0.15.15",
     "drizzle-orm": "^0.45.2",
     "lucide-react": "^0.468.0",

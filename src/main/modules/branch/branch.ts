@@ -59,21 +59,26 @@ export class LearningBranchModule {
         break;
       }
       case 'propose_fact': {
-        if (options?.factProposal) {
-          await this.store.proposeFact(thread.goalId ?? '', {
+        const key = options?.factProposal?.key?.trim();
+        const value = options?.factProposal?.summary?.trim();
+        if (!key || !value) {
+          throw new Error('提议长期偏好需要填写偏好项目和总结内容。');
+        }
+        await this.store.proposeFact(thread.goalId ?? '', {
             scope: 'goal',
-            key: options.factProposal.key,
-            value: options.factProposal.summary,
+            key,
+            value,
             source: 'inferred',
             confidence: 0.6
-          });
-        }
+        });
         await this.store.resolveQuestion(threadId, summary);
         break;
       }
       case 'promote_task': {
         throw new Error('promote_task 需要用户确认，请调用 promote() 方法而非 close()。');
       }
+      default:
+        throw new Error('不支持的问题分支关闭方式。');
     }
   }
 
@@ -83,8 +88,9 @@ export class LearningBranchModule {
 
   async promote(threadId: Id, target: { taskId: Id; summary?: string }): Promise<void> {
     const thread = await this.store.getQuestionThread(threadId);
-    const summary = target.summary ?? thread?.resolutionSummary ?? thread?.question ?? '';
     if (!thread) throw new Error('找不到需要提升的问题分支。');
+    if (!target.taskId) throw new Error('提升为正式任务需要绑定当前主任务。');
+    const summary = target.summary?.trim() || thread.resolutionSummary || thread.question;
     await this.store.createTaskFromBranch(summary, { goalId: thread.goalId ?? '', taskId: target.taskId });
     await this.store.promoteQuestionThread(threadId, { taskId: target.taskId });
     await this.store.resolveQuestion(threadId, summary);
