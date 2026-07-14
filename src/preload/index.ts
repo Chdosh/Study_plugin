@@ -125,7 +125,8 @@ const api: StudyAppApi = {
       ipcRenderer.invoke(ipcChannels.branchGetMessages, { threadId })
   },
   system: {
-    auditRuntime: () => ipcRenderer.invoke(ipcChannels.systemAuditRuntime)
+    auditRuntime: () => ipcRenderer.invoke(ipcChannels.systemAuditRuntime),
+    selectCurrentGuide: (guideId: Id) => ipcRenderer.invoke(ipcChannels.systemSelectCurrentGuide, { guideId })
   },
   data: {
     exportGoal: (goalId: string) => ipcRenderer.invoke(ipcChannels.dataExportGoal, { goalId }),

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { AiClient } from '../ai/ai-client';
-import { aiReviews, dailyGuides, goals, learningEvaluations, learningSubmissions, shortPlanDays } from '../db/schema';
+import { aiReviews, dailyGuides, goals, learningEvaluations, learningRuntimeStates, learningSubmissions, shortPlanDays, studySessions } from '../db/schema';
 import { createDatabase, type DatabaseClient } from '../db/client';
 import type { Database } from '../db/client';
 import type { InferSelectModel } from 'drizzle-orm';
@@ -187,6 +187,13 @@ describe('AppService progressive AI flow', () => {
     expect(finalAction.state.activeDailyTaskId).toBe(layered.guide.tasks[0].id);
     expect(finalAction.dailyGuideAction?.title).toBe('写边界');
 
+    const awaitingSubmission = await appService.completeCurrentAction();
+    expect(awaitingSubmission.dailyGuideTask?.status).toBe('active');
+    expect(awaitingSubmission.dailyGuideTask?.progressPercent).toBe(100);
+    expect(awaitingSubmission.dailyGuideTask?.actions.every((action) => action.status === 'done')).toBe(true);
+    expect(awaitingSubmission.dailyGuideTask?.currentAction).toBeNull();
+    expect((await appService.getActiveSession())?.session.status).toBe('active');
+
     const submitted = await appService.submitLearningResult('已完成当前版本功能清单，并记录今天做和不做的边界。');
     expect(submitted.evaluation.result).toBe('passed');
     expect(submitted.nextAction?.title).toBe('找入口');
@@ -194,6 +201,7 @@ describe('AppService progressive AI flow', () => {
 
     const afterSubmit = await appService.getLearningState();
     expect(afterSubmit.state.activeDailyTaskId).toBe(secondTaskId);
+    expect(afterSubmit.state.sessionStatus).toBe('idle');
     expect(afterSubmit.dailyGuideAction?.title).toBe('找入口');
 
     expect(aiCalls.map((call) => call.operation)).toEqual([
@@ -205,6 +213,37 @@ describe('AppService progressive AI flow', () => {
       'question',
       'submission_evaluation'
     ]);
+  });
+
+  it('跳过主任务后立即结束旧 Session，下一任务保持未开始', async () => {
+    installDeterministicAi();
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+    const session = await appService.startSession(layered.guide.tasks[0].id);
+
+    const skipped = await appService.skipCurrentTask();
+    const sessionRows = await db.select().from(studySessions).where(eq(studySessions.id, session.id));
+
+    expect(skipped.dailyGuide?.tasks[0].status).toBe('skipped');
+    expect(skipped.state.activeDailyTaskId).toBe(layered.guide.tasks[1].id);
+    expect(skipped.state.sessionStatus).toBe('idle');
+    expect(sessionRows[0].status).toBe('skipped');
+    expect(await appService.getActiveSession()).toBeNull();
+  });
+
+  it('服务端拒绝在行动步骤未全部终态时提交', async () => {
+    installDeterministicAi();
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+    await appService.startSession(layered.guide.tasks[0].id);
+
+    await expect(appService.submitLearningResult('过早提交')).rejects.toThrow('全部步骤');
+    expect(await db.select().from(learningSubmissions)).toHaveLength(0);
+    expect((await appService.getActiveSession())?.session.status).toBe('active');
   });
 
   it('treats a paused Focus Session as the current recoverable session', async () => {
@@ -224,6 +263,11 @@ describe('AppService progressive AI flow', () => {
     expect(current?.session.id).toBe(started.id);
     expect(current?.session.status).toBe('paused');
     expect(current?.session.status).toBe('paused');
+
+    const resumed = await appService.startSession(taskId);
+    expect(resumed.id).toBe(started.id);
+    expect(resumed.status).toBe('active');
+    expect((await appService.getLearningState()).state.sessionStatus).toBe('active');
   });
 
   it('handles need_more_info then ready in goal intake multi-round flow', async () => {
@@ -421,6 +465,23 @@ describe('AppService progressive AI flow', () => {
     expect(state).toBe('needs_goal');
   });
 
+  it('没有执行稿的已激活计划日应恢复为待生成，而不是伪报生成失败', async () => {
+    vi.spyOn(store, 'getActiveGuide').mockResolvedValue({
+      goal: { id: 'goal-interrupted' },
+      roadmap: [],
+      shortPlan: [{
+        id: 'day-interrupted',
+        dayIndex: 1,
+        sessionStatus: 'active',
+        date: todayIso()
+      }],
+      guide: null
+    } as any);
+    vi.spyOn(store, 'getUsedShortPlanDayIds').mockResolvedValue(new Set<string>());
+
+    await expect(appService.getTodayState()).resolves.toBe('ready_to_generate');
+  });
+
   it('prepareCurrentLearningDay returns active when guide already exists', async () => {
     installDeterministicAi();
     await appService.sendOnboardingMessage('我想学 React。');
@@ -450,8 +511,7 @@ describe('AppService progressive AI flow', () => {
 
     for (const task of layered.guide.tasks) {
       await appService.startSession(task.id);
-      await appService.completeCurrentAction();
-      await appService.completeCurrentAction();
+      await completeAllCurrentActions(appService);
       await appService.submitLearningResult('已完成');
     }
 
@@ -477,8 +537,7 @@ describe('AppService progressive AI flow', () => {
 
     for (const task of layered.guide.tasks) {
       await appService.startSession(task.id);
-      await appService.completeCurrentAction();
-      await appService.completeCurrentAction();
+      await completeAllCurrentActions(appService);
       await appService.submitLearningResult('已完成');
     }
     await db
@@ -530,8 +589,7 @@ describe('AppService progressive AI flow', () => {
 
     for (const task of layered.guide.tasks) {
       await appService.startSession(task.id);
-      await appService.completeCurrentAction();
-      await appService.completeCurrentAction();
+      await completeAllCurrentActions(appService);
       await appService.submitLearningResult('Done.');
     }
 
@@ -579,7 +637,7 @@ describe('AppService progressive AI flow', () => {
     const layered = await appService.generateLayeredPlan(confirmed.goal.id);
     await appService.confirmDailyGuide(layered.guide.id);
     await appService.startSession(layered.guide.tasks[0].id);
-    await appService.completeCurrentAction();
+    await completeAllCurrentActions(appService);
 
     const [first, second] = await Promise.all([
       appService.submitLearningResult('已完成第一个任务的最终产出。'),
@@ -643,11 +701,14 @@ describe('AppService progressive AI flow', () => {
     const layered = await appService.generateLayeredPlan(confirmed.goal.id);
     await appService.confirmDailyGuide(layered.guide.id);
     await appService.startSession(layered.guide.tasks[0].id);
+    await completeAllCurrentActions(appService);
 
     await expect(appService.submitLearningResult('这份提交必须先保存。')).rejects.toThrow('请重试评价');
 
     const failedState = await appService.getLearningState();
     expect(failedState.latestSubmission?.evaluationStatus).toBe('failed');
+    expect(failedState.state.sessionStatus).toBe('paused');
+    expect((await appService.getActiveSession())?.session.status).toBe('paused');
     const failedSubmissionId = failedState.latestSubmission!.id;
 
     // Simulate an application restart with an orphaned persistent evaluation lock.
@@ -673,6 +734,7 @@ describe('AppService progressive AI flow', () => {
     const layered = await appService.generateLayeredPlan(confirmed.goal.id);
     await appService.confirmDailyGuide(layered.guide.id);
     await appService.startSession(layered.guide.tasks[0].id);
+    await completeAllCurrentActions(appService);
 
     await expect(appService.submitLearningResult('并发重试也只能复用这一条提交。')).rejects.toThrow('请重试评价');
     const failedSubmission = (await appService.getLearningState()).latestSubmission!;
@@ -702,8 +764,7 @@ describe('AppService progressive AI flow', () => {
       items: [{ key: layered.guide.tasks[0].title, summary: '第一个任务仍需验证', sourceType: 'weakness' }]
     });
 
-    await appService.completeCurrentAction();
-    await appService.completeCurrentAction();
+    await completeAllCurrentActions(appService);
     await appService.submitLearningResult('第一个任务的最终产出。');
 
     const items = await store.getKnowledgeItemsForGoal({ goalId: confirmed.goal.id });
@@ -730,11 +791,33 @@ describe('AppService progressive AI flow', () => {
 
     const taskId = layered.guide.tasks[0].id;
     await appService.startSession(taskId);
-    await appService.completeCurrentAction();
-    await appService.completeCurrentAction();
+    await completeAllCurrentActions(appService);
     await appService.submitLearningResult('Done.');
 
     await expect(appService.startSession(taskId)).rejects.toThrow('已完成');
+  });
+
+  it('getActiveSession repairs a reopened Session that points to a completed task', async () => {
+    installDeterministicAi();
+    await appService.sendOnboardingMessage('我想学 React。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+
+    const taskId = layered.guide.tasks[0].id;
+    const session = await appService.startSession(taskId);
+    await completeAllCurrentActions(appService);
+    await appService.submitLearningResult('Done.');
+    await db.update(studySessions).set({ status: 'active', endedAt: null }).where(eq(studySessions.id, session.id));
+    await db.update(learningRuntimeStates).set({
+      activeDailyTaskId: taskId,
+      sessionStatus: 'active'
+    }).where(eq(learningRuntimeStates.id, 'default'));
+
+    expect(await appService.getActiveSession()).toBeNull();
+    const sessionRows = await db.select().from(studySessions).where(eq(studySessions.id, session.id));
+    expect(sessionRows[0].status).toBe('completed');
+    expect((await store.getLearningRuntimeSnapshot()).state.activeDailyTaskId).not.toBe(taskId);
   });
 
   it('结束本次学习会暂停持久化 Session 并保留当前任务位置', async () => {
@@ -756,6 +839,16 @@ describe('AppService progressive AI flow', () => {
 
 });
 
+async function completeAllCurrentActions(service: AppService): Promise<void> {
+  for (;;) {
+    const snapshot = await service.getLearningState();
+    const pending = snapshot.dailyGuideTask?.actions.some(
+      (action) => action.status !== 'done' && action.status !== 'skipped'
+    );
+    if (!pending) return;
+    await service.completeCurrentAction();
+  }
+}
 
 function installDeterministicAi(options: { failEvaluationAttempts?: number; failDailyGuideAttempts?: number[] } = {}): Array<{ operation: string; user: string }> {
   const calls: Array<{ operation: string; user: string }> = [];

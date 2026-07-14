@@ -1,7 +1,7 @@
 import type { Id, LearningRuntimeSnapshot, StudySession } from '../../../shared/types';
 
 export interface RuntimeStore {
-  getLearningRuntimeSnapshot(): Promise<LearningRuntimeSnapshot>;
+  getSnapshot(): Promise<LearningRuntimeSnapshot>;
   startSession(taskId: Id): Promise<StudySession>;
   pauseSession(sessionId: Id): Promise<StudySession>;
   completeSession(sessionId: Id): Promise<StudySession>;
@@ -21,7 +21,7 @@ export class LearningRuntimeModule {
   constructor(private readonly store: RuntimeStore) {}
 
   getSnapshot(): Promise<LearningRuntimeSnapshot> {
-    return this.store.getLearningRuntimeSnapshot();
+    return this.store.getSnapshot();
   }
 
   startSession(taskId: Id): Promise<StudySession> {
@@ -49,7 +49,7 @@ export class LearningRuntimeModule {
         if (activeSession) {
           await this.store.pauseSession(activeSession.id);
         }
-        return this.store.getLearningRuntimeSnapshot();
+        return this.store.getSnapshot();
       }
     }
   }

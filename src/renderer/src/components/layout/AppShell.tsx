@@ -1,28 +1,38 @@
 import type { ReactNode } from 'react';
 import type { ViewKey } from '../../types/navigation';
-import { Sidebar } from './Sidebar';
+import { ActivityBar } from './ActivityBar';
 
 interface AppShellProps {
   current: ViewKey;
-  collapsed: boolean;
-  workspaceClassName: string;
-  onToggleSidebar: () => void;
   onSelectView: (view: ViewKey) => void;
-  children: ReactNode;
+  teacherCollapsed?: boolean;
+  onToggleTeacher?: () => void;
+  center?: ReactNode;
+  teacher?: ReactNode;
+  sessionLabel?: string | null;
 }
 
 export function AppShell({
   current,
-  collapsed,
-  workspaceClassName,
-  onToggleSidebar,
+  teacherCollapsed,
+  onToggleTeacher,
   onSelectView,
-  children
+  center,
+  teacher,
+  sessionLabel
 }: AppShellProps): JSX.Element {
   return (
-    <div className={collapsed ? 'prototype-shell collapsed' : 'prototype-shell'}>
-      <Sidebar current={current} collapsed={collapsed} onToggle={onToggleSidebar} onSelect={onSelectView} />
-      <main className={workspaceClassName}>{children}</main>
+    <div className="shell-v2">
+      <ActivityBar
+        current={current}
+        onSelect={onSelectView}
+        sessionLabel={sessionLabel}
+      />
+      {center}
+      {teacher}
+      {teacherCollapsed && (
+        <button type="button" className="panel-expand-btn right visible" onClick={onToggleTeacher} aria-label="展开 AI 导师" title="展开 AI 导师">提问</button>
+      )}
     </div>
   );
 }

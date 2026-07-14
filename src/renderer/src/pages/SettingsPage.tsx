@@ -16,7 +16,7 @@ export function SettingsPage({
   const [apiKey, setApiKey] = useState('');
   const [blockMinutes, setBlockMinutes] = useState(settings.defaultBlockMinutes);
   const [learningStyle, setLearningStyle] = useState(settings.learningStyle ?? 'detailed');
-  const [saved, setSaved] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
   const [goalId, setGoalId] = useState<string | null>(null);
   const [learnerFacts, setLearnerFacts] = useState<LearnerFact[]>([]);
   const [factKey, setFactKey] = useState('');
@@ -66,7 +66,8 @@ export function SettingsPage({
   }
 
   async function handleSave(): Promise<void> {
-    await runAction('保存设置', async () => {
+    setSaveStatus('saving');
+    try {
       await window.studyApp.settings.update({
         deepseekBaseUrl: baseUrl,
         deepseekModel: model,
@@ -78,10 +79,18 @@ export function SettingsPage({
       });
       setApiKey('');
       await onSaved();
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    });
+      setSaveStatus('saved');
+    } catch (error) {
+      setSaveStatus('failed');
+      await runAction('保存设置', async () => { throw error; });
+    }
   }
+
+  const hasUnsavedChanges = Boolean(apiKey)
+    || baseUrl !== settings.deepseekBaseUrl
+    || model !== settings.deepseekModel
+    || blockMinutes !== settings.defaultBlockMinutes
+    || learningStyle !== (settings.learningStyle ?? 'detailed');
 
   return (
     <section className="settings-layout">
@@ -91,10 +100,10 @@ export function SettingsPage({
       </header>
 
       <div className="settings-grid">
-        <section className="settings-card">
+        <section className="settings-card settings-ai">
           <div className="settings-card-title">
             <span className="settings-card-icon ai"><Brain size={22} /></span>
-            <h3>AI 助手</h3>
+            <h3>AI 模型</h3>
           </div>
           <div className="settings-row">
             <span>API Key</span>
@@ -110,21 +119,16 @@ export function SettingsPage({
             />
           </label>
           <label className="settings-field">
-            <span>Model</span>
+            <span>模型</span>
             <input value={model} onChange={(event) => setModel(event.target.value)} autoComplete="off" />
           </label>
           <label className="settings-field">
-            <span>Base URL</span>
+            <span>服务地址</span>
             <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} autoComplete="off" />
           </label>
-          <button className="primary-action full" type="button" onClick={() => void handleSave()}>
-            {saved ? (
-              <span className="save-success"><Check size={16} /> 已保存</span>
-            ) : '保存设置'}
-          </button>
         </section>
 
-        <section className="settings-card">
+        <section className="settings-card settings-context">
           <div className="settings-card-title">
             <span className="settings-card-icon"><Brain size={22} /></span>
             <h3>学习上下文</h3>
@@ -179,7 +183,7 @@ export function SettingsPage({
           )}
         </section>
 
-        <section className="settings-card">
+        <section className="settings-card settings-preferences">
           <div className="settings-card-title">
             <span className="settings-card-icon"><Target size={22} /></span>
             <h3>学习偏好</h3>
@@ -207,10 +211,10 @@ export function SettingsPage({
           </label>
         </section>
 
-        <section className="settings-card">
+        <section className="settings-card settings-data">
           <div className="settings-card-title">
             <span className="settings-card-icon"><Database size={22} /></span>
-            <h3>数据管理</h3>
+            <h3>隐私与本地数据</h3>
           </div>
           <p className="settings-hint">导出当前学习目标的所有数据为 JSON 文件，用于备份或迁移。</p>
           <button
@@ -236,10 +240,10 @@ export function SettingsPage({
         </section>
 
         {tokenStats && tokenStats.totalCalls > 0 && (
-          <section className="settings-card">
+          <section className="settings-card settings-diagnostics">
             <div className="settings-card-title">
               <span className="settings-card-icon"><Coins size={22} /></span>
-              <h3>Token 用量统计</h3>
+              <h3>用量与诊断</h3>
             </div>
             <div className="settings-row">
               <span>总输入 tokens</span>
@@ -267,6 +271,17 @@ export function SettingsPage({
           </section>
         )}
       </div>
+      <footer className="settings-save-bar" aria-live="polite">
+        <span className={`save-status ${saveStatus}`}>
+          {saveStatus === 'saving' ? '正在保存设置…'
+            : saveStatus === 'failed' ? '保存失败，请重试'
+              : saveStatus === 'saved' && !hasUnsavedChanges ? <><Check size={15} />已保存</>
+                : hasUnsavedChanges ? '存在未保存更改' : '设置已同步到本地'}
+        </span>
+        <button className="primary-action" type="button" disabled={!hasUnsavedChanges || saveStatus === 'saving'} onClick={() => void handleSave()}>
+          {saveStatus === 'saving' ? '保存中…' : '保存设置'}
+        </button>
+      </footer>
     </section>
   );
 }

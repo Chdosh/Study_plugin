@@ -59,6 +59,63 @@ describe('PlanningModule', () => {
     expect(store.releaseGenerationLock).toHaveBeenCalledWith('daily_guide:goal-1');
   });
 
+  it('草稿创建失败时返回可重试结果并记录前置阶段', async () => {
+    const { store, deps } = fixture({
+      ensureDraftDailyGuide: vi.fn().mockRejectedValue(new Error('草稿写入失败'))
+    });
+
+    const result = await new PlanningModule(store).prepareCurrentLearningDay({}, deps);
+
+    expect(result).toEqual({ todayState: 'generation_failed', errorMessage: '草稿写入失败' });
+    expect(deps.dailyGuideAgent.run).not.toHaveBeenCalled();
+    expect(store.saveAiReview).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed',
+      errorMessage: '草稿写入失败',
+      inputSnapshot: expect.objectContaining({ phase: 'create_draft' })
+    }));
+  });
+
+  it('运行设置读取失败时仍返回可重试结果，不依赖已加载模型信息', async () => {
+    const { store, deps } = fixture();
+    vi.mocked(deps.getRuntimeSettings).mockRejectedValue(new Error('设置读取失败'));
+
+    const result = await new PlanningModule(store).prepareCurrentLearningDay({}, deps);
+
+    expect(result).toEqual({ todayState: 'generation_failed', errorMessage: '设置读取失败' });
+    expect(store.saveAiReview).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'local',
+      model: 'not_loaded',
+      status: 'failed'
+    }));
+  });
+
+  it('失败审计写入异常不会遮蔽原始生成错误', async () => {
+    const { store, deps } = fixture({
+      ensureDraftDailyGuide: vi.fn().mockRejectedValue(new Error('草稿写入失败')),
+      saveAiReview: vi.fn().mockRejectedValue(new Error('审计写入失败'))
+    });
+
+    await expect(new PlanningModule(store).prepareCurrentLearningDay({}, deps)).resolves.toEqual({
+      todayState: 'generation_failed',
+      errorMessage: '草稿写入失败'
+    });
+  });
+
+  it('AI 输出保存失败时保留草稿并返回可重试结果', async () => {
+    const { store, deps } = fixture({
+      saveDailyGuideWithTransaction: vi.fn().mockRejectedValue(new Error('执行稿保存失败'))
+    });
+
+    const result = await new PlanningModule(store).prepareCurrentLearningDay({}, deps);
+
+    expect(result).toEqual({ todayState: 'generation_failed', errorMessage: '执行稿保存失败' });
+    expect(store.saveAiReview).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed',
+      errorMessage: '执行稿保存失败',
+      inputSnapshot: expect.objectContaining({ phase: 'save_daily_guide' })
+    }));
+  });
+
   it('同一目标的并发准备共享一次生成任务', async () => {
     const { store, deps } = fixture();
     let resolve!: (value: any) => void;

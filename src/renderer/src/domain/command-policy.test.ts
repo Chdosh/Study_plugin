@@ -143,14 +143,24 @@ describe('computeCommandPolicy', () => {
     expect(policy.sessionStatus).toBe('paused');
   });
 
-  it('allows submit when session active and current task done, more tasks remain', () => {
+  it('allows submit after the final action while the task remains active until evaluation passes', () => {
     const base = makeSnapshot();
+    const completedActions = base.dailyGuide!.tasks[0].actions.map((action) => ({ ...action, status: 'done' as const }));
     const snapshot = makeSnapshot({
       state: { ...base.state, sessionStatus: 'active' },
       dailyGuide: {
         ...base.dailyGuide!,
         tasks: [
-          { ...base.dailyGuide!.tasks[0], status: 'done' },
+          {
+            ...base.dailyGuide!.tasks[0],
+            status: 'active',
+            progressPercent: 100,
+            actions: completedActions,
+            completedActions: completedActions.map((action) => action.id),
+            remainingActions: [],
+            currentAction: null,
+            nextStartPoint: '行动步骤已完成，可以提交当前成果。'
+          },
           {
             ...base.dailyGuide!.tasks[0],
             id: 'task-2',
@@ -159,11 +169,23 @@ describe('computeCommandPolicy', () => {
           }
         ]
       },
-      dailyGuideTask: { ...base.dailyGuideTask!, status: 'done' }
+      dailyGuideTask: {
+        ...base.dailyGuideTask!,
+        status: 'active',
+        progressPercent: 100,
+        actions: completedActions,
+        completedActions: completedActions.map((action) => action.id),
+        remainingActions: [],
+        currentAction: null,
+        nextStartPoint: '行动步骤已完成，可以提交当前成果。'
+      },
+      dailyGuideAction: completedActions.at(-1) ?? null
     });
     const policy = computeCommandPolicy(snapshot);
     expect(policy.canStart).toBe(false);
     expect(policy.canCompleteAction).toBe(false);
+    expect(policy.canSkipAction).toBe(false);
+    expect(policy.canSkipTask).toBe(false);
     expect(policy.canSubmit).toBe(true);
     expect(policy.sessionStatus).toBe('active');
   });
@@ -180,5 +202,25 @@ describe('computeCommandPolicy', () => {
     const policy = computeCommandPolicy(snapshot);
     expect(policy.canStart).toBe(false);
     expect(policy.reasons.canStart).toBeTruthy();
+  });
+
+  it('allows starting the visible current task but blocks old Runtime commands when targets differ', () => {
+    const snapshot = makeSnapshot({
+      state: { ...makeSnapshot().state, sessionStatus: 'active' }
+    });
+
+    const policy = computeCommandPolicy(snapshot, {
+      guideId: 'guide-2',
+      taskId: 'task-2',
+      taskStatus: 'planned'
+    });
+
+    expect(policy.canStart).toBe(true);
+    expect(policy.canPause).toBe(false);
+    expect(policy.canCompleteAction).toBe(false);
+    expect(policy.canSkipAction).toBe(false);
+    expect(policy.canAskQuestion).toBe(false);
+    expect(policy.currentTaskId).toBe('task-2');
+    expect(policy.sessionStatus).toBe('not_started');
   });
 });

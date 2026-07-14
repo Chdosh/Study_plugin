@@ -1,5 +1,10 @@
 /* BASE */
 
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+
 html {
   font-family: var(--font-family-base);
   color: var(--color-text-primary);
@@ -12,6 +17,7 @@ body {
   min-height: 100vh;
   background: var(--color-bg-page);
   font-size: var(--font-size-md);
+  line-height: var(--line-height-normal);
 }
 
 button {
@@ -21,7 +27,7 @@ button {
 
 select {
   font: inherit;
-  border: 1px solid var(--color-border-default);
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   background: var(--color-bg-surface);
   color: var(--color-text-primary);
@@ -31,7 +37,7 @@ select {
 
 textarea {
   font: inherit;
-  border: 1px solid var(--color-border-default);
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   background: var(--color-bg-surface);
   color: var(--color-text-primary);
@@ -62,55 +68,7 @@ button:disabled {
   opacity: var(--disabled-opacity);
 }
 
-h2 {
-  margin: 0;
-}
-
-h3 {
-  margin: 0;
-}
-
-h4 {
-  margin: 0;
-}
-
-p {
-  margin: 0;
-}
-
-label {
-  display: grid;
-  gap: var(--space-2);
-  color: var(--color-text-muted);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-semibold);
-}
-
-select:hover {
-  border-color: var(--color-border-strong);
-}
-
-textarea:hover {
-  border-color: var(--color-border-strong);
-}
-
-select:focus {
-  border-color: var(--color-primary);
-}
-
-textarea:focus {
-  border-color: var(--color-primary);
-}
-
-input {
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-surface);
-  padding: var(--space-3);
-  color: var(--color-text-primary);
-  outline: none;
-}
-
-input:focus {
-  border-color: var(--color-primary);
-}
+h2 { margin: 0; }
+h3 { margin: 0; }
+h4 { margin: 0; }
+p { margin: 0; }

@@ -17,7 +17,7 @@ function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1180,
     height: 760,
-    minWidth: 960,
+    minWidth: 600,
     minHeight: 640,
     title: '学习管家',
     show: false,

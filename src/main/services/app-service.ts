@@ -406,7 +406,15 @@ export class AppService {
   private async generateReviewForClosedGuide(guideId: string): Promise<ReviewResult> {
     const guide = await this.store.getDailyGuideById(guideId);
     if (!guide) throw new Error(`Guide not found: ${guideId}`);
-    const snapshot = await this.store.getDaySnapshot(guide.date);
+    return this.generateReviewForDay(guide.date, guide.id);
+  }
+
+  async generateReview(date: string) {
+    return this.generateReviewForDay(date, date);
+  }
+
+  private async generateReviewForDay(date: string, summaryRefId: string): Promise<ReviewResult> {
+    const snapshot = await this.store.getDaySnapshot(date);
     const [profile, runtimeSettings] = await Promise.all([
       this.store.getPromptProfile(),
       this.settings.getRuntimeSettings()
@@ -414,11 +422,11 @@ export class AppService {
     const traceId = createTraceId();
     let metrics: AiCallMetrics | undefined;
     const reviewContext = await this.modules.context.build('generate_review');
-    const summaryRun = await this.store.beginLearningSummary('day', guide.id);
+    const summaryRun = await this.store.beginLearningSummary('day', summaryRefId);
     let output;
     try {
       output = await this.reflectionAgent.run({
-        date: guide.date,
+        date,
         snapshot,
         context: reviewContext.context,
         profile,
@@ -433,7 +441,7 @@ export class AppService {
     }
     const reviewId = await this.store.saveAiReview({
       kind: 'reflection',
-      date: guide.date,
+      date,
       provider: 'deepseek',
       model: runtimeSettings.deepseekModel,
       promptProfileId: profile.id,
@@ -444,7 +452,7 @@ export class AppService {
       status: 'success',
       metrics
     });
-    return { reviewId, date: guide.date, ...output };
+    return { reviewId, date, ...output };
   }
 
   async getTodayState(): Promise<TodayState> {
@@ -457,7 +465,6 @@ export class AppService {
     const hasRecoverablePlanDay = today.shortPlan.some((day) =>
       day.sessionStatus === 'active' && !usedShortPlanDayIds.has(day.id)
     );
-    if (hasRecoverablePlanDay) return 'generation_failed';
 
     const hasAvailablePlanDay = today.shortPlan.some((day) =>
       day.sessionStatus === 'pending' &&
@@ -473,7 +480,7 @@ export class AppService {
       return 'active';
     }
 
-    if (!hasAvailablePlanDay) return 'plan_exhausted';
+    if (!hasRecoverablePlanDay && !hasAvailablePlanDay) return 'plan_exhausted';
 
     return 'ready_to_generate';
   }
@@ -540,11 +547,19 @@ export class AppService {
 
   private async runRuntimeAudit(): Promise<RuntimeAuditResult> {
     const result = await this.store.auditRuntimeConsistency();
+    const guideChoices = await this.store.listCurrentGuideChoices();
     return {
       ...result,
       checkedAt: new Date().toISOString(),
-      requiresUserAction: result.conflicts.length > 0
+      requiresUserAction: result.conflicts.length > 0,
+      guideChoices
     };
+  }
+
+  async selectCurrentGuide(guideId: Id): Promise<RuntimeAuditResult> {
+    this.startupRuntimeAudit = null;
+    await this.store.selectCurrentGuide(guideId);
+    return this.runRuntimeAudit();
   }
 
   async exportGoalData(goalId: Id): Promise<Record<string, unknown>> {
@@ -590,70 +605,16 @@ export class AppService {
     return session;
   }
 
-  /**
-   * @deprecated 使用 skipCurrentTask() 代替。保留仅用于 IPC 兼容。
-   */
-  async skipBlock(_blockId: Id, _reason: string) {
-    return this.modules.runtime.dispatch({ type: 'skipCurrentTask' });
-  }
-
-  async generateReview(date: string) {
-    const [snapshot, profile, runtimeSettings] = await Promise.all([
-      this.store.getDaySnapshot(date),
-      this.store.getPromptProfile(),
-      this.settings.getRuntimeSettings()
-    ]);
-    const traceId = createTraceId();
-    let metrics: AiCallMetrics | undefined;
-    const reviewContext = await this.modules.context.build('generate_review');
-    const summaryRun = await this.store.beginLearningSummary('day', date);
-    let output;
-    try {
-      output = await this.reflectionAgent.run({
-        date,
-        snapshot,
-        context: reviewContext.context,
-        profile,
-        settings: runtimeSettings,
-        traceId,
-        onMetrics: (m) => { metrics = m; }
-      });
-      await this.store.completeLearningSummary(summaryRun.id, output);
-    } catch (error) {
-      await this.store.failLearningSummary(summaryRun.id, error instanceof CategorizedError ? error.category : 'ai_failure');
-      throw error;
-    }
-    const reviewId = await this.store.saveAiReview({
-      kind: 'reflection',
-      date,
-      provider: 'deepseek',
-      model: runtimeSettings.deepseekModel,
-      promptProfileId: profile.id,
-      promptVersionId: profile.activeVersionId,
-      inputSnapshot: { daySnapshot: snapshot, contextSourceIds: reviewContext.contextSourceIds },
-      output,
-      outputSchemaVersion: 'review.v1',
-      status: 'success',
-      metrics
-    });
-    return {
-      reviewId,
-      date,
-      ...output
-    };
-  }
-
   async getActiveSession(): Promise<{ session: StudySession; block: DailyPlanBlock | null } | null> {
-    const sessions = await this.store.listSessions();
-    const active = sessions.find((s) => s.status === 'active' || s.status === 'paused');
-    if (!active || !active.taskId) return null;
-    const guideTaskSnapshot = await this.store.getLearningRuntimeSnapshot();
-    const guideTask = guideTaskSnapshot.dailyGuideTask;
-    if (!guideTask) return null;
-    if (guideTask.status === 'done' || guideTask.status === 'skipped' || guideTask.status === 'deferred') {
-      return null;
+    let context = await this.store.getCurrentLearningContext();
+    if (!context.session) {
+      const sessions = await this.store.listSessions();
+      if (sessions.some((session) => session.status === 'active' || session.status === 'paused')) {
+        await this.store.auditRuntimeConsistency();
+        context = await this.store.getCurrentLearningContext();
+      }
     }
-    return { session: active, block: null };
+    return context.session ? { session: context.session, block: null } : null;
   }
 
   async getAccumulatedSeconds(blockId: string, excludeSessionId?: string): Promise<number> {
@@ -713,8 +674,10 @@ export class AppService {
     return this.modules.runtime.dispatch({ type: 'skipCurrentAction' });
   }
 
-  skipCurrentTask() {
-    return this.modules.runtime.dispatch({ type: 'skipCurrentTask' });
+  async skipCurrentTask() {
+    const snapshot = await this.modules.runtime.dispatch({ type: 'skipCurrentTask' });
+    this.focusMonitor.stop();
+    return snapshot;
   }
 
   async terminateLearning() {
@@ -846,8 +809,20 @@ export class AppService {
     if (!before.dailyGuideAction) {
       throw new Error('当前没有学习步骤，无法提交结果。');
     }
+    const allActionsTerminal = Boolean(
+      before.dailyGuideTask?.actions.length
+      && before.dailyGuideTask.actions.every((action) => action.status === 'done' || action.status === 'skipped')
+    );
+    if (!allActionsTerminal) {
+      throw new CategorizedError('validation_error', '请先完成或跳过当前任务的全部步骤，再提交结果。');
+    }
     const active = await this.getActiveSession();
     const submission = await this.store.createSubmission(before.dailyGuideAction.id, active?.session.id ?? null, content);
+    if (active?.session.status === 'active') {
+      this.focusMonitor.stop();
+      const paused = await this.store.pauseSession(active.session.id);
+      await this.pushSessionState(paused);
+    }
     return this.evaluateSavedSubmission(submission, promptProfileId);
   }
 

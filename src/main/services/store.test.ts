@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { asc, desc, eq, sql } from 'drizzle-orm';
+import { asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { createDatabase, type DatabaseClient } from '../db/client';
 import type { Database } from '../db/client';
 import {
@@ -74,6 +74,31 @@ describe('StudyStore', () => {
     expect((await store.listSessions()).filter((session) => session.status === 'active')).toHaveLength(1);
   });
 
+  it('closing previous session when starting a new task prevents session leak', async () => {
+    const guide = await createConfirmedGuide();
+    const task1Id = guide.tasks[0].id;
+    const task2Id = guide.tasks[1].id;
+
+    // 开始任务 1，运行一段时间
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-05T10:00:00.000Z'));
+    const session1 = await store.startSession(task1Id);
+    expect(session1.status).toBe('active');
+
+    // 开始任务 2（推进）→ 任务 1 的 session 应被自动关闭
+    vi.setSystemTime(new Date('2026-07-05T10:05:00.000Z'));
+    const session2 = await store.startSession(task2Id);
+    expect(session2.status).toBe('active');
+
+    const sessions = await store.listSessions();
+    const activeSessions = sessions.filter((s) => s.status === 'active');
+    expect(activeSessions).toHaveLength(1);
+    expect(activeSessions[0].id).toBe(session2.id);
+
+    const task1Session = sessions.find((s) => s.id === session1.id);
+    expect(task1Session?.status).toBe('completed');
+  });
+
   it('persists question branches and returns to the same Daily Guide action', async () => {
     const guide = await createConfirmedGuide();
     const taskId = guide.tasks[0].id;
@@ -92,6 +117,14 @@ describe('StudyStore', () => {
 
     expect(resolved.state.activeStepId).toBe(actionId);
     expect(resolved.state.activeQuestionThreadId).toBeNull();
+
+    const exportedAfterQuestion = await store.exportGoalData(guide.goalId);
+    expect(exportedAfterQuestion.questionThreads).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: thread.id, dailyGuideActionId: actionId })])
+    );
+    expect(exportedAfterQuestion.studySessions).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: session.id, taskId })])
+    );
 
     const afterAction = await store.completeCurrentAction();
     expect(afterAction.dailyGuideAction?.title).toBe('跑主流程');
@@ -119,6 +152,11 @@ describe('StudyStore', () => {
         carryForward: '下一项继续整理代码地图。'
       }
     });
+
+    const exportedAfterSubmission = await store.exportGoalData(guide.goalId);
+    expect(exportedAfterSubmission.submissions).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: submission.id, dailyGuideActionId: afterAction.dailyGuideAction!.id })])
+    );
 
     const completed = await store.getLearningRuntimeSnapshot();
     expect(completed.state.activeDailyTaskId).toBe(guide.tasks[1].id);
@@ -202,6 +240,87 @@ async function createConfirmedGuide() {
   return store.confirmDailyGuide(result.guide.id);
 }
 
+async function createLaterGuideForSameGoal(goalId: string) {
+  const sourceGuideRows = await store.db.select().from(dailyGuides).where(eq(dailyGuides.goalId, goalId)).orderBy(desc(dailyGuides.createdAt)).limit(1);
+  const sourceGuide = sourceGuideRows[0];
+  if (!sourceGuide) throw new Error('missing source guide');
+  const stageRows = await store.db.select().from(roadmapStages).where(eq(roadmapStages.goalId, goalId)).orderBy(asc(roadmapStages.position)).limit(1);
+  const dayId = 'later-day';
+  const guideId = 'later-guide';
+  const taskId = 'later-task';
+  const actionId = 'later-action';
+  await store.db.insert(shortPlanDays).values({
+    id: dayId,
+    goalId,
+    roadmapStageId: stageRows[0]?.id ?? null,
+    dayIndex: 2,
+    date: '2026-07-06',
+    sessionStatus: 'active',
+    title: '继续接管项目',
+    focus: '验证新的当前任务',
+    tasksJson: '[]',
+    expectedOutput: '新的学习结果',
+    successCriteria: '完成新的当前任务',
+    locked: true,
+    createdAt: '9999-07-06T08:00:00.000Z'
+  });
+  await store.db.insert(dailyGuides).values({
+    id: guideId,
+    goalId,
+    planId: sourceGuide.planId,
+    shortPlanDayId: dayId,
+    date: '2026-07-06',
+    status: 'confirmed',
+    sessionStatus: 'active',
+    weekFocus: '',
+    todayGoal: '执行新的当前任务',
+    deliverablesJson: '[]',
+    boundariesJson: '[]',
+    acceptanceCriteriaJson: '[]',
+    tomorrowActionsJson: '[]',
+    createdAt: '9999-07-06T08:00:00.000Z',
+    confirmedAt: '9999-07-06T08:00:00.000Z'
+  });
+  await store.db.insert(dailyGuideTasks).values({
+    id: taskId,
+    guideId,
+    roadmapStageId: stageRows[0]?.id ?? null,
+    legacyPlanBlockId: null,
+    title: '新的当前任务',
+    objective: '验证当前上下文一致',
+    scope: '只验证状态解析',
+    estimatedMinMinutes: 10,
+    estimatedTargetMinutes: 20,
+    estimatedMaxMinutes: 30,
+    deliverable: '验证结果',
+    doneWhenJson: '["上下文一致"]',
+    quickHint: '检查当前 Guide',
+    evaluationMode: 'ai',
+    submissionPolicy: 'once_after_task',
+    carryoverAllowed: true,
+    status: 'planned',
+    progressPercent: 0,
+    currentActionId: actionId,
+    nextStartPoint: null,
+    totalElapsedMinutes: 0,
+    position: 0,
+    createdAt: '9999-07-06T08:00:00.000Z',
+    updatedAt: '9999-07-06T08:00:00.000Z'
+  });
+  await store.db.insert(dailyGuideActions).values({
+    id: actionId,
+    taskId,
+    title: '执行新行动',
+    instruction: '验证新的行动目标',
+    checkpoint: '上下文一致',
+    status: 'planned',
+    progressNote: null,
+    completedAt: null,
+    position: 0
+  });
+  return { dayId, guideId, taskId, actionId };
+}
+
 // ── Runtime Convergence Tests ──────────────────────────────────────
 // These tests validate the post-convergence state.
 // Marked .skip initially — unskip after step 2–5 are complete.
@@ -254,16 +373,23 @@ describe('Runtime convergence', () => {
     expect(awaitingSubmission.dailyGuide?.tasks[1].status).toBe('planned');
   });
 
-  it('跳过主任务时保留 skipped 语义并进入同一 Guide 的下一任务', async () => {
+  it('跳过主任务时结束旧 Session，并让同一 Guide 的下一任务保持未开始', async () => {
     const guide = await createConfirmedGuide();
-    await store.startSession(guide.tasks[0].id);
+    const session = await store.startSession(guide.tasks[0].id);
 
     const afterSkip = await store.skipCurrentTask();
+    const sessionRows = await db
+      .select()
+      .from(studySessions)
+      .where(eq(studySessions.id, session.id));
 
     expect(afterSkip.dailyGuide?.tasks[0].status).toBe('skipped');
     expect(afterSkip.state.activeDailyTaskId).toBe(guide.tasks[1].id);
     expect(afterSkip.dailyGuideTask?.status).toBe('active');
     expect(afterSkip.dailyGuideAction?.id).toBe(guide.tasks[1].actions[0].id);
+    expect(afterSkip.state.sessionStatus).toBe('idle');
+    expect(sessionRows[0].status).toBe('skipped');
+    expect(sessionRows[0].endedAt).not.toBeNull();
     expect(afterSkip.dailyGuide?.sessionStatus).toBe('active');
   });
 
@@ -664,6 +790,7 @@ describe('Runtime convergence', () => {
       goalId: goal.id,
       items: [{ key: 'React Hooks 概念混淆', summary: 'React Hooks 概念混淆', sourceType: 'misconception', sourceId: 'submission-1' }]
     });
+
     await store.recordKnowledgeItems({
       goalId: goal.id,
       items: [{ key: '对 React Hooks 的理解仍有混淆', summary: '对 React Hooks 的理解仍有混淆', sourceType: 'misconception', sourceId: 'submission-2' }]
@@ -752,10 +879,194 @@ describe('Runtime convergence', () => {
       focusScore: null,
       notes: null
     });
+    // 多个 session 时自动修复：保留最近一条，旧 session 标记为 completed
     const conflicted = await store.auditRuntimeConsistency();
-    expect(conflicted.consistent).toBe(false);
-    expect(conflicted.conflicts.some((item) => item.field === 'focusSession')).toBe(true);
-    expect((await store.listSessions()).map((item) => item.id)).toContain(session.id);
+    expect(conflicted.consistent).toBe(true);
+    expect(conflicted.fixed.some((item) => item.includes('focusSessions cleaned'))).toBe(true);
+    const sessionsAfter = await store.listSessions();
+    expect(sessionsAfter.filter((s) => s.status === 'active' || s.status === 'paused')).toHaveLength(1);
+    expect(sessionsAfter.find((s) => s.id === 'session-conflict')?.status).toBe('completed');
+  });
+  it('startSession closes resumable Sessions from older Guides of the same Goal', async () => {
+    const oldGuide = await createConfirmedGuide();
+    const oldSession = await store.startSession(oldGuide.tasks[0].id);
+    const current = await createLaterGuideForSameGoal(oldGuide.goalId);
+    await store.confirmDailyGuide(current.guideId);
+
+    const currentSession = await store.startSession(current.taskId);
+
+    const sessions = await store.listSessions();
+    expect(sessions.find((session) => session.id === oldSession.id)?.status).toBe('completed');
+    expect(sessions.filter((session) => session.status === 'active' || session.status === 'paused')).toEqual([
+      expect.objectContaining({ id: currentSession.id, taskId: current.taskId, status: 'active' })
+    ]);
+  });
+  it('auditRuntimeConsistency completes a terminal-task Session and moves Runtime to the current Guide', async () => {
+    const oldGuide = await createConfirmedGuide();
+    const oldTaskId = oldGuide.tasks[0].id;
+    const oldSession = await store.startSession(oldTaskId);
+    await store.db.update(dailyGuideTasks).set({ status: 'done', progressPercent: 100 }).where(eq(dailyGuideTasks.id, oldTaskId));
+    const current = await createLaterGuideForSameGoal(oldGuide.goalId);
+
+    const result = await store.auditRuntimeConsistency();
+
+    const sessions = await store.listSessions();
+    const runtime = await store.getLearningRuntimeSnapshot();
+    const today = await store.getActiveGuide();
+    expect(result.consistent).toBe(false);
+    expect(result.conflicts.some((item) => item.field === 'dailyGuides.current')).toBe(true);
+    expect(result.fixed.some((item) => item.includes('terminal task Session'))).toBe(true);
+    expect(sessions.find((session) => session.id === oldSession.id)?.status).toBe('completed');
+    expect(runtime.state.activeDailyTaskId).toBe(current.taskId);
+    expect(runtime.state.activeStepId).toBe(current.actionId);
+    expect(runtime.state.sessionStatus).toBe('idle');
+    expect(runtime.dailyGuide?.id).toBe(current.guideId);
+    expect(today.guide?.id).toBe(runtime.dailyGuide?.id);
+  });
+  it('auditRuntimeConsistency closes completed older Guides and keeps one current Guide per Goal', async () => {
+    const oldGuide = await createConfirmedGuide();
+    await store.db.update(dailyGuideActions).set({ status: 'done', completedAt: '2026-07-05T12:00:00.000Z' })
+      .where(inArray(dailyGuideActions.taskId, oldGuide.tasks.map((task) => task.id)));
+    await store.db.update(dailyGuideTasks).set({ status: 'done', progressPercent: 100 })
+      .where(eq(dailyGuideTasks.guideId, oldGuide.id));
+    const current = await createLaterGuideForSameGoal(oldGuide.goalId);
+
+    const result = await store.auditRuntimeConsistency();
+
+    const guideRows = await store.db.select().from(dailyGuides).where(eq(dailyGuides.goalId, oldGuide.goalId));
+    const dayRows = await store.db.select().from(shortPlanDays).where(eq(shortPlanDays.goalId, oldGuide.goalId));
+    expect(result.consistent).toBe(true);
+    expect(guideRows.filter((guide) => guide.sessionStatus === 'active' || guide.sessionStatus === 'draft')).toEqual([
+      expect.objectContaining({ id: current.guideId })
+    ]);
+    expect(guideRows.find((guide) => guide.id === oldGuide.id)).toEqual(
+      expect.objectContaining({ status: 'completed', sessionStatus: 'closed' })
+    );
+    expect(dayRows.find((day) => day.id === oldGuide.shortPlanDayId)).toEqual(
+      expect.objectContaining({ sessionStatus: 'completed', locked: true })
+    );
+  });
+  it('auditRuntimeConsistency closes one active Guide whose tasks are all done', async () => {
+    const guide = await createConfirmedGuide();
+    await store.db.update(dailyGuideActions).set({ status: 'done', completedAt: '2026-07-05T12:00:00.000Z' })
+      .where(inArray(dailyGuideActions.taskId, guide.tasks.map((task) => task.id)));
+    await store.db.update(dailyGuideTasks).set({ status: 'done', progressPercent: 100 })
+      .where(eq(dailyGuideTasks.guideId, guide.id));
+
+    const result = await store.auditRuntimeConsistency();
+    const storedGuide = await store.getDailyGuideById(guide.id);
+    const dayRows = await store.db.select().from(shortPlanDays).where(eq(shortPlanDays.id, guide.shortPlanDayId!));
+
+    expect(result.consistent).toBe(true);
+    expect(storedGuide).toEqual(expect.objectContaining({ status: 'completed', sessionStatus: 'closed' }));
+    expect(dayRows[0]).toEqual(expect.objectContaining({ sessionStatus: 'completed', locked: true }));
+  });
+  it('auditRuntimeConsistency never hides unfinished Guides after the latest day is skipped', async () => {
+    const unfinishedGuide = await createConfirmedGuide();
+    const latestGuide = await createLaterGuideForSameGoal(unfinishedGuide.goalId);
+
+    await store.auditRuntimeConsistency();
+    await store.db.update(dailyGuideTasks).set({ status: 'skipped' }).where(eq(dailyGuideTasks.guideId, latestGuide.guideId));
+    await store.auditRuntimeConsistency();
+
+    const guideRows = await store.db.select().from(dailyGuides).where(eq(dailyGuides.goalId, unfinishedGuide.goalId));
+    const current = await store.getActiveGuide(true);
+    expect(guideRows.find((guide) => guide.id === unfinishedGuide.id)).toEqual(
+      expect.objectContaining({ status: 'confirmed', sessionStatus: 'active' })
+    );
+    expect(guideRows.find((guide) => guide.id === latestGuide.guideId)).toEqual(
+      expect.objectContaining({ status: 'confirmed', sessionStatus: 'active' })
+    );
+    expect(current.guide?.id).toBe(unfinishedGuide.id);
+    expect(current.guide?.tasks[0].id).toBe(unfinishedGuide.tasks[0].id);
+  });
+  it('auditRuntimeConsistency preserves one recoverable active ShortPlanDay without a Guide', async () => {
+    const goal = await store.createGoal('可恢复学习日', '保留生成中断状态');
+    await store.db.insert(shortPlanDays).values({
+      id: 'orphan-active-day',
+      goalId: goal.id,
+      roadmapStageId: null,
+      dayIndex: 1,
+      date: '2026-07-13',
+      sessionStatus: 'active',
+      title: '等待重新生成',
+      focus: '恢复执行稿生成',
+      tasksJson: '[]',
+      expectedOutput: '新的执行稿',
+      successCriteria: '生成成功',
+      locked: false,
+      createdAt: '2026-07-13T08:00:00.000Z'
+    });
+
+    const result = await store.auditRuntimeConsistency();
+    const dayRows = await store.db.select().from(shortPlanDays).where(eq(shortPlanDays.id, 'orphan-active-day'));
+    const current = await store.getActiveGuide();
+
+    expect(result.consistent).toBe(true);
+    expect(dayRows[0]).toEqual(expect.objectContaining({ sessionStatus: 'active', locked: false }));
+    expect(current.guide).toBeNull();
+  });
+  it('auditRuntimeConsistency locks confirmed Guide days without changing their task data', async () => {
+    const guide = await createConfirmedGuide();
+    await store.db.update(shortPlanDays).set({ locked: false }).where(eq(shortPlanDays.id, guide.shortPlanDayId!));
+
+    const result = await store.auditRuntimeConsistency();
+    const dayRows = await store.db.select().from(shortPlanDays).where(eq(shortPlanDays.id, guide.shortPlanDayId!));
+
+    expect(result.consistent).toBe(true);
+    expect(result.fixed.some((item) => item.includes('confirmed ShortPlanDays locked'))).toBe(true);
+    expect(dayRows[0].locked).toBe(true);
+    expect((await store.getDailyGuideById(guide.id))?.tasks.map((task) => task.id)).toEqual(guide.tasks.map((task) => task.id));
+  });
+  it('confirmDailyGuide selects the new Guide and keeps unfinished Guides recoverable without archiving them', async () => {
+    const oldGuide = await createConfirmedGuide();
+    const current = await createLaterGuideForSameGoal(oldGuide.goalId);
+
+    await store.confirmDailyGuide(current.guideId);
+
+    const guideRows = await store.db.select().from(dailyGuides).where(eq(dailyGuides.goalId, oldGuide.goalId));
+    const runtime = await store.getLearningRuntimeSnapshot();
+    expect(guideRows.find((guide) => guide.id === current.guideId)).toEqual(
+      expect.objectContaining({ status: 'confirmed', sessionStatus: 'active' })
+    );
+    expect(guideRows.find((guide) => guide.id === oldGuide.id)).toEqual(
+      expect.objectContaining({ status: 'confirmed', sessionStatus: 'closed' })
+    );
+    expect(runtime.dailyGuide?.id).toBe(current.guideId);
+    expect(runtime.state.activeDailyTaskId).toBe(current.taskId);
+  });
+  it('offers readable Guide choices, recommends recent Session, and resolves the conflict explicitly', async () => {
+    const recentSessionGuide = await createConfirmedGuide();
+    await store.startSession(recentSessionGuide.tasks[0].id);
+    const selected = await createLaterGuideForSameGoal(recentSessionGuide.goalId);
+
+    const choices = await store.listCurrentGuideChoices();
+    expect(choices).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        guideId: recentSessionGuide.id,
+        dayTitle: '跑通并梳理项目',
+        taskTitle: '锁定今天边界',
+        isRecommended: true
+      }),
+      expect.objectContaining({
+        guideId: selected.guideId,
+        dayTitle: '继续接管项目',
+        taskTitle: '新的当前任务'
+      })
+    ]));
+
+    await store.selectCurrentGuide(selected.guideId);
+
+    const guideRows = await store.db.select().from(dailyGuides).where(eq(dailyGuides.goalId, recentSessionGuide.goalId));
+    const dayRows = await store.db.select().from(shortPlanDays).where(eq(shortPlanDays.goalId, recentSessionGuide.goalId));
+    const runtime = await store.getLearningRuntimeSnapshot();
+    expect(guideRows.find((guide) => guide.id === selected.guideId)?.sessionStatus).toBe('active');
+    expect(guideRows.find((guide) => guide.id === recentSessionGuide.id)).toEqual(
+      expect.objectContaining({ status: 'confirmed', sessionStatus: 'closed' })
+    );
+    expect(dayRows.find((day) => day.id === recentSessionGuide.shortPlanDayId)?.sessionStatus).toBe('pending');
+    expect(runtime.dailyGuide?.id).toBe(selected.guideId);
+    expect(runtime.state.activeDailyTaskId).toBe(selected.taskId);
   });
   it('recordKnowledgeItems restores active status when a resolved item reappears', async () => {
     await store.db.delete(knowledgeItemEvidence);
