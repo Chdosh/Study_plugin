@@ -48,6 +48,10 @@ export function computeCommandPolicy(
     return { ...blank, reasons: { canStart: '暂无学习状态' } };
   }
 
+  if (snapshot.stageConflict) {
+    return { ...blank, reasons: { canStart: '当前任务的阶段归属需要先确认' } };
+  }
+
   const targetMismatch = Boolean(visibleTarget && (
     snapshot.dailyGuide?.id !== visibleTarget.guideId ||
     snapshot.dailyGuideTask?.id !== visibleTarget.taskId
