@@ -146,13 +146,12 @@ export class DailyGuidePersistence {
     const now = nowIso();
 
     return await this.db.transaction(async (tx) => {
-      const activeStageRows = await tx
-        .select()
-        .from(roadmapStages)
-        .where(and(eq(roadmapStages.goalId, params.goal.id), eq(roadmapStages.status, 'active')))
-        .orderBy(asc(roadmapStages.position))
+      const targetDayRows = await tx.select({ roadmapStageId: shortPlanDays.roadmapStageId })
+        .from(shortPlanDays)
+        .where(and(eq(shortPlanDays.id, params.shortPlanDayId), eq(shortPlanDays.goalId, params.goal.id)))
         .limit(1);
-      const activeStageId = activeStageRows[0]?.id ?? null;
+      const targetStageId = targetDayRows[0]?.roadmapStageId ?? null;
+      if (!targetStageId) throw new Error('当前学习单元没有明确的长期阶段归属。');
 
       const existingRows = await tx.select().from(dailyGuides)
         .where(eq(dailyGuides.shortPlanDayId, params.shortPlanDayId)).limit(1);
@@ -214,7 +213,7 @@ export class DailyGuidePersistence {
 
         const guideTaskId = createId('daily_guide_task');
         await tx.insert(dailyGuideTasks).values({
-          id: guideTaskId, guideId, roadmapStageId: activeStageId, legacyPlanBlockId: planBlockId,
+          id: guideTaskId, guideId, roadmapStageId: targetStageId, legacyPlanBlockId: planBlockId,
           title: task.title, objective: task.objective, scope: task.scope,
           estimatedMinMinutes: task.estimatedMinutes.min,
           estimatedTargetMinutes: task.estimatedMinutes.target,
