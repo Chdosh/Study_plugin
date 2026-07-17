@@ -260,6 +260,7 @@ export type TodayState =
   | 'generating'
   | 'generation_failed'
   | 'active'
+  | 'stage_review_required'
   | 'completed'
   | 'plan_exhausted';
 
@@ -268,6 +269,8 @@ export interface TodayGuideState {
   roadmap: RoadmapStage[];
   shortPlan: ShortPlanDay[];
   guide: DailyGuide | null;
+  currentStage: RoadmapStage | null;
+  stageConflict: LearningStageConflict | null;
   todayState: TodayState;
   pendingEvaluations?: string[];
 }
@@ -487,6 +490,7 @@ export interface LearningRuntimeSnapshot {
   dailyGuideTask: DailyGuideTask | null;
   dailyGuideAction: DailyGuideAction | null;
   roadmapStage: RoadmapStage | null;
+  stageConflict: LearningStageConflict | null;
   questionThread: QuestionThread | null;
   questionMessages: QuestionMessage[];
   latestSubmission: LearningSubmission | null;
@@ -551,6 +555,20 @@ export interface RuntimeConsistencyConflict {
   actual: string;
 }
 
+export type LearningStageConflict =
+  | {
+      kind: 'task_day_mismatch';
+      message: string;
+      taskStage: { id: Id; title: string };
+      shortPlanDayStage: { id: Id; title: string };
+    }
+  | {
+      kind: 'formal_stage_mismatch';
+      message: string;
+      formalStage: { id: Id; title: string };
+      learningUnitStage: { id: Id; title: string };
+    };
+
 export interface CurrentGuideChoice {
   guideId: Id;
   date: string;
@@ -563,6 +581,16 @@ export interface CurrentGuideChoice {
   isCurrent: boolean;
 }
 
+export interface LearningUnitRecoveryChoice {
+  guideId: Id;
+  date: string;
+  dayTitle: string;
+  taskTitles: string[];
+  completedTaskCount: number;
+  skippedTaskCount: number;
+  totalTaskCount: number;
+}
+
 export interface RuntimeAuditResult {
   consistent: boolean;
   fixed: string[];
@@ -570,6 +598,7 @@ export interface RuntimeAuditResult {
   checkedAt: string;
   requiresUserAction: boolean;
   guideChoices: CurrentGuideChoice[];
+  learningUnitChoices: LearningUnitRecoveryChoice[];
 }
 
 export interface PlanVersionEntry {
@@ -667,6 +696,7 @@ export interface StudyAppApi {
   system: {
     auditRuntime: () => Promise<RuntimeAuditResult>;
     selectCurrentGuide: (guideId: Id) => Promise<RuntimeAuditResult>;
+    resolveLearningUnit: (guideId: Id, decision: 'restore' | 'skip') => Promise<RuntimeAuditResult>;
   };
   data: {
     exportGoal: (goalId: string) => Promise<Record<string, unknown>>;

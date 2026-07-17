@@ -72,6 +72,9 @@ export function registerIpcHandlers(appService: AppService): void {
   ipcMain.handle(ipcChannels.branchGetMessages, (_event, payload) => appService.getBranchMessages(payload.threadId));
   ipcMain.handle(ipcChannels.systemAuditRuntime, () => appService.auditRuntimeConsistency());
   ipcMain.handle(ipcChannels.systemSelectCurrentGuide, (_event, payload) => appService.selectCurrentGuide(payload.guideId));
+  ipcMain.handle(ipcChannels.systemResolveLearningUnit, (_event, payload) =>
+    appService.resolveLearningUnit(payload.guideId, payload.decision)
+  );
   ipcMain.handle(ipcChannels.dataExportGoal, (_event, payload) => appService.exportGoalData(payload.goalId));
   ipcMain.handle(ipcChannels.dataGetPlanVersions, (_event, payload) => appService.getPlanVersionsForGoal(payload.goalId));
   ipcMain.handle(ipcChannels.dataCreatePlanProposal, (_event, payload) => appService.createPlanProposal(payload.goalId, payload.proposal));

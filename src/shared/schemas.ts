@@ -166,6 +166,10 @@ export const shortPlanAgentOutputSchema = z.object({
         (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : v),
         z.number().int().min(1)
       ),
+      roadmapStagePosition: z.preprocess(
+        (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : v),
+        z.number().int().min(1)
+      ),
       title: z.string().min(1),
       focus: z.string().min(1),
       tasks: stringArrayFromAiSchema,
@@ -173,6 +177,17 @@ export const shortPlanAgentOutputSchema = z.object({
       successCriteria: z.string().min(1)
     })
   ).min(1).max(5)
+}).superRefine((value, context) => {
+  const ordered = [...value.days].sort((a, b) => a.dayIndex - b.dayIndex);
+  for (let index = 1; index < ordered.length; index += 1) {
+    if (ordered[index].roadmapStagePosition < ordered[index - 1].roadmapStagePosition) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['days', value.days.indexOf(ordered[index]), 'roadmapStagePosition'],
+        message: '近期计划不能从后续阶段倒退到更早阶段'
+      });
+    }
+  }
 });
 
 export const dailyGuideAgentOutputSchema = z.object({

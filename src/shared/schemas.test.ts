@@ -94,6 +94,7 @@ describe('AI output schemas', () => {
       days: [
         {
           dayIndex: 1,
+          roadmapStagePosition: 1,
           title: '梳理项目',
           focus: '理解目录和主流程',
           tasks: ['跑通项目', '写代码地图'],
@@ -396,6 +397,7 @@ describe('AI output schemas', () => {
       days: [
         {
           dayIndex: 1.2,
+          roadmapStagePosition: 1,
           title: '第一天',
           focus: '测试',
           tasks: ['任务'],
@@ -405,6 +407,21 @@ describe('AI output schemas', () => {
       ]
     });
     expect(plan.days[0].dayIndex).toBe(1);
+  });
+
+  it('requires stage ownership and rejects a short plan that moves backwards between stages', () => {
+    expect(() => shortPlanAgentOutputSchema.parse({
+      weekFocus: '测试',
+      days: [{ dayIndex: 1, title: '缺少阶段', focus: '测试', tasks: ['任务'], expectedOutput: '产出', successCriteria: '标准' }]
+    })).toThrow();
+
+    expect(() => shortPlanAgentOutputSchema.parse({
+      weekFocus: '测试',
+      days: [
+        { dayIndex: 1, roadmapStagePosition: 2, title: '项目', focus: '项目', tasks: ['任务'], expectedOutput: '产出', successCriteria: '标准' },
+        { dayIndex: 2, roadmapStagePosition: 1, title: '基础', focus: '基础', tasks: ['任务'], expectedOutput: '产出', successCriteria: '标准' }
+      ]
+    })).toThrow(/不能从后续阶段倒退/);
   });
 
   it('rejects estimatedMinutes that violate min <= target <= max', () => {
