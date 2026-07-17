@@ -15,6 +15,7 @@
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --font-weight-bold: 700;
+  --font-weight-heavy: 750;
   --line-height-tight: 1.2;
   --line-height-compact: 1.35;
   --line-height-normal: 1.6;
@@ -65,6 +66,8 @@
   --color-info-light: #E6F0F3;
   --color-error: #A83E32;
   --color-error-light: #FBE9E6;
+
+  --shadow-soft: 0 8px 24px rgba(42, 38, 36, 0.045);
 
   --control-height-sm: 30px;
   --control-height-md: 36px;
