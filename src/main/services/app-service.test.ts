@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { AiClient } from '../ai/ai-client';
-import { aiReviews, dailyGuides, goals, learningEvaluations, learningRuntimeStates, learningSubmissions, shortPlanDays, studySessions } from '../db/schema';
+import { aiReviews, dailyGuideTasks, dailyGuides, goals, learningEvaluations, learningRuntimeStates, learningSubmissions, shortPlanDays, studySessions } from '../db/schema';
 import { createDatabase, type DatabaseClient } from '../db/client';
 import type { Database } from '../db/client';
 import type { InferSelectModel } from 'drizzle-orm';
@@ -233,6 +233,59 @@ describe('AppService progressive AI flow', () => {
     expect(await appService.getActiveSession()).toBeNull();
   });
 
+  it('跳过学习单元最后一个任务后进入下一轮任务，而不是回到目标问答', async () => {
+    installDeterministicAi();
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+
+    await appService.startSession(layered.guide.tasks[0].id);
+    await appService.skipCurrentTask();
+    await appService.startSession(layered.guide.tasks[1].id);
+    const nextRound = await appService.skipCurrentTask();
+    const today = await appService.listTodayGuide();
+    const oldGuideRows = await db.select().from(dailyGuides).where(eq(dailyGuides.id, layered.guide.id));
+    const oldDayRows = await db.select().from(shortPlanDays).where(eq(shortPlanDays.id, layered.guide.shortPlanDayId!));
+    const runtimeRows = await db.select().from(learningRuntimeStates).where(eq(learningRuntimeStates.id, 'default'));
+
+    expect(today.goal?.id).toBe(confirmed.goal.id);
+    expect(today.guide?.id).not.toBe(layered.guide.id);
+    expect(today.guide?.tasks.length).toBeGreaterThan(0);
+    expect(nextRound.dailyGuide?.id).toBe(today.guide?.id);
+    expect(nextRound.dailyGuideTask?.id).toBe(today.guide?.tasks[0].id);
+    expect(runtimeRows[0].activeDailyTaskId).toBe(today.guide?.tasks[0].id);
+    expect(nextRound.state.sessionStatus).toBe('idle');
+    expect(await appService.getActiveSession()).toBeNull();
+    expect(oldGuideRows[0].status).toBe('confirmed');
+    expect(oldGuideRows[0].sessionStatus).toBe('closed');
+    expect(oldDayRows[0].sessionStatus).toBe('skipped');
+  });
+
+  it('最后任务跳过后若下一轮生成失败，保留跳过事实并可重复原命令恢复', async () => {
+    installDeterministicAi({ failDailyGuideAttempts: [2] });
+    await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
+    const confirmed = await appService.confirmOnboardingGoal();
+    const layered = await appService.generateLayeredPlan(confirmed.goal.id);
+    await appService.confirmDailyGuide(layered.guide.id);
+
+    await appService.startSession(layered.guide.tasks[0].id);
+    await appService.skipCurrentTask();
+    await appService.startSession(layered.guide.tasks[1].id);
+    await expect(appService.skipCurrentTask()).rejects.toThrow('当前任务已跳过并保存在记录中');
+
+    const afterFailure = await appService.listTodayGuide();
+    expect(afterFailure.todayState).toBe('generation_failed');
+    expect(afterFailure.goal?.id).toBe(confirmed.goal.id);
+    expect((await db.select().from(dailyGuideTasks).where(eq(dailyGuideTasks.guideId, layered.guide.id)))
+      .every((task) => task.status === 'skipped')).toBe(true);
+
+    const recovered = await appService.skipCurrentTask();
+    expect(recovered.dailyGuide?.id).not.toBe(layered.guide.id);
+    expect(recovered.dailyGuideTask).toBeTruthy();
+    expect(recovered.state.sessionStatus).toBe('idle');
+  });
+
   it('服务端拒绝在行动步骤未全部终态时提交', async () => {
     installDeterministicAi();
     await appService.sendOnboardingMessage('我想三个月内达到初级前端工程师水平，每天晚上有 2 小时。');
@@ -432,7 +485,7 @@ describe('AppService progressive AI flow', () => {
         return request.schema.parse({
           weekFocus: '测试',
           days: [{
-            dayIndex: 1, title: '测试', focus: '测试',
+            dayIndex: 1, roadmapStagePosition: 1, title: '测试', focus: '测试',
             tasks: ['测试'], expectedOutput: '测试', successCriteria: '测试'
           }]
         });
@@ -897,6 +950,7 @@ function installDeterministicAi(options: { failEvaluationAttempts?: number; fail
         days: [
           {
             dayIndex: 1,
+            roadmapStagePosition: 1,
             title: '跑通并梳理项目',
             focus: '建立项目所有权',
             tasks: ['跑一遍主流程', '写代码地图'],
@@ -905,6 +959,7 @@ function installDeterministicAi(options: { failEvaluationAttempts?: number; fail
           },
           {
             dayIndex: 2,
+            roadmapStagePosition: 1,
             title: '修演示级问题',
             focus: '只修影响演示的 bug',
             tasks: ['整理 bug 清单', '修最高优先级问题'],
@@ -913,6 +968,7 @@ function installDeterministicAi(options: { failEvaluationAttempts?: number; fail
           },
           {
             dayIndex: 3,
+            roadmapStagePosition: 1,
             title: '准备面试表达',
             focus: '把项目讲清楚',
             tasks: ['写 README', '写问答'],
@@ -1084,7 +1140,7 @@ function installDeterministicAiWithNeedMoreInfo(): Array<{ operation: string }> 
         weekFocus: '把项目变成可讲、可演示的资产',
         days: [
           {
-            dayIndex: 1, title: '跑通并梳理项目', focus: '建立项目所有权',
+            dayIndex: 1, roadmapStagePosition: 1, title: '跑通并梳理项目', focus: '建立项目所有权',
             tasks: ['跑一遍主流程', '写代码地图'],
             expectedOutput: '项目接管文档初稿',
             successCriteria: '能说清入口、主流程和关键模块'
@@ -1164,7 +1220,7 @@ function installDeterministicAiWithDailyGuideFailure(): Array<{ operation: strin
       return request.schema.parse({
         weekFocus: '测试',
         days: [{
-          dayIndex: 1, title: '测试', focus: '测试',
+          dayIndex: 1, roadmapStagePosition: 1, title: '测试', focus: '测试',
           tasks: ['测试'], expectedOutput: '测试', successCriteria: '测试'
         }]
       });

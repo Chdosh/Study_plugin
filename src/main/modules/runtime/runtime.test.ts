@@ -66,6 +66,7 @@ function snapshot(activeStepId: string | null): LearningRuntimeSnapshot {
     dailyGuideTask: null,
     dailyGuideAction: null,
     roadmapStage: null,
+    stageConflict: null,
     questionThread: null,
     questionMessages: [],
     latestSubmission: null,

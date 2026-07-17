@@ -4,10 +4,10 @@ import { PlanningModule, type PlanningStore, type PrepareCurrentLearningDayDeps 
 function fixture(overrides: Partial<PlanningStore> = {}) {
   const goal = { id: 'goal-1' } as any;
   const day = {
-    id: 'day-1', dayIndex: 1, title: '第一天', sessionStatus: 'pending', date: null
+    id: 'day-1', roadmapStageId: 'stage-1', dayIndex: 1, title: '第一天', sessionStatus: 'pending', date: null
   } as any;
   const store = {
-    getActiveGuide: vi.fn().mockResolvedValue({ goal, roadmap: [], shortPlan: [day], guide: null }),
+    getActiveGuide: vi.fn().mockResolvedValue({ goal, roadmap: [{ id: 'stage-1', status: 'active' }], shortPlan: [day], guide: null }),
     getUsedShortPlanDayIds: vi.fn().mockResolvedValue(new Set<string>()),
     activateShortPlanDay: vi.fn().mockResolvedValue(day),
     getPreviousCompletedLearningDayContext: vi.fn().mockResolvedValue(null),

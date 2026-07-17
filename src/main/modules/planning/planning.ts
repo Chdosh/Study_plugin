@@ -123,13 +123,14 @@ export class PlanningModule {
 
     try {
       const usedDayIds = await this.store.getUsedShortPlanDayIds(goal.id);
+      const activeStageId = roadmap.find((stage) => stage.status === 'active')?.id ?? null;
       targetDay = pendingDraft
         ? shortPlan.find((day) => day.id === existingGuide.shortPlanDayId) ?? null
-        : shortPlan.find((day) => day.sessionStatus === 'active' && !usedDayIds.has(day.id)) ?? null;
+        : shortPlan.find((day) => day.roadmapStageId === activeStageId && day.sessionStatus === 'active' && !usedDayIds.has(day.id)) ?? null;
       const isRetry = targetDay !== null;
       if (!targetDay) {
         targetDay = shortPlan
-          .filter((day) => day.sessionStatus === 'pending' && day.date === null && !usedDayIds.has(day.id))
+          .filter((day) => day.roadmapStageId === activeStageId && day.sessionStatus === 'pending' && day.date === null && !usedDayIds.has(day.id))
           .sort((a, b) => a.dayIndex - b.dayIndex)[0] ?? null;
       }
       if (!targetDay) return { todayState: 'plan_exhausted' };
@@ -347,6 +348,10 @@ export class PlanningModule {
     const rollingOutput = await shortPlanAgent.runRolling({
       goal, brief, activeStage, completedSummary: completedContext?.summary ?? '暂无已完成任务', reviewSummary, profile, settings: runtimeSettings, knowledgeItems: knowledgeItemsForGuide, reviewKnowledgeItems: reviewItemsForGuide, context: rollingContext.context, traceId, onMetrics: () => {}
     });
+    const expectedStagePosition = activeStage.position + 1;
+    if (rollingOutput.days.some((day: any) => day.roadmapStagePosition !== expectedStagePosition)) {
+      throw new Error(`滚动计划必须继续当前第 ${expectedStagePosition} 阶段，不能未经确认推进学习阶段。`);
+    }
 
     await saveAiReview({
       kind: 'rolling_plan', provider: 'deepseek', model: runtimeSettings.deepseekModel, promptProfileId: profile.id, promptVersionId: profile.activeVersionId,

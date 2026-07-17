@@ -472,14 +472,17 @@ export class AppService {
       !usedShortPlanDayIds.has(day.id)
     );
     const guide = today.guide;
+    const stageReviewRequired = today.roadmap.some((stage) => stage.status === 'ready_for_review');
     if (guide) {
       if (guide.sessionStatus === 'draft') return 'generation_failed';
       if (guide.status === 'completed' || guide.sessionStatus === 'closed') {
+        if (stageReviewRequired) return 'stage_review_required';
         return hasAvailablePlanDay ? 'completed' : 'plan_exhausted';
       }
       return 'active';
     }
 
+    if (stageReviewRequired) return 'stage_review_required';
     if (!hasRecoverablePlanDay && !hasAvailablePlanDay) return 'plan_exhausted';
 
     return 'ready_to_generate';
@@ -518,14 +521,21 @@ export class AppService {
   }
 
   async listTodayGuide(): Promise<TodayGuideState> {
-    const [today, todayState] = await Promise.all([
+    const [today, todayState, context] = await Promise.all([
       this.store.getActiveGuide(),
-      this.getTodayState()
+      this.getTodayState(),
+      this.store.getCurrentLearningContext()
     ]);
     const pendingEvaluations = today.goal
       ? await this.store.getPendingEvaluationIdsForGoal(today.goal.id)
       : [];
-    return { ...today, todayState, pendingEvaluations };
+    return {
+      ...today,
+      currentStage: today.roadmap.find((stage) => stage.id === context.stageId) ?? null,
+      stageConflict: context.stageConflict,
+      todayState,
+      pendingEvaluations
+    };
   }
 
   getLatestReview(date?: string): Promise<ReviewResult | null> {
@@ -547,18 +557,28 @@ export class AppService {
 
   private async runRuntimeAudit(): Promise<RuntimeAuditResult> {
     const result = await this.store.auditRuntimeConsistency();
-    const guideChoices = await this.store.listCurrentGuideChoices();
+    const [guideChoices, learningUnitChoices] = await Promise.all([
+      this.store.listCurrentGuideChoices(),
+      this.store.listAmbiguousLearningUnits()
+    ]);
     return {
       ...result,
       checkedAt: new Date().toISOString(),
       requiresUserAction: result.conflicts.length > 0,
-      guideChoices
+      guideChoices,
+      learningUnitChoices
     };
   }
 
   async selectCurrentGuide(guideId: Id): Promise<RuntimeAuditResult> {
     this.startupRuntimeAudit = null;
     await this.store.selectCurrentGuide(guideId);
+    return this.runRuntimeAudit();
+  }
+
+  async resolveLearningUnit(guideId: Id, decision: 'restore' | 'skip'): Promise<RuntimeAuditResult> {
+    this.startupRuntimeAudit = null;
+    await this.store.resolveAmbiguousLearningUnit(guideId, decision);
     return this.runRuntimeAudit();
   }
 
@@ -675,8 +695,30 @@ export class AppService {
   }
 
   async skipCurrentTask() {
-    const snapshot = await this.modules.runtime.dispatch({ type: 'skipCurrentTask' });
+    let snapshot = await this.modules.runtime.dispatch({ type: 'skipCurrentTask' });
     this.focusMonitor.stop();
+    if (!snapshot.dailyGuideTask) {
+      const prepared = await this.modules.planning.prepareCurrentLearningDay(
+        {},
+        {
+          dailyGuideAgent: this.dailyGuideAgent,
+          getRuntimeSettings: () => this.settings.getRuntimeSettings(),
+          createTraceId,
+          todayIso
+        }
+      );
+      if (prepared.todayState === 'active') {
+        await this.store.auditRuntimeConsistency();
+        snapshot = await this.modules.runtime.getSnapshot();
+      } else if (prepared.todayState === 'generation_failed') {
+        throw new CategorizedError(
+          'validation_error',
+          `当前任务已跳过并保存在记录中，但下一轮任务生成失败：${prepared.errorMessage ?? '请重试生成。'}`
+        );
+      } else if (prepared.todayState === 'generating') {
+        throw new CategorizedError('validation_error', '当前任务已跳过，下一轮任务正在生成，请稍后重新检查。');
+      }
+    }
     return snapshot;
   }
 
