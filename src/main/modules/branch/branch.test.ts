@@ -57,6 +57,7 @@ async function createTestGuideWithTask() {
       weekFocus: '测试周',
       days: [{
         dayIndex: 1,
+        roadmapStagePosition: 1,
         title: '测试日',
         focus: '测试',
         tasks: ['测试任务'],
