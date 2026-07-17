@@ -1,12 +1,16 @@
 import { useEffect, useState } from 'react';
 import {
+  CheckCircle2,
   ChevronRight,
+  Circle,
   Clock3,
   FileText,
-  Lock,
+  ListChecks,
+  Play,
   RotateCcw,
   SendHorizontal,
   Sparkles,
+  Target,
   Wand2
 } from 'lucide-react';
 import type {
@@ -23,6 +27,7 @@ import { TypingDots } from '../components/ai/TypingDots';
 import { HistoryPanel } from '../components/shared/HistoryPanel';
 import { GoalBriefEditor } from '../components/today/GoalBriefEditor';
 import { deriveLearningTaskStatus } from '../domain/learning-status';
+import { getRoadmapStagePresentation } from '../domain/roadmap-presentation';
 
 export function OverviewPage({
   settings,
@@ -71,9 +76,15 @@ export function OverviewPage({
   const roadmap = todayGuide?.roadmap ?? [];
   const goal = todayGuide?.goal ?? onboarding?.activeGoal ?? null;
   const shortPlanDays = todayGuide?.shortPlan ?? [];
+  const noGuideAction = todayGuide?.todayState === 'stage_review_required'
+    ? 'stage_review'
+    : todayGuide?.todayState === 'plan_exhausted'
+    ? 'rolling_plan'
+    : shortPlanDays.length > 0
+      ? 'current_unit'
+      : 'layered_plan';
   const currentShortPlanDay = shortPlanDays.find((d) => d.id === guide?.shortPlanDayId) ?? null;
   const completedTaskCount = guide?.tasks.filter((t) => t.status === 'done').length ?? 0;
-  const totalElapsedMinutes = guide?.tasks.reduce((sum, t) => sum + (t.totalElapsedMinutes || 0), 0) ?? 0;
 
   useEffect(() => {
     if (onboarding?.intake.brief) {
@@ -229,15 +240,23 @@ export function OverviewPage({
                 className="primary-action full"
                 type="button"
                 disabled={!hasApiKey}
-                onClick={() => void (todayGuide?.todayState === 'generation_failed'
+                onClick={() => void (noGuideAction === 'stage_review'
+                  ? Promise.resolve(onNavigate?.('records'))
+                  : noGuideAction === 'current_unit'
                   ? onPrepareCurrentLearningDay()
-                  : onGenerateLayeredPlan(goal.id))}
+                  : noGuideAction === 'rolling_plan'
+                    ? onGenerateRollingPlan()
+                    : onGenerateLayeredPlan(goal.id))}
               >
                 <Sparkles size={16} />
-                {todayGuide?.todayState === 'generation_failed'
-                  ? '重新生成当前学习单元'
-                  : onboarding?.intake.status === 'confirmed'
-                    ? '重新生成当日计划'
+                {noGuideAction === 'stage_review'
+                  ? '前往记录确认成果'
+                  : noGuideAction === 'current_unit'
+                  ? todayGuide?.todayState === 'generation_failed'
+                    ? '重新生成当前学习单元'
+                    : '生成当前学习单元'
+                  : noGuideAction === 'rolling_plan'
+                    ? '生成下一批任务'
                     : '确认并生成计划'}
               </button>
             ) : (
@@ -281,44 +300,112 @@ export function OverviewPage({
     evaluationStatus: learningState.latestSubmission.evaluationStatus,
     evaluationResult: learningState.latestEvaluation?.result
   } : null) : null;
-  const activeStage = roadmap.find((stage) => stage.status === 'active' || stage.status === 'adjusted' || stage.status === 'blocked');
+  const activeStage = todayGuide?.currentStage ?? null;
   const statusLabel = (status: string): string => ({ planned: '待开始', active: '进行中', done: '已完成', skipped: '已跳过', deferred: '已暂缓' })[status] ?? status;
+  const activeStageIndex = activeStage ? roadmap.findIndex((stage) => stage.id === activeStage.id) : -1;
+  const actions = currentTask?.actions ?? [];
+  const completedActionCount = actions.filter((action) => action.status === 'done' || action.status === 'skipped').length;
+  const actionProgressPercent = actions.length > 0 ? Math.round((completedActionCount / actions.length) * 100) : 0;
+  const currentAction = actions.find((action) => action.status !== 'done' && action.status !== 'skipped') ?? null;
+  const currentActionIndex = currentAction ? actions.findIndex((action) => action.id === currentAction.id) : -1;
+  const focusActions = currentActionIndex >= 0
+    ? actions.slice(currentActionIndex, currentActionIndex + 3)
+    : actions.slice(Math.max(0, actions.length - 3));
+  const primaryActionLabel = currentLearningStatus?.phase === 'awaiting_result'
+    ? '继续提交'
+    : currentLearningStatus?.phase === 'retry_evaluation'
+      ? '继续评价'
+      : currentLearningStatus?.phase === 'needs_revision'
+        ? '继续修改'
+        : activeSession?.status === 'paused'
+          ? '继续学习'
+          : currentTask?.status === 'planned'
+            ? '开始学习'
+            : '继续学习';
 
 
   return (
-    <section className="today-v2">
-      <div className="today-v2-main">
-        <header className="overview-goal-header">
-          <span className="section-label">当前学习目标</span>
-          <h1>{goal?.title ?? guide.todayGoal}</h1>
-          {goal?.description && <p>{goal.description}</p>}
-        </header>
+    <section className="overview-dashboard">
+      <header className="overview-dashboard-title">
+        <h1>当前学习</h1>
+      </header>
 
-        {activeStage && <section className="overview-stage"><div><span className="section-label">当前阶段</span><h2>{activeStage.title}</h2><p>{activeStage.objective || activeStage.direction}</p></div><span className={`stage-state ${activeStage.status}`}>{activeStage.status === 'blocked' ? '需要处理' : activeStage.status === 'adjusted' ? '已调整' : '进行中'}</span></section>}
+      {todayGuide?.stageConflict && <section className="overview-stage-conflict" role="alert"><strong>阶段归属需要确认</strong><p>{todayGuide.stageConflict.message}</p><small>{todayGuide.stageConflict.kind === 'task_day_mismatch'
+        ? `任务记录为“${todayGuide.stageConflict.taskStage.title}”，学习单元记录为“${todayGuide.stageConflict.shortPlanDayStage.title}”。`
+        : `学习路线记录为“${todayGuide.stageConflict.formalStage.title}”，当前学习单元属于“${todayGuide.stageConflict.learningUnitStage.title}”。`}系统没有静默选择阶段。</small></section>}
 
-        {roadmap.length > 0 && <section className="overview-path"><h2>学习路径</h2><div>{roadmap.map((stage, index) => <article className={stage.id === activeStage?.id ? 'active' : stage.status === 'completed' ? 'done' : ''} key={stage.id}><span>{index + 1}</span><div><strong>{stage.title}</strong><small>{stage.objective}</small></div></article>)}</div></section>}
+      {todayGuide?.todayState === 'generation_failed' && (
+        <section className="overview-pending" role="alert"><div><h2>今日执行稿生成失败</h2><p>已有目标和计划已保留，可以重新生成当前学习单元。</p></div><button className="primary-action" type="button" onClick={() => void onPrepareCurrentLearningDay()}>重试生成</button></section>
+      )}
 
-        {currentTask ? (
-          <section className="current-task-focus" aria-labelledby="current-task-title">
-            <div className="current-task-heading">
-              <div><span className="section-label">当前主任务</span><h2 id="current-task-title">{currentTask.title}</h2></div>
-              <span className={`task-status ${currentTask.status}`}>{currentLearningStatus?.label ?? statusLabel(currentTask.status)} · 约 {currentTask.estimatedMinutes.target} 分钟</span>
+      {todayGuide?.todayState === 'stage_review_required' && (
+        <section className="overview-pending"><div><h2>当前阶段等待确认</h2><p>阶段成果和历史记录已保留。确认成果后才会进入下一阶段。</p></div><button className="primary-action" type="button" onClick={() => onNavigate?.('records')}>前往记录确认成果</button></section>
+      )}
+
+      <div className="overview-dashboard-grid">
+        <div className="overview-primary-column">
+          <section className="overview-reference-card overview-goal-card" aria-labelledby="overview-goal-title">
+            <span className="overview-goal-icon" aria-hidden="true"><Target size={34} /></span>
+            <div className="overview-goal-copy">
+              <span className="overview-status-label">{activeStage ? '进行中' : '已建立目标'}</span>
+              <h2 id="overview-goal-title">{goal?.title ?? guide.todayGoal}</h2>
+              <div className="overview-goal-meta">
+                {activeStageIndex >= 0 && roadmap.length > 0 && <span>阶段 {activeStageIndex + 1} / {roadmap.length}</span>}
+                {activeStage && <span>{activeStage.title}</span>}
+                {onboarding?.intake.brief?.availableTime && <span>{onboarding.intake.brief.availableTime}</span>}
+              </div>
             </div>
-            <div className="task-focus-reason"><h3>为什么现在做</h3><p>{currentShortPlanDay?.focus || activeStage?.direction || currentTask.objective}</p></div>
-            {guide.status === 'draft' && (
-              <button className="primary-action" type="button" onClick={() => void onConfirmGuide(guide.id)}>
-                确认今日执行稿
-              </button>
-            )}
-            {guide.status !== 'draft' && <button className="primary-action" type="button" onClick={() => onNavigate?.('study')}>{currentLearningStatus?.phase === 'awaiting_result' ? '继续提交' : currentLearningStatus?.phase === 'retry_evaluation' ? '继续评价' : currentLearningStatus?.phase === 'needs_revision' ? '继续修改' : '进入学习'}</button>}
           </section>
-        ) : <p className="kb-empty">今日执行稿中暂时没有任务。</p>}
 
-        {todayGuide?.todayState === 'generation_failed' && (
-          <section className="overview-pending" role="alert"><div><h2>今日执行稿生成失败</h2><p>已有目标和计划已保留，可以重新生成当前学习单元。</p></div><button className="primary-action" type="button" onClick={() => void onPrepareCurrentLearningDay()}>重试生成</button></section>
-        )}
+          {currentTask ? (
+            <section className="overview-reference-card overview-task-card" aria-labelledby="current-task-title">
+              <div className="overview-task-topline">
+                <span className={`task-status ${currentTask.status}`}>{currentLearningStatus?.label ?? statusLabel(currentTask.status)}</span>
+              </div>
+              <div className="overview-task-main">
+                <div>
+                  <span className="section-label">当前任务</span>
+                  <h2 id="current-task-title">{currentTask.title}</h2>
+                  <p>{currentShortPlanDay?.focus || currentTask.objective}</p>
+                </div>
+                {guide.status === 'draft' ? (
+                  <button className="primary-action overview-task-primary" type="button" onClick={() => void onConfirmGuide(guide.id)}>确认执行稿</button>
+                ) : (
+                  <button className="primary-action overview-task-primary" type="button" disabled={Boolean(todayGuide?.stageConflict)} onClick={() => onNavigate?.('study')}><Play size={16} />{primaryActionLabel}</button>
+                )}
+              </div>
+              <div className="overview-task-progress" aria-label={`任务进度 ${completedActionCount}/${actions.length} 个行动`}>
+                <div><span>任务进度</span><strong>{completedActionCount} / {actions.length} 个行动 · 约 {currentTask.estimatedMinutes.target} 分钟</strong></div>
+                <div className="overview-progress-track"><span style={{ width: `${actionProgressPercent}%` }} /></div>
+              </div>
+              <details className="overview-task-details">
+                <summary><ListChecks size={16} />查看任务摘要<ChevronRight size={16} /></summary>
+                <div><section><h3>目标与范围</h3><p>{currentTask.objective}</p><p>{currentTask.scope}</p></section><section><h3>预期产出</h3><p>{currentTask.deliverable}</p></section><section><h3>完成标准</h3><ul>{currentTask.doneWhen.map((item) => <li key={item}>{item}</li>)}</ul></section></div>
+              </details>
+            </section>
+          ) : <section className="overview-reference-card overview-empty-task"><strong>当前没有可执行任务</strong><p>计划和历史记录仍然保留，请根据上方状态继续处理。</p></section>}
 
-        <details className="overview-manage"><summary>计划管理与目标切换</summary><p>当前计划不合适时，可以归档并重新开始；学习记录会保留。</p><button className="secondary-action danger-outline" type="button" onClick={() => setShowRestartConfirm(true)}><RotateCcw size={16} />重新开始新计划</button></details>
+          <details className="overview-manage overview-reference-card"><summary>计划管理与目标切换</summary><p>当前计划不合适时，可以归档并重新开始；学习记录会保留。</p><button className="secondary-action danger-outline" type="button" onClick={() => setShowRestartConfirm(true)}><RotateCcw size={16} />重新开始新计划</button></details>
+        </div>
+
+        <aside className="overview-side-column">
+          {roadmap.length > 0 && <section className="overview-reference-card overview-route-card" aria-labelledby="learning-path-title"><header><h2 id="learning-path-title">学习路径</h2><span>当前单元 {completedTaskCount} / {guide.tasks.length} 个任务完成</span></header><div className="overview-route-steps">{roadmap.map((stage, index) => {
+            const presentation = getRoadmapStagePresentation(stage, activeStage?.id ?? null);
+            return <article className={presentation.className} key={stage.id} aria-current={presentation.isCurrentLearningUnit ? 'step' : undefined}><span>{stage.status === 'completed' ? <CheckCircle2 size={15} /> : index + 1}</span><strong>{stage.title}</strong><small>{presentation.label}</small></article>;
+          })}</div></section>}
+
+          <section className="overview-reference-card overview-focus-card" aria-labelledby="today-focus-title">
+            <header><h2 id="today-focus-title">今日聚焦</h2></header>
+            <div className="overview-focus-list">
+              {focusActions.length > 0 ? focusActions.map((action) => {
+                const isCurrent = action.id === currentAction?.id;
+                const isDone = action.status === 'done';
+                return <div className={isCurrent ? 'current' : isDone ? 'done' : ''} key={action.id}>{isDone ? <CheckCircle2 size={18} /> : isCurrent ? <Target size={18} /> : <Circle size={18} />}<span>{action.title}</span><small>{isDone ? '已完成' : action.status === 'skipped' ? '已跳过' : isCurrent ? '当前' : '待进行'}</small></div>;
+              }) : <p>当前任务暂时没有行动步骤。</p>}
+            </div>
+          </section>
+
+        </aside>
       </div>
 
       {showHistory && (
