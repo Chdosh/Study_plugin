@@ -96,14 +96,14 @@ export function SettingsPage({
     <section className="settings-layout">
       <header className="page-title-block">
         <h1>设置</h1>
-        <p>管理 AI 助手与学习偏好</p>
+        <p>管理 AI 模型、学习偏好、已确认的学习上下文与本地数据。</p>
       </header>
 
       <div className="settings-grid">
         <section className="settings-card settings-ai">
           <div className="settings-card-title">
             <span className="settings-card-icon ai"><Brain size={22} /></span>
-            <h3>AI 模型</h3>
+            <div><h3>AI 模型</h3><p>用于生成教程、回答问题和评价结果。</p></div>
           </div>
           <div className="settings-row">
             <span>API Key</span>
@@ -186,7 +186,7 @@ export function SettingsPage({
         <section className="settings-card settings-preferences">
           <div className="settings-card-title">
             <span className="settings-card-icon"><Target size={22} /></span>
-            <h3>学习偏好</h3>
+            <div><h3>学习偏好</h3><p>设置默认学习节奏和内容展开方式。</p></div>
           </div>
           <label className="settings-field">
             <span>默认专注时长（分钟）</span>
@@ -243,7 +243,7 @@ export function SettingsPage({
           <section className="settings-card settings-diagnostics">
             <div className="settings-card-title">
               <span className="settings-card-icon"><Coins size={22} /></span>
-              <h3>用量与诊断</h3>
+              <div><h3>用量与诊断</h3><p>显示真实模型调用产生的 token 用量。</p></div>
             </div>
             <div className="settings-row">
               <span>总输入 tokens</span>
