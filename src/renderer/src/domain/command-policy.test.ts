@@ -94,6 +94,7 @@ function makeSnapshot(overrides: Partial<LearningRuntimeSnapshot> = {}): Learnin
     },
     dailyGuideAction: { id: 'act-1', taskId: 'task-1', title: '步骤1', instruction: '说明1', checkpoint: '标准1', status: 'planned', progressNote: null, completedAt: null, position: 0 },
     roadmapStage: { id: 'stage-1', goalId: 'goal-1', title: '阶段一', objective: '', direction: '', successCriteria: '', status: 'active', position: 0, createdAt: '', updatedAt: '' },
+    stageConflict: null,
     questionThread: null,
     questionMessages: [],
     latestSubmission: null,
@@ -202,6 +203,22 @@ describe('computeCommandPolicy', () => {
     const policy = computeCommandPolicy(snapshot);
     expect(policy.canStart).toBe(false);
     expect(policy.reasons.canStart).toBeTruthy();
+  });
+
+  it('blocks learning commands when the shared context reports a stage conflict', () => {
+    const snapshot = makeSnapshot({
+      stageConflict: {
+        kind: 'task_day_mismatch',
+        message: '阶段不一致',
+        taskStage: { id: 'stage-2', title: '项目阶段' },
+        shortPlanDayStage: { id: 'stage-1', title: '基础阶段' }
+      }
+    });
+    const policy = computeCommandPolicy(snapshot);
+    expect(policy.canStart).toBe(false);
+    expect(policy.canCompleteAction).toBe(false);
+    expect(policy.canSubmit).toBe(false);
+    expect(policy.reasons.canStart).toContain('阶段归属');
   });
 
   it('allows starting the visible current task but blocks old Runtime commands when targets differ', () => {
