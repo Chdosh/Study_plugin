@@ -212,7 +212,7 @@ export default function App(): JSX.Element {
       sessionLabel={sessionLabel}
       center={
         <main className="canvas">
-          <div className={`canvas-hdr ${view === 'settings' || view === 'records' || view === 'study' || (view === 'overview' && !todayGuide?.guide) ? 'is-settings' : ''}`}>
+          <div className={`canvas-hdr ${view === 'settings' || view === 'records' || view === 'study' || view === 'overview' ? 'is-settings' : ''}`}>
             <div className="canvas-hdr-title">{canvasTitle()}</div>
           </div>
           <div className="canvas-body">
@@ -237,7 +237,7 @@ export default function App(): JSX.Element {
                   <strong>{runtimeAudit.requiresUserAction ? '学习进度需要确认' : '已恢复学习进度'}</strong>
                   <p>
                     {runtimeAudit.requiresUserAction
-                      ? `发现 ${runtimeAudit.conflicts.length} 项无法自动判断的状态，系统没有删除数据或推进任务。`
+                      ? '发现无法自动判断的学习状态，系统没有删除数据或推进任务。'
                       : `已安全修复 ${runtimeAudit.fixed.length} 项可唯一推导的运行位置。`}
                   </p>
                   {runtimeAudit.guideChoices.length > 1 && <div className="runtime-guide-choices">{runtimeAudit.guideChoices.map((choice) => <article key={choice.guideId} className={choice.isRecommended ? 'recommended' : ''}><div><strong>{choice.dayTitle}</strong><span>{choice.date} · {choice.taskTitle}</span><small>已完成 {choice.completedTaskCount}/{choice.totalTaskCount} 个任务{choice.hasRecentSession ? ' · 最近学习过' : ''}</small></div>{choice.isRecommended && <em>推荐</em>}<button className="primary-action" type="button" onClick={() => void runAction('选择当前学习日', async () => {
@@ -245,7 +245,16 @@ export default function App(): JSX.Element {
                     setRuntimeAudit(audit.fixed.length > 0 || audit.requiresUserAction ? audit : null);
                     await Promise.all([refresh(), syncActiveSession()]);
                   })}>继续这个学习日</button></article>)}</div>}
-                  {runtimeAudit.conflicts.some((conflict) => conflict.field !== 'dailyGuides.current') && <small>另有学习状态需要确认。系统已保留数据，请在选择学习日后重新检查。</small>}
+                  {runtimeAudit.learningUnitChoices.length > 0 && <div className="runtime-guide-choices">{runtimeAudit.learningUnitChoices.map((choice) => <article key={choice.guideId}><div><strong>{choice.dayTitle}</strong><span>{choice.date} · {choice.taskTitles.join('、')}</span><small>已完成 {choice.completedTaskCount} · 已跳过 {choice.skippedTaskCount} · 共 {choice.totalTaskCount} 个任务</small></div><button className="primary-action" type="button" onClick={() => void runAction('恢复历史学习单元', async () => {
+                    const audit = await window.studyApp.system.resolveLearningUnit(choice.guideId, 'restore');
+                    setRuntimeAudit(audit.fixed.length > 0 || audit.requiresUserAction ? audit : null);
+                    await Promise.all([refresh(), syncActiveSession()]);
+                  })}>恢复此单元</button><button className="secondary-action" type="button" onClick={() => void runAction('确认跳过历史学习单元', async () => {
+                    const audit = await window.studyApp.system.resolveLearningUnit(choice.guideId, 'skip');
+                    setRuntimeAudit(audit.fixed.length > 0 || audit.requiresUserAction ? audit : null);
+                    await Promise.all([refresh(), syncActiveSession()]);
+                  })}>确认跳过</button></article>)}</div>}
+                  {runtimeAudit.conflicts.some((conflict) => conflict.field !== 'dailyGuides.current' && conflict.field !== 'learningUnits.lifecycle') && <small>另有学习状态需要确认。系统已保留数据，请重新检查。</small>}
                 </div>
                 <div className="runtime-audit-actions">
                   {runtimeAudit.requiresUserAction && (

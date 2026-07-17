@@ -4,11 +4,12 @@ import {
   ChevronRight,
   // Clock3, // BUG: 计时控件有bug，暂时移除
   HelpCircle,
-  // Pause, // BUG: 暂停按钮已移除
+  Pause,
   Play,
   MessageCircle,
   ListTree,
   RefreshCw,
+  Sparkles,
   SkipForward
 } from 'lucide-react';
 import type {
@@ -112,6 +113,7 @@ export function StudyPage({
     evaluationResult: learningState.latestEvaluation?.result
   } : null) : null;
   const taskObjective = currentTask?.objective ?? '';
+  const completedActionCount = taskActions.filter((action) => action.status === 'done' || action.status === 'skipped').length;
   const stepTitle = allTasksDone && !currentTask
     ? '今日任务已全部完成'
     : pendingSubmission
@@ -216,46 +218,29 @@ export function StudyPage({
 
   return (
     <section className="study-layout">
-      <div className="study-main">
-
-        <section className="study-session-bar" aria-label="学习会话状态">
-          <div className="session-task">
-            <span className="session-task-icon"><ChevronRight size={18} /></span>
-            <strong>{taskTitle}</strong>
-          </div>
-          {!taskDone && !allTasksDone ? (
-            <>
-              <span className="session-step-label">{learningStatus?.positionLabel ?? '准备中'}</span>
-              {/* BUG: 计时控件有bug，暂时移除。暂停/继续/状态胶囊一并隐藏。 */}
-              {/* {(isActive || isPaused) && <span className="session-timer"><Clock3 size={16} />{formatElapsedTime(elapsedSeconds)}</span>} */}
-              {/* {isActive || isPaused ? (
-                <>
-                  <button
-                    className="session-pause-button"
-                    type="button"
-                    onClick={() => void (isPaused ? onResumeSession() : onPauseSession())}
-                  >
-                    {isPaused ? <><Play size={14} />继续</> : <><Pause size={14} />暂停</>}
-                  </button>
-                </>
-              ) : (
-                <span className={`focus-state-pill ${sessionStatusClass}`}>{sessionStatusText}</span>
-              )} */}
-            </>
-          ) : (
-            <span className="focus-state-pill completed">已完成</span>
-          )}
+      <header className="study-page-header">
+        <div>
+          <span className="page-kicker">当前学习</span>
+          <h1>{taskTitle}</h1>
+        </div>
+        <div className="study-header-actions">
+          <span className={`focus-state-pill ${taskDone || allTasksDone ? 'completed' : sessionStatusClass}`}>{taskDone || allTasksDone ? '已完成' : sessionStatusText}</span>
+          {isActive && commandPolicy.canPause ? (
+            <button className="session-pause-button" type="button" onClick={() => void onPauseSession()}><Pause size={14} />暂停</button>
+          ) : null}
           <button className="secondary-action" type="button" onClick={onOpenRoadmap}><ListTree size={15} />学习路径</button>
-          <button className="secondary-action study-teacher-drawer-trigger" type="button" onClick={onOpenTeacher}><MessageCircle size={15} />提问</button>
-        </section>
+          <button className="secondary-action study-teacher-drawer-trigger" type="button" onClick={onOpenTeacher}><MessageCircle size={15} />向导师提问</button>
+        </div>
+      </header>
 
+      <div className="study-content-grid">
         <section className="study-current-step-panel focus-execution-panel" aria-label="当前步骤">
           <div className="current-step-heading">
             <div className="current-step-title-block">
               <span className="focus-eyebrow">当前步骤</span>
               <h2>{stepTitle}</h2>
             </div>
-
+            {!taskDone && !allActionsDone && <button className="secondary-action" type="button" disabled={!isActive} title={!isActive ? '开始或继续学习后可展开当前步骤' : undefined} onClick={() => void onTeachStep()}><Sparkles size={15} />展开步骤</button>}
           </div>
           <div className="focus-work-list">
             {taskObjective && (
@@ -294,10 +279,21 @@ export function StudyPage({
               <MessageContent content={`${teaching.explanation}\n\n${teaching.userAction}`} />
             </div>
           )}
-          {taskActions.length > 1 && (
-            <details className="focus-help-row follow-up-actions"><summary>后续行动预览 <ChevronRight size={16} /></summary><ol>{taskActions.filter((action) => action.id !== currentAction?.id).map((action) => <li key={action.id}>{action.title}</li>)}</ol></details>
-          )}
         </section>
+
+        {taskActions.length > 0 && <aside className="study-side-column">
+          <section className="study-progress-card" aria-label={`任务步骤，已处理 ${completedActionCount} / ${taskActions.length}`}>
+            <header><strong>任务步骤</strong><span>{completedActionCount} / {taskActions.length} 已处理</span></header>
+            <ol className="study-action-list">
+              {taskActions.map((action, index) => {
+                const done = action.status === 'done' || action.status === 'skipped';
+                const active = action.id === currentAction?.id;
+                return <li key={action.id} className={done ? 'done' : active ? 'active' : ''}><span>{done ? <CheckCircle2 size={15} /> : active ? <Play size={13} /> : index + 1}</span><div><strong>{active ? '正在执行' : action.title}</strong><small>{action.status === 'skipped' ? '已跳过' : done ? '已完成' : active ? '当前步骤见左侧' : '待进行'}</small></div></li>;
+              })}
+            </ol>
+          </section>
+        </aside>}
+
       </div>
 
       <div className="study-fixed-action-bar">
@@ -376,7 +372,7 @@ export function StudyPage({
                   }}><CheckCircle2 size={16} />提交结果</button>
                 </div>
               ) : null}
-              {!taskDone ? (
+              {!taskDone && commandPolicy.canSkipTask ? (
                 <button className="secondary-action" type="button" onClick={() => {
                   void onSkipCurrentTask().then(() => showFeedback('已跳过此任务'));
                 }}>
