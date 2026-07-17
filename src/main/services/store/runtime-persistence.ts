@@ -252,7 +252,7 @@ export class RuntimePersistence {
     if (state.activeStageId) {
       const rsRows = await this.db.select().from(roadmapStages).where(eq(roadmapStages.id, state.activeStageId)).limit(1);
       roadmapStage = rsRows[0] ? mapRoadmapStage(rsRows[0]) : null;
-    } else if (goal) {
+    } else if (goal && !resolvedContext.stageConflict) {
       const rsRows = await this.db.select().from(roadmapStages).where(eq(roadmapStages.goalId, goal.id)).orderBy(asc(roadmapStages.position)).limit(1);
       roadmapStage = rsRows[0] ? mapRoadmapStage(rsRows[0]) : null;
     }
@@ -277,6 +277,7 @@ export class RuntimePersistence {
       dailyGuideTask,
       dailyGuideAction,
       roadmapStage,
+      stageConflict: resolvedContext.stageConflict,
       questionThread,
       questionMessages: questionMessageRows,
       latestSubmission,
@@ -397,7 +398,13 @@ export class RuntimePersistence {
     });
 
     if (!nextTask && snapshot.dailyGuide?.id) {
-      await this.closeCurrentSession(snapshot.dailyGuide.id);
+      const allTasksSkipped = result.state.tasks.length > 0
+        && result.state.tasks.every((task) => task.status === 'skipped');
+      if (allTasksSkipped) {
+        await this.currentLearningContext.skipGuide(snapshot.dailyGuide.id);
+      } else {
+        await this.closeCurrentSession(snapshot.dailyGuide.id);
+      }
     }
 
     return this.getSnapshot();
@@ -437,10 +444,7 @@ export class RuntimePersistence {
       ? (await this.db.select().from(dailyGuides).where(eq(dailyGuides.id, guideTask.guideId)).limit(1))[0]
       : null;
 
-    const roadmapRows = guide
-      ? await this.db.select().from(roadmapStages).where(eq(roadmapStages.goalId, guide.goalId)).orderBy(asc(roadmapStages.position)).limit(1)
-      : [];
-    const stageId = roadmapRows[0]?.id ?? null;
+    const stageId = guideTask?.roadmapStageId ?? null;
 
     const currentActionId = guideTask?.currentAction?.id
       ?? guideTask?.actions.find((action) => action.status !== 'done' && action.status !== 'skipped')?.id

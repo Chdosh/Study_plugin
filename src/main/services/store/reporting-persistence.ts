@@ -12,6 +12,7 @@ import {
   learningEvaluations,
   learningSteps,
   learningSubmissions,
+  questionMessages,
   questionThreads,
   roadmapStages,
   shortPlanDays,
@@ -67,6 +68,9 @@ export class ReportingPersistence {
     const questionRows = actionIds.length > 0
       ? await this.db.select().from(questionThreads).where(inArray(questionThreads.dailyGuideActionId, actionIds))
       : [];
+    const questionMessageRows = questionRows.length > 0
+      ? await this.db.select().from(questionMessages).where(inArray(questionMessages.threadId, questionRows.map((row) => row.id)))
+      : [];
     return {
       version: '1.0',
       exportedAt: new Date().toISOString(),
@@ -82,7 +86,8 @@ export class ReportingPersistence {
       knowledgeItems: knowledgeRows,
       submissions: submissionRows,
       evaluations: evaluationRows,
-      questionThreads: questionRows
+      questionThreads: questionRows,
+      questionMessages: questionMessageRows
     };
   }
 

@@ -253,8 +253,16 @@ export class StudyStore extends KnowledgeStore {
     return this.currentLearningContext.listGuideChoices();
   }
 
+  listAmbiguousLearningUnits() {
+    return this.currentLearningContext.listAmbiguousLearningUnits();
+  }
+
   selectCurrentGuide(guideId: string): Promise<void> {
     return this.currentLearningContext.selectCurrentGuide(guideId);
+  }
+
+  resolveAmbiguousLearningUnit(guideId: string, decision: 'restore' | 'skip'): Promise<void> {
+    return this.currentLearningContext.resolveAmbiguousLearningUnit(guideId, decision);
   }
 
   async getTokenCostStats(opts: { goalId?: string; operation?: string; fromDate?: string; toDate?: string }): Promise<{

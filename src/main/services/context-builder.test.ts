@@ -13,6 +13,7 @@ function createTestSnapshot(overrides: Partial<LearningRuntimeSnapshot> = {}): L
     dailyGuideTask: null,
     dailyGuideAction: null,
     roadmapStage: null,
+    stageConflict: null,
     questionThread: null,
     questionMessages: [],
     latestSubmission: null,

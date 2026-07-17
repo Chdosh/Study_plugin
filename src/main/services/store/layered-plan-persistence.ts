@@ -44,6 +44,15 @@ export class LayeredPlanPersistence {
     shortPlan: ShortPlanAgentOutput;
     dailyGuide: DailyGuideAgentOutput;
   }): Promise<{ goal: LearningGoal; roadmap: RoadmapStage[]; shortPlan: ShortPlanDay[]; guide: DailyGuide }> {
+    for (const day of params.shortPlan.days) {
+      if (day.roadmapStagePosition < 1 || day.roadmapStagePosition > params.roadmap.stages.length) {
+        throw new Error(`近期计划单元 ${day.dayIndex} 引用了不存在的第 ${day.roadmapStagePosition} 阶段。`);
+      }
+    }
+    const firstLearningDay = params.shortPlan.days.find((day) => day.dayIndex === 1);
+    if (firstLearningDay && firstLearningDay.roadmapStagePosition !== 1) {
+      throw new Error('首个学习单元必须属于第 1 阶段，不能跳过尚未完成的路线阶段。');
+    }
     const now = nowIso();
     const roadmapRows: RoadmapStage[] = [];
     let position = 0;
@@ -74,10 +83,14 @@ export class LayeredPlanPersistence {
     const shortRows: ShortPlanDay[] = [];
     let day1ShortPlanDayId: string | null = null;
     for (const day of params.shortPlan.days) {
+      const dayStage = roadmapRows[day.roadmapStagePosition - 1];
+      if (!dayStage) {
+        throw new Error(`近期计划单元 ${day.dayIndex} 引用了不存在的第 ${day.roadmapStagePosition} 阶段。`);
+      }
       const row = {
         id: createId('short_plan_day'),
         goalId: params.goal.id,
-        roadmapStageId: roadmapRows[0]?.id ?? null,
+        roadmapStageId: dayStage.id,
         dayIndex: day.dayIndex,
         date: day.dayIndex === 1 ? params.date : null,
         sessionStatus: 'pending' as const,
@@ -128,6 +141,7 @@ export class LayeredPlanPersistence {
     });
 
     let blockPosition = 0;
+    const firstDayStageId = shortRows.find((day) => day.id === day1ShortPlanDayId)?.roadmapStageId ?? null;
     let cursorTime = params.windows[0]?.start ?? '20:00';
     for (const task of params.dailyGuide.tasks) {
       const planBlockId = createId('block');
@@ -156,7 +170,7 @@ export class LayeredPlanPersistence {
       await this.db.insert(dailyGuideTasks).values({
         id: guideTaskId,
         guideId,
-        roadmapStageId: roadmapRows[0]?.id ?? null,
+        roadmapStageId: firstDayStageId,
         legacyPlanBlockId: planBlockId,
         title: task.title,
         objective: task.objective,
