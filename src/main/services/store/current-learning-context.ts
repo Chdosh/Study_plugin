@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray } from 'drizzle-orm';
-import type { CurrentGuideChoice, LearningRuntimeState, StudySession } from '../../../shared/types';
+import type { CurrentGuideChoice, LearningRuntimeState, LearningStageConflict, LearningUnitRecoveryChoice, StudySession } from '../../../shared/types';
 import type { Database } from '../../db/client';
 import {
   dailyGuideActions,
@@ -26,6 +26,7 @@ export interface ResolvedCurrentLearningContext {
   taskId: string | null;
   actionId: string | null;
   stageId: string | null;
+  stageConflict: LearningStageConflict | null;
   session: StudySession | null;
   state: LearningRuntimeState;
 }
@@ -117,8 +118,50 @@ export class CurrentLearningContextPersistence {
       ?? actionRows.at(-1)
     )?.id ?? null;
 
-    let stageId = task?.roadmapStageId ?? null;
-    if (!stageId && goalId) {
+    const currentDayRows = activeGuide?.shortPlanDayId
+      ? await this.db.select({ roadmapStageId: shortPlanDays.roadmapStageId })
+          .from(shortPlanDays)
+          .where(eq(shortPlanDays.id, activeGuide.shortPlanDayId))
+          .limit(1)
+      : [];
+    const taskStageId = task?.roadmapStageId ?? null;
+    const dayStageId = currentDayRows[0]?.roadmapStageId ?? null;
+    const stageRows = goalId
+      ? await this.db.select({
+          id: roadmapStages.id,
+          title: roadmapStages.title,
+          status: roadmapStages.status,
+          position: roadmapStages.position
+        })
+          .from(roadmapStages)
+          .where(eq(roadmapStages.goalId, goalId))
+      : [];
+    const stageTitle = new Map(stageRows.map((stage) => [stage.id, stage.title]));
+    let stageConflict: LearningStageConflict | null = taskStageId && dayStageId && taskStageId !== dayStageId
+      ? {
+          kind: 'task_day_mismatch',
+          message: '当前任务与近期学习单元的阶段归属不一致，数据已保留，请先确认后再继续。',
+          taskStage: { id: taskStageId, title: stageTitle.get(taskStageId) ?? '任务所属阶段' },
+          shortPlanDayStage: { id: dayStageId, title: stageTitle.get(dayStageId) ?? '学习单元所属阶段' }
+        }
+      : null;
+    const learningUnitStageId = taskStageId ?? dayStageId;
+    const formalStage = [...stageRows]
+      .sort((a, b) => a.position - b.position)
+      .find((stage) => ['active', 'ready_for_review', 'blocked', 'adjusted'].includes(stage.status));
+    if (!stageConflict && learningUnitStageId && formalStage && learningUnitStageId !== formalStage.id) {
+      stageConflict = {
+        kind: 'formal_stage_mismatch',
+        message: '当前学习单元已经进入后续阶段，但学习路线仍停留在前一阶段，数据已保留，请先确认阶段推进。',
+        formalStage: { id: formalStage.id, title: formalStage.title },
+        learningUnitStage: {
+          id: learningUnitStageId,
+          title: stageTitle.get(learningUnitStageId) ?? '当前学习单元所属阶段'
+        }
+      };
+    }
+    let stageId = stageConflict ? null : taskStageId ?? dayStageId ?? storedState?.activeStageId ?? null;
+    if (!stageId && !stageConflict && goalId) {
       const activeStageRows = await this.db.select({ id: roadmapStages.id }).from(roadmapStages).where(and(
         eq(roadmapStages.goalId, goalId),
         inArray(roadmapStages.status, ['active', 'ready_for_review'])
@@ -151,6 +194,7 @@ export class CurrentLearningContextPersistence {
       taskId: task?.id ?? null,
       actionId,
       stageId,
+      stageConflict,
       session: sessionRow ? mapSession(sessionRow) : null,
       state
     };
@@ -161,7 +205,8 @@ export class CurrentLearningContextPersistence {
       id: dailyGuideTasks.id,
       status: dailyGuideTasks.status,
       guideId: dailyGuideTasks.guideId,
-      goalId: dailyGuides.goalId
+      goalId: dailyGuides.goalId,
+      roadmapStageId: dailyGuideTasks.roadmapStageId
     }).from(dailyGuideTasks)
       .innerJoin(dailyGuides, eq(dailyGuides.id, dailyGuideTasks.guideId))
       .where(eq(dailyGuideTasks.id, taskId))
@@ -173,6 +218,7 @@ export class CurrentLearningContextPersistence {
         ? '当前主任务已完成，不能重新开始学习。'
         : '当前主任务已结束，不能重新开始学习。');
     }
+    await this.assertStageCanRun(task.goalId, task.roadmapStageId);
     const current = await this.resolve();
     if (current.goalId !== task.goalId || current.activeGuideId !== task.guideId) {
       throw new Error('所选任务不属于当前学习日，请刷新后从当前任务开始。');
@@ -194,6 +240,13 @@ export class CurrentLearningContextPersistence {
     const rows = await this.db.select().from(dailyGuides).where(eq(dailyGuides.id, guideId)).limit(1);
     const guide = rows[0];
     if (!guide) throw new Error(`Daily guide not found: ${guideId}`);
+    if (guide.shortPlanDayId) {
+      const dayRows = await this.db.select({ roadmapStageId: shortPlanDays.roadmapStageId })
+        .from(shortPlanDays)
+        .where(eq(shortPlanDays.id, guide.shortPlanDayId))
+        .limit(1);
+      await this.assertStageCanRun(guide.goalId, dayRows[0]?.roadmapStageId ?? null);
+    }
     const otherActiveGuides = await this.db.select().from(dailyGuides).where(and(
       eq(dailyGuides.goalId, guide.goalId),
       inArray(dailyGuides.sessionStatus, ['active', 'draft'])
@@ -242,6 +295,22 @@ export class CurrentLearningContextPersistence {
       target: learningRuntimeStates.id,
       set: nextState
     });
+  }
+
+  private async assertStageCanRun(goalId: string, stageId: string | null): Promise<void> {
+    if (!stageId) return;
+    const stages = await this.db.select().from(roadmapStages)
+      .where(eq(roadmapStages.goalId, goalId))
+      .orderBy(roadmapStages.position);
+    const target = stages.find((stage) => stage.id === stageId);
+    if (!target) throw new Error('当前任务关联的学习阶段不存在，请重新生成学习单元。');
+    if (target.status !== 'pending') return;
+
+    const blocking = stages.find((stage) => stage.position < target.position && stage.status !== 'completed');
+    if (blocking) {
+      throw new Error(`“${blocking.title}”尚未完成并确认，不能开始“${target.title}”。请先完成阶段复盘。`);
+    }
+    throw new Error(`“${target.title}”尚未正式激活，请先确认上一阶段成果。`);
   }
 
   async listGuideChoices(): Promise<CurrentGuideChoice[]> {
@@ -295,6 +364,68 @@ export class CurrentLearningContextPersistence {
     await this.makeGuideCurrent(guideId);
   }
 
+  async listAmbiguousLearningUnits(): Promise<LearningUnitRecoveryChoice[]> {
+    const activeGoals = await this.db.select({ id: goals.id }).from(goals).where(eq(goals.status, 'active'));
+    const choices: LearningUnitRecoveryChoice[] = [];
+    for (const goal of activeGoals) {
+      const closedGuides = await this.db.select().from(dailyGuides).where(and(
+        eq(dailyGuides.goalId, goal.id),
+        eq(dailyGuides.sessionStatus, 'closed')
+      ));
+      for (const guide of closedGuides) {
+        if (!guide.shortPlanDayId) continue;
+        const days = await this.db.select().from(shortPlanDays).where(and(
+          eq(shortPlanDays.id, guide.shortPlanDayId),
+          eq(shortPlanDays.sessionStatus, 'pending')
+        )).limit(1);
+        if (!days[0]) continue;
+        const tasks = await this.db.select().from(dailyGuideTasks)
+          .where(eq(dailyGuideTasks.guideId, guide.id))
+          .orderBy(dailyGuideTasks.position);
+        const hasUnfinished = tasks.some((task) => !sessionTerminalTaskStatuses.includes(task.status as typeof sessionTerminalTaskStatuses[number]));
+        if (!hasUnfinished) continue;
+        choices.push({
+          guideId: guide.id,
+          date: guide.date,
+          dayTitle: days[0].title || guide.todayGoal,
+          taskTitles: tasks.map((task) => task.title),
+          completedTaskCount: tasks.filter((task) => task.status === 'done').length,
+          skippedTaskCount: tasks.filter((task) => task.status === 'skipped').length,
+          totalTaskCount: tasks.length
+        });
+      }
+    }
+    return choices;
+  }
+
+  async resolveAmbiguousLearningUnit(guideId: string, decision: 'restore' | 'skip'): Promise<void> {
+    const choices = await this.listAmbiguousLearningUnits();
+    if (!choices.some((choice) => choice.guideId === guideId)) {
+      throw new Error('这个学习单元已不在待确认列表中，请重新检查学习进度。');
+    }
+    if (decision === 'restore') {
+      await this.makeGuideCurrent(guideId);
+      return;
+    }
+    const tasks = await this.db.select().from(dailyGuideTasks).where(eq(dailyGuideTasks.guideId, guideId));
+    const unfinishedIds = tasks
+      .filter((task) => !sessionTerminalTaskStatuses.includes(task.status as typeof sessionTerminalTaskStatuses[number]))
+      .map((task) => task.id);
+    if (unfinishedIds.length > 0) {
+      await this.db.update(dailyGuideActions).set({ status: 'skipped', completedAt: nowIso() }).where(and(
+        inArray(dailyGuideActions.taskId, unfinishedIds),
+        eq(dailyGuideActions.status, 'planned')
+      ));
+      await this.db.update(dailyGuideTasks).set({
+        status: 'skipped',
+        currentActionId: null,
+        nextStartPoint: null,
+        updatedAt: nowIso()
+      }).where(inArray(dailyGuideTasks.id, unfinishedIds));
+    }
+    await this.skipGuide(guideId);
+  }
+
   async completeGuide(guideId: string): Promise<string[]> {
     const rows = await this.db.select().from(dailyGuides).where(eq(dailyGuides.id, guideId)).limit(1);
     const guide = rows[0];
@@ -303,6 +434,18 @@ export class CurrentLearningContextPersistence {
     await this.db.update(dailyPlans).set({ status: 'completed' }).where(eq(dailyPlans.id, guide.planId));
     if (guide.shortPlanDayId) {
       await this.db.update(shortPlanDays).set({ sessionStatus: 'completed', locked: true }).where(eq(shortPlanDays.id, guide.shortPlanDayId));
+    }
+    return this.completeGuideSessions(guideId);
+  }
+
+  async skipGuide(guideId: string): Promise<string[]> {
+    const rows = await this.db.select().from(dailyGuides).where(eq(dailyGuides.id, guideId)).limit(1);
+    const guide = rows[0];
+    if (!guide) throw new Error('Guide not found');
+    await this.db.update(dailyGuides).set({ status: 'confirmed', sessionStatus: 'closed' }).where(eq(dailyGuides.id, guideId));
+    await this.db.update(dailyPlans).set({ status: 'completed' }).where(eq(dailyPlans.id, guide.planId));
+    if (guide.shortPlanDayId) {
+      await this.db.update(shortPlanDays).set({ sessionStatus: 'skipped', locked: true }).where(eq(shortPlanDays.id, guide.shortPlanDayId));
     }
     return this.completeGuideSessions(guideId);
   }
@@ -348,6 +491,28 @@ export class CurrentLearningContextPersistence {
         }
       }
 
+      const closedGuides = await this.db.select().from(dailyGuides).where(and(
+        eq(dailyGuides.goalId, goal.id),
+        eq(dailyGuides.sessionStatus, 'closed')
+      ));
+      for (const guide of closedGuides) {
+        if (!guide.shortPlanDayId) continue;
+        const pendingDays = await this.db.select({ id: shortPlanDays.id }).from(shortPlanDays).where(and(
+          eq(shortPlanDays.id, guide.shortPlanDayId),
+          eq(shortPlanDays.sessionStatus, 'pending')
+        )).limit(1);
+        if (!pendingDays[0]) continue;
+        const tasks = await this.db.select({ status: dailyGuideTasks.status }).from(dailyGuideTasks)
+          .where(eq(dailyGuideTasks.guideId, guide.id));
+        if (tasks.length > 0 && tasks.every((task) => task.status === 'done')) {
+          await this.completeGuide(guide.id);
+          fixed.push('已根据全部完成的任务修复一个历史学习单元状态');
+        } else if (tasks.length > 0 && tasks.every((task) => task.status === 'skipped')) {
+          await this.skipGuide(guide.id);
+          fixed.push('已根据全部跳过的任务修复一个历史学习单元状态');
+        }
+      }
+
       const activeDays = await this.db.select().from(shortPlanDays).where(and(
         eq(shortPlanDays.goalId, goal.id),
         eq(shortPlanDays.sessionStatus, 'active')
@@ -362,6 +527,15 @@ export class CurrentLearningContextPersistence {
           actual: orphanDays.map((day) => day.id).join(',')
         });
       }
+    }
+
+    const ambiguousUnits = await this.listAmbiguousLearningUnits();
+    if (ambiguousUnits.length > 0) {
+      conflicts.push({
+        field: 'learningUnits.lifecycle',
+        expected: '由用户确认恢复或跳过历史学习单元',
+        actual: `${ambiguousUnits.length} 个学习单元的数据状态无法自动判断`
+      });
     }
 
     let context = await this.resolve();

@@ -99,6 +99,64 @@ describe('StudyStore', () => {
     expect(task1Session?.status).toBe('completed');
   });
 
+  it('rejects starting a task in a later pending stage before the formal stage is completed', async () => {
+    const guide = await createConfirmedGuide();
+    const stages = await store.db.select().from(roadmapStages)
+      .where(eq(roadmapStages.goalId, guide.goalId))
+      .orderBy(asc(roadmapStages.position));
+    const firstStage = stages[0];
+    const secondStage = stages[1];
+    await store.db.update(dailyGuideTasks)
+      .set({ roadmapStageId: secondStage.id })
+      .where(eq(dailyGuideTasks.id, guide.tasks[0].id));
+    await store.db.update(shortPlanDays)
+      .set({ roadmapStageId: secondStage.id })
+      .where(eq(shortPlanDays.id, guide.shortPlanDayId!));
+
+    await expect(store.startSession(guide.tasks[0].id)).rejects.toThrow('尚未完成');
+    const runtime = await store.getLearningRuntimeSnapshot();
+    const storedRuntime = (await store.db.select().from(learningRuntimeStates)
+      .where(eq(learningRuntimeStates.id, 'default')))[0];
+    const updatedStages = await store.db.select().from(roadmapStages)
+      .where(eq(roadmapStages.goalId, guide.goalId))
+      .orderBy(asc(roadmapStages.position));
+
+    expect(firstStage.id).not.toBe(secondStage.id);
+    expect(storedRuntime.activeStageId).toBe(firstStage.id);
+    expect(runtime.state.activeStageId).toBeNull();
+    expect(runtime.stageConflict).toEqual(expect.objectContaining({
+      kind: 'formal_stage_mismatch',
+      formalStage: expect.objectContaining({ id: firstStage.id }),
+      learningUnitStage: expect.objectContaining({ id: secondStage.id })
+    }));
+    expect(updatedStages[0].status).toBe('active');
+    expect(updatedStages[1].status).toBe('pending');
+  });
+
+  it('returns a stage conflict instead of letting Renderer guess when Task and learning unit disagree', async () => {
+    const guide = await createConfirmedGuide();
+    const stages = await store.db.select().from(roadmapStages)
+      .where(eq(roadmapStages.goalId, guide.goalId))
+      .orderBy(asc(roadmapStages.position));
+    await store.db.update(dailyGuideTasks)
+      .set({ roadmapStageId: stages[1].id })
+      .where(eq(dailyGuideTasks.id, guide.tasks[0].id));
+
+    const runtime = await store.getLearningRuntimeSnapshot();
+
+    expect(runtime.state.activeStageId).toBeNull();
+    expect(runtime.roadmapStage).toBeNull();
+    expect(runtime.stageConflict).toEqual(expect.objectContaining({
+      kind: 'task_day_mismatch',
+      taskStage: expect.objectContaining({ title: '构建第一个 AI Agent 项目' }),
+      shortPlanDayStage: expect.objectContaining({ title: '项目接管基础' })
+    }));
+  });
+
+  it('rejects an initial learning unit that skips directly to a later roadmap stage', async () => {
+    await expect(createConfirmedGuide(2)).rejects.toThrow('首个学习单元必须属于第 1 阶段');
+  });
+
   it('persists question branches and returns to the same Daily Guide action', async () => {
     const guide = await createConfirmedGuide();
     const taskId = guide.tasks[0].id;
@@ -111,6 +169,19 @@ describe('StudyStore', () => {
     const actionId = started.dailyGuideAction!.id;
     const thread = await store.openQuestion(actionId, '先看哪个入口？');
     expect((await store.getLearningRuntimeSnapshot()).state.activeQuestionThreadId).toBe(thread.id);
+
+    await store.saveQuestionAnswer(thread.id, {
+      answer: '先看 Electron 入口，再看 renderer。',
+      relationToCurrentStep: '用于定位当前行动的代码入口。',
+      example: '',
+      resolved: false,
+      returnToStepInstruction: '确认入口后返回当前行动。',
+      resolutionSummary: ''
+    });
+    const exportedOpenQuestion = await store.exportGoalData(guide.goalId);
+    expect(exportedOpenQuestion.questionMessages).toEqual(
+      expect.arrayContaining([expect.objectContaining({ threadId: thread.id, role: 'assistant', content: '先看 Electron 入口，再看 renderer。' })])
+    );
 
     await store.resolveQuestion(thread.id, '先看 Electron 入口，再看 renderer。');
     const resolved = await store.getLearningRuntimeSnapshot();
@@ -164,7 +235,7 @@ describe('StudyStore', () => {
   });
 });
 
-async function createConfirmedGuide() {
+async function createConfirmedGuide(roadmapStagePosition = 1) {
   const goal = await store.createGoal('接管项目', '能跑通并讲清当前项目');
   const result = await store.saveLayeredPlan({
     goal,
@@ -179,6 +250,12 @@ async function createConfirmedGuide() {
           objective: '能跑通项目并讲清主流程',
           direction: '先理解已有项目，再补关键技术点',
           successCriteria: '能用 2 分钟讲清项目为什么做、怎么做'
+        },
+        {
+          title: '构建第一个 AI Agent 项目',
+          objective: '完成可运行的 Agent 项目',
+          direction: '整合工具调用与 Agent 主流程',
+          successCriteria: 'Agent 可以调用天气和计算工具'
         }
       ]
     },
@@ -187,6 +264,7 @@ async function createConfirmedGuide() {
       days: [
         {
           dayIndex: 1,
+          roadmapStagePosition,
           title: '跑通并梳理项目',
           focus: '建立项目所有权',
           tasks: ['跑一遍主流程', '写代码地图'],
@@ -586,7 +664,7 @@ describe('Runtime convergence', () => {
     expect(goalCount).toBe(1);
     expect(guideCount).toBe(1);
     expect(taskCount).toBe(2);
-    expect(roadmapCount).toBe(1);
+    expect(roadmapCount).toBe(2);
   });
 
   it('findActiveOrActivateStage dedupes multiple active stages', async () => {
@@ -1068,6 +1146,34 @@ describe('Runtime convergence', () => {
     expect(runtime.dailyGuide?.id).toBe(selected.guideId);
     expect(runtime.state.activeDailyTaskId).toBe(selected.taskId);
   });
+  it('previews ambiguous closed learning units and only restores or skips them after an explicit decision', async () => {
+    const oldGuide = await createConfirmedGuide();
+    const newer = await createLaterGuideForSameGoal(oldGuide.goalId);
+    await store.confirmDailyGuide(newer.guideId);
+
+    const choices = await store.listAmbiguousLearningUnits();
+    expect(choices).toEqual([
+      expect.objectContaining({
+        guideId: oldGuide.id,
+        dayTitle: '跑通并梳理项目',
+        taskTitles: ['锁定今天边界', '整理代码地图'],
+        completedTaskCount: 0,
+        skippedTaskCount: 0,
+        totalTaskCount: 2
+      })
+    ]);
+
+    await store.resolveAmbiguousLearningUnit(oldGuide.id, 'restore');
+    expect((await store.getLearningRuntimeSnapshot()).dailyGuide?.id).toBe(oldGuide.id);
+
+    await store.resolveAmbiguousLearningUnit(newer.guideId, 'restore');
+    await store.resolveAmbiguousLearningUnit(oldGuide.id, 'skip');
+    const oldDay = (await store.db.select().from(shortPlanDays).where(eq(shortPlanDays.id, oldGuide.shortPlanDayId!)))[0];
+    const oldTasks = await store.db.select().from(dailyGuideTasks).where(eq(dailyGuideTasks.guideId, oldGuide.id));
+    expect(oldDay.sessionStatus).toBe('skipped');
+    expect(oldTasks.every((task) => task.status === 'skipped')).toBe(true);
+    expect(await store.listAmbiguousLearningUnits()).toEqual([]);
+  });
   it('recordKnowledgeItems restores active status when a resolved item reappears', async () => {
     await store.db.delete(knowledgeItemEvidence);
     await store.db.delete(knowledgeItems);
@@ -1325,7 +1431,7 @@ describe('Runtime convergence', () => {
       date: '2026-07-05',
       windows: [{ start: '10:00', end: '12:00' }],
       roadmap: { goalSummary: 'test', stages: [{ title: 'S1', objective: 'O1', direction: 'D1', successCriteria: 'SC1' }] },
-      shortPlan: { weekFocus: 'test', days: [{ dayIndex: 1, title: 'T1', focus: 'F1', tasks: ['task1'], expectedOutput: 'EO1', successCriteria: 'SC1' }] },
+      shortPlan: { weekFocus: 'test', days: [{ dayIndex: 1, roadmapStagePosition: 1, title: 'T1', focus: 'F1', tasks: ['task1'], expectedOutput: 'EO1', successCriteria: 'SC1' }] },
       dailyGuide: { date: '2026-07-05', todayGoal: 'test', deliverables: [], boundaries: [], acceptanceCriteria: [], tomorrowActions: [], tasks: [{ title: 'Task1', objective: 'Obj1', scope: 'Scope1', estimatedMinutes: { min: 30, target: 45, max: 60 }, actions: [{ title: 'A1', instruction: 'Do A1', checkpoint: 'Done' }], deliverable: 'Del1', doneWhen: ['Done'], quickHint: 'Hint', evaluationMode: 'local', submissionPolicy: 'once_after_task', carryoverAllowed: true }] }
     });
 
@@ -1360,7 +1466,7 @@ describe('Plan Proposal', () => {
       date: '2026-07-05',
       windows: [{ start: '10:00', end: '12:00' }],
       roadmap: { goalSummary: 'test', stages: [{ title: 'S1', objective: 'O1', direction: 'D1', successCriteria: 'SC1' }] },
-      shortPlan: { weekFocus: 'test', days: [{ dayIndex: 1, title: 'T1', focus: 'F1', tasks: ['task1'], expectedOutput: 'EO1', successCriteria: 'SC1' }] },
+      shortPlan: { weekFocus: 'test', days: [{ dayIndex: 1, roadmapStagePosition: 1, title: 'T1', focus: 'F1', tasks: ['task1'], expectedOutput: 'EO1', successCriteria: 'SC1' }] },
       dailyGuide: { date: '2026-07-05', todayGoal: 'test', deliverables: [], boundaries: [], acceptanceCriteria: [], tomorrowActions: [], tasks: [{ title: 'Task1', objective: 'Obj1', scope: 'Scope1', estimatedMinutes: { min: 30, target: 45, max: 60 }, actions: [{ title: 'A1', instruction: 'Do A1', checkpoint: 'Done' }], deliverable: 'Del1', doneWhen: ['Done'], quickHint: 'Hint', evaluationMode: 'local', submissionPolicy: 'once_after_task', carryoverAllowed: true }] }
     });
 
@@ -1388,7 +1494,7 @@ describe('Plan Proposal', () => {
       date: '2026-07-05',
       windows: [{ start: '10:00', end: '12:00' }],
       roadmap: { goalSummary: 'test', stages: [{ title: 'S1', objective: 'O1', direction: 'D1', successCriteria: 'SC1' }] },
-      shortPlan: { weekFocus: 'test', days: [{ dayIndex: 1, title: 'T1', focus: 'F1', tasks: ['task1'], expectedOutput: 'EO1', successCriteria: 'SC1' }] },
+      shortPlan: { weekFocus: 'test', days: [{ dayIndex: 1, roadmapStagePosition: 1, title: 'T1', focus: 'F1', tasks: ['task1'], expectedOutput: 'EO1', successCriteria: 'SC1' }] },
       dailyGuide: { date: '2026-07-05', todayGoal: 'test', deliverables: [], boundaries: [], acceptanceCriteria: [], tomorrowActions: [], tasks: [{ title: 'Task1', objective: 'Obj1', scope: 'Scope1', estimatedMinutes: { min: 30, target: 45, max: 60 }, actions: [{ title: 'A1', instruction: 'Do A1', checkpoint: 'Done' }], deliverable: 'Del1', doneWhen: ['Done'], quickHint: 'Hint', evaluationMode: 'local', submissionPolicy: 'once_after_task', carryoverAllowed: true }] }
     });
 
@@ -1415,7 +1521,7 @@ describe('Plan Proposal', () => {
       date: '2026-07-05',
       windows: [{ start: '10:00', end: '12:00' }],
       roadmap: { goalSummary: 'test', stages: [{ title: 'S1', objective: 'O1', direction: 'D1', successCriteria: 'SC1' }] },
-      shortPlan: { weekFocus: 'test', days: [{ dayIndex: 1, title: '原始标题', focus: '原始重点', tasks: ['task1'], expectedOutput: 'EO1', successCriteria: 'SC1' }] },
+      shortPlan: { weekFocus: 'test', days: [{ dayIndex: 1, roadmapStagePosition: 1, title: '原始标题', focus: '原始重点', tasks: ['task1'], expectedOutput: 'EO1', successCriteria: 'SC1' }] },
       dailyGuide: { date: '2026-07-05', todayGoal: 'test', deliverables: [], boundaries: [], acceptanceCriteria: [], tomorrowActions: [], tasks: [{ title: 'Task1', objective: 'Obj1', scope: 'Scope1', estimatedMinutes: { min: 30, target: 45, max: 60 }, actions: [{ title: 'A1', instruction: 'Do A1', checkpoint: 'Done' }], deliverable: 'Del1', doneWhen: ['Done'], quickHint: 'Hint', evaluationMode: 'local', submissionPolicy: 'once_after_task', carryoverAllowed: true }] }
     });
 
@@ -1441,7 +1547,7 @@ describe('Plan Proposal', () => {
       date: '2026-07-05',
       windows: [{ start: '10:00', end: '12:00' }],
       roadmap: { goalSummary: 'test', stages: [{ title: 'S1', objective: 'O1', direction: 'D1', successCriteria: 'SC1' }] },
-      shortPlan: { weekFocus: 'test', days: [{ dayIndex: 1, title: 'T1', focus: 'F1', tasks: ['task1'], expectedOutput: 'EO1', successCriteria: 'SC1' }] },
+      shortPlan: { weekFocus: 'test', days: [{ dayIndex: 1, roadmapStagePosition: 1, title: 'T1', focus: 'F1', tasks: ['task1'], expectedOutput: 'EO1', successCriteria: 'SC1' }] },
       dailyGuide: { date: '2026-07-05', todayGoal: 'test', deliverables: [], boundaries: [], acceptanceCriteria: [], tomorrowActions: [], tasks: [{ title: 'Task1', objective: 'Obj1', scope: 'Scope1', estimatedMinutes: { min: 30, target: 45, max: 60 }, actions: [{ title: 'A1', instruction: 'Do A1', checkpoint: 'Done' }], deliverable: 'Del1', doneWhen: ['Done'], quickHint: 'Hint', evaluationMode: 'local', submissionPolicy: 'once_after_task', carryoverAllowed: true }] }
     });
 
