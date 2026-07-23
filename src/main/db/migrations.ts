@@ -3,6 +3,7 @@ import type { Client } from '@libsql/client';
 export interface DatabaseMigration {
   id: string;
   sql: string;
+  rollbackSql?: string;
 }
 
 export const databaseMigrations: DatabaseMigration[] = [
@@ -612,6 +613,114 @@ export const databaseMigrations: DatabaseMigration[] = [
       ALTER TABLE learning_submissions ADD COLUMN application_error TEXT;
       ALTER TABLE learning_submissions ADD COLUMN applied_at TEXT;
     `
+  },
+  {
+    id: '202607230001_unified_agent_loop',
+    sql: `
+      ALTER TABLE ai_reviews ADD COLUMN record_type TEXT NOT NULL DEFAULT 'legacy_call';
+      ALTER TABLE ai_reviews ADD COLUMN parent_review_id TEXT REFERENCES ai_reviews(id);
+      ALTER TABLE ai_reviews ADD COLUMN tool_name TEXT;
+      ALTER TABLE ai_reviews ADD COLUMN tool_sequence INTEGER;
+      ALTER TABLE ai_reviews ADD COLUMN idempotency_key TEXT;
+      ALTER TABLE ai_reviews ADD COLUMN goal_id TEXT REFERENCES goals(id);
+      ALTER TABLE ai_reviews ADD COLUMN conversation_scope TEXT;
+      ALTER TABLE ai_reviews ADD COLUMN conversation_ref_id TEXT;
+      ALTER TABLE ai_reviews ADD COLUMN message_ref_id TEXT;
+      ALTER TABLE ai_reviews ADD COLUMN context_version INTEGER;
+      ALTER TABLE ai_reviews ADD COLUMN started_at TEXT;
+      ALTER TABLE ai_reviews ADD COLUMN completed_at TEXT;
+
+      CREATE TABLE pending_interactions (
+        id TEXT PRIMARY KEY,
+        run_review_id TEXT NOT NULL REFERENCES ai_reviews(id),
+        tool_review_id TEXT NOT NULL REFERENCES ai_reviews(id),
+        scope_type TEXT NOT NULL,
+        scope_id TEXT NOT NULL,
+        question TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        answer_mode TEXT NOT NULL,
+        options_json TEXT NOT NULL DEFAULT '[]',
+        can_skip INTEGER NOT NULL DEFAULT 0,
+        intent TEXT NOT NULL,
+        expected_context_version INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        answer_text TEXT,
+        answer_message_ref_id TEXT,
+        created_at TEXT NOT NULL,
+        resolved_at TEXT
+      );
+
+      CREATE INDEX ai_reviews_parent_tool_idx
+        ON ai_reviews(parent_review_id, tool_sequence);
+      CREATE UNIQUE INDEX ai_reviews_idempotency_unique
+        ON ai_reviews(idempotency_key) WHERE idempotency_key IS NOT NULL;
+      CREATE INDEX ai_reviews_scope_status_idx
+        ON ai_reviews(conversation_scope, conversation_ref_id, status);
+      CREATE UNIQUE INDEX ai_reviews_one_active_run_per_scope
+        ON ai_reviews(conversation_scope, conversation_ref_id)
+        WHERE record_type = 'run' AND status IN ('running', 'waiting_user');
+      CREATE UNIQUE INDEX pending_interactions_one_open_per_run
+        ON pending_interactions(run_review_id) WHERE status = 'open';
+      CREATE INDEX pending_interactions_scope_status_idx
+        ON pending_interactions(scope_type, scope_id, status);
+    `,
+    rollbackSql: `
+      PRAGMA foreign_keys = OFF;
+      BEGIN;
+
+      DROP TABLE IF EXISTS pending_interactions;
+      DROP INDEX IF EXISTS ai_reviews_parent_tool_idx;
+      DROP INDEX IF EXISTS ai_reviews_idempotency_unique;
+      DROP INDEX IF EXISTS ai_reviews_scope_status_idx;
+      DROP INDEX IF EXISTS ai_reviews_one_active_run_per_scope;
+
+      CREATE TABLE ai_reviews_rollback (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        date TEXT,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        prompt_profile_id TEXT,
+        prompt_version_id TEXT,
+        input_snapshot_json TEXT NOT NULL,
+        output_json TEXT NOT NULL,
+        output_schema_version TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error_message TEXT,
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        latency_ms INTEGER,
+        error_category TEXT,
+        trace_id TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      INSERT INTO ai_reviews_rollback (
+        id, kind, date, provider, model, prompt_profile_id, prompt_version_id,
+        input_snapshot_json, output_json, output_schema_version, status,
+        error_message, input_tokens, output_tokens, latency_ms, error_category,
+        trace_id, created_at
+      )
+      SELECT
+        id, kind, date, provider, model, prompt_profile_id, prompt_version_id,
+        input_snapshot_json, output_json, output_schema_version,
+        CASE WHEN status IN ('success', 'completed') THEN 'success' ELSE 'failed' END,
+        CASE
+          WHEN status IN ('running', 'waiting_user', 'cancelled')
+            THEN COALESCE(error_message, 'Unified Agent Loop rollback cancelled this unfinished run.')
+          ELSE error_message
+        END,
+        input_tokens, output_tokens, latency_ms, error_category, trace_id, created_at
+      FROM ai_reviews;
+
+      DROP TABLE ai_reviews;
+      ALTER TABLE ai_reviews_rollback RENAME TO ai_reviews;
+      DELETE FROM schema_migrations WHERE id = '202607230001_unified_agent_loop';
+
+      COMMIT;
+      PRAGMA foreign_keys = ON;
+      PRAGMA foreign_key_check;
+    `
   }
 ];
 
@@ -631,7 +740,8 @@ const bootstrapCoveredMigrationIds = new Set([
   '202607060006_roadmap_stage_status',
   '202607060008_short_plan_roadmap_stage',
   '202607060010_short_plan_locked',
-  '202607120001_learner_fact_task_anchor'
+  '202607120001_learner_fact_task_anchor',
+  '202607230001_unified_agent_loop'
 ]);
 
 export async function markBootstrapCoveredMigrationsApplied(client: Client): Promise<void> {

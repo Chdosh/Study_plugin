@@ -282,6 +282,10 @@ export default function App(): JSX.Element {
                   setOnboarding(await window.studyApp.onboarding.sendMessage(content));
                   await refresh();
                 })}
+                onCancelPendingQuestion={() => runAction('取消 AI 追问', async () => {
+                  setOnboarding(await window.studyApp.onboarding.cancelQuestion());
+                  await refresh();
+                })}
                 onConfirmGoal={(briefPatch) => runAction('确认目标并生成计划', async () => {
                   const result = await window.studyApp.onboarding.confirmGoal(briefPatch);
                   try { await window.studyApp.guides.generateLayeredPlan(result.goal.id); }

@@ -1,4 +1,230 @@
-import type { GoalBrief, GoalIntakeMessage, KnowledgeItem, PromptProfile, RoadmapStage, ShortPlanDay, StudyWindow } from '../../shared/types';
+import {
+  answerStepQuestionAgentOutputSchema,
+  dailyGuideAgentOutputSchema,
+  goalIntakeAgentOutputSchema,
+  roadmapAgentOutputSchema,
+  reviewAgentOutputSchema,
+  shortPlanAgentOutputSchema,
+  submissionEvaluationAgentOutputSchema,
+  teachStepAgentOutputSchema
+} from '../../../shared/schemas';
+import type {
+  AppSettings,
+  GoalBrief,
+  GoalIntakeMessage,
+  KnowledgeItem,
+  PromptProfile,
+  RoadmapStage,
+  ShortPlanDay,
+  StudyWindow
+} from '../../../shared/types';
+import { AiClient, type AiCallMetrics } from '../../ai/ai-client';
+import { systemPromptFor } from '../agent-system-prompt';
+import type { AgentContextKind, AgentToolName, AskUserRequest } from '../agent-types';
+import { ToolRegistry } from '../tool-registry';
+
+export interface AgentRuntimeSettings extends AppSettings {
+  deepseekApiKey: string | null;
+}
+
+type JsonToolInput = {
+  settings: AgentRuntimeSettings;
+  profile: PromptProfile;
+  traceId?: string;
+};
+
+export function createBuiltinToolRegistry(
+  ai: AiClient,
+  searchKnowledge: (params: { goalId: string; query?: string; limit?: number }) => Promise<KnowledgeItem[]>
+): ToolRegistry {
+  const registry = new ToolRegistry();
+
+  const registerJsonTool = <TInput extends JsonToolInput, TOutput>(params: {
+    name: AgentToolName;
+    description: string;
+    contexts: AgentContextKind[];
+    role: string;
+    schema: any;
+    schemaVersion: string;
+    timeoutMs?: number;
+    buildPrompt: (input: TInput) => string;
+    requestUser?: (output: TOutput) => AskUserRequest | undefined;
+  }) => {
+    registry.register<TInput, TOutput>({
+      name: params.name,
+      description: params.description,
+      contexts: params.contexts,
+      execute: async (input) => {
+        let metrics: AiCallMetrics | undefined;
+        const output = await ai.generateJson({
+          apiKey: input.settings.deepseekApiKey,
+          baseUrl: input.settings.deepseekBaseUrl,
+          model: input.settings.deepseekModel,
+          schema: params.schema,
+          timeoutMs: params.timeoutMs,
+          system: systemPromptFor(params.role),
+          user: params.buildPrompt(input),
+          traceId: input.traceId,
+          onMetrics: (value) => {
+            metrics = value;
+          }
+        }) as TOutput;
+        return {
+          output,
+          metrics,
+          requestUser: params.requestUser?.(output)
+        };
+      }
+    });
+  };
+
+  registerJsonTool<any, any>({
+    name: 'propose_goal',
+    description: '澄清并形成用户学习目标。',
+    contexts: ['goal_intake'],
+    role: '目标澄清与访谈',
+    schema: goalIntakeAgentOutputSchema,
+    schemaVersion: 'goal-intake.v1',
+    buildPrompt: (input) => buildGoalIntakePrompt(input),
+    requestUser: (output) => output.status === 'need_more_info'
+      ? {
+          question: output.reply,
+          reason: '继续目标澄清需要用户补充关键信息。',
+          answerMode: 'free_text',
+          canSkip: true,
+          intent: 'continue_goal_intake'
+        }
+      : undefined
+  });
+
+  registerJsonTool<any, any>({
+    name: 'propose_roadmap',
+    description: '根据已确认目标提出阶段学习路径。',
+    contexts: ['planning'],
+    role: '长期学习路径规划',
+    schema: roadmapAgentOutputSchema,
+    schemaVersion: 'roadmap.v1',
+    buildPrompt: (input) => buildRoadmapPrompt(input)
+  });
+
+  registerJsonTool<any, any>({
+    name: 'propose_short_plan',
+    description: '生成初始或滚动的近期学习单元。',
+    contexts: ['planning'],
+    role: '近期滚动学习规划',
+    schema: shortPlanAgentOutputSchema,
+    schemaVersion: 'short-plan.v1',
+    buildPrompt: (input) => input.mode === 'rolling'
+      ? buildRollingPlanPrompt(input)
+      : buildShortPlanPrompt(input)
+  });
+
+  registerJsonTool<any, any>({
+    name: 'prepare_learning_guide',
+    description: '把近期学习单元展开为当前可执行内容。',
+    contexts: ['planning', 'study'],
+    role: '当前学习内容准备',
+    schema: dailyGuideAgentOutputSchema,
+    schemaVersion: 'daily-guide.v2',
+    timeoutMs: 120_000,
+    buildPrompt: (input) => buildDailyGuidePrompt(input)
+  });
+
+  registerJsonTool<any, any>({
+    name: 'reflect',
+    description: '根据学习事实生成阶段性复盘。',
+    contexts: ['review'],
+    role: '学习复盘',
+    schema: reviewAgentOutputSchema,
+    schemaVersion: 'review.v1',
+    buildPrompt: (input) => buildReviewPrompt(input)
+  });
+
+  registry.register<any, any>({
+    name: 'explain',
+    description: '讲解当前内容或回答当前学习问题。',
+    contexts: ['study'],
+    execute: async (input) => {
+      let metrics: AiCallMetrics | undefined;
+      const isQuestion = input.mode === 'question';
+      const output = await ai.generateJson({
+        apiKey: input.settings.deepseekApiKey,
+        baseUrl: input.settings.deepseekBaseUrl,
+        model: input.settings.deepseekModel,
+        schema: isQuestion ? answerStepQuestionAgentOutputSchema : teachStepAgentOutputSchema,
+        system: systemPromptFor(isQuestion ? '学习问题答疑' : '渐进式概念讲解'),
+        user: isQuestion
+          ? buildAnswerStepQuestionPrompt(input)
+          : buildTeachStepPrompt(input),
+        traceId: input.traceId,
+        onMetrics: (value) => {
+          metrics = value;
+        }
+      });
+      return { output, metrics };
+    }
+  });
+
+  for (const name of ['quiz', 'practice'] as const) {
+    registry.register<any, any>({
+      name,
+      description: name === 'quiz' ? '生成用于检查理解的小测。' : '生成当前知识点的练习。',
+      contexts: ['study'],
+      execute: async (input) => {
+        let metrics: AiCallMetrics | undefined;
+        const instruction = name === 'quiz'
+          ? '生成一个简短小测来检查理解，给出清晰作答要求。'
+          : '生成一个与当前上下文直接相关的练习，给出清晰完成要求。';
+        const output = await ai.generateJson({
+          apiKey: input.settings.deepseekApiKey,
+          baseUrl: input.settings.deepseekBaseUrl,
+          model: input.settings.deepseekModel,
+          schema: teachStepAgentOutputSchema,
+          system: systemPromptFor(name === 'quiz' ? '理解检查' : '练习设计'),
+          user: [
+            input.profile.content,
+            instruction,
+            '输出字段：explanation、userAction、requiresSubmission。所有自然语言内容使用中文。',
+            `学习上下文：${JSON.stringify(input.context ?? {})}`
+          ].join('\n'),
+          traceId: input.traceId,
+          onMetrics: (value) => {
+            metrics = value;
+          }
+        });
+        return { output, metrics };
+      }
+    });
+  }
+
+  registerJsonTool<any, any>({
+    name: 'evaluate',
+    description: '评价用户保存后的学习成果。',
+    contexts: ['evaluation'],
+    role: '成果评价',
+    schema: submissionEvaluationAgentOutputSchema,
+    schemaVersion: 'submission-evaluation.v1',
+    buildPrompt: (input) => buildEvaluateSubmissionPrompt(input)
+  });
+
+  registry.register<{ goalId: string; query?: string; limit?: number }, KnowledgeItem[]>({
+    name: 'search_kb',
+    description: '查询与当前目标相关的个人知识记录。',
+    contexts: ['goal_intake', 'planning', 'study', 'evaluation', 'review', 'knowledge'],
+    execute: async (input) => ({
+      output: await searchKnowledge(input)
+    })
+  });
+
+  registry.register<AskUserRequest, AskUserRequest>({
+    name: 'ask_user',
+    description: '暂停当前 Run，向用户询问继续所需的信息。',
+    contexts: ['goal_intake', 'planning', 'study', 'evaluation', 'review', 'knowledge'],
+    execute: async (input) => ({ output: input })
+  });
+
+  return registry;
+}
 
 export function buildReviewPrompt(params: {
   date: string;

@@ -24,6 +24,7 @@ import type {
   TodayGuideState
 } from '../../../shared/types';
 import { TypingDots } from '../components/ai/TypingDots';
+import { PendingAgentQuestion } from '../components/ai/PendingAgentQuestion';
 import { HistoryPanel } from '../components/shared/HistoryPanel';
 import { GoalBriefEditor } from '../components/today/GoalBriefEditor';
 import { deriveLearningTaskStatus } from '../domain/learning-status';
@@ -37,6 +38,7 @@ export function OverviewPage({
   learningState,
   runAction,
   onSendOnboarding,
+  onCancelPendingQuestion,
   onConfirmGoal,
   onGenerateLayeredPlan,
   onConfirmGuide,
@@ -53,6 +55,7 @@ export function OverviewPage({
   learningState: LearningRuntimeSnapshot | null;
   runAction: (label: string, action: () => Promise<void>) => Promise<void>;
   onSendOnboarding: (content: string) => Promise<void>;
+  onCancelPendingQuestion: () => Promise<void>;
   onConfirmGoal: (briefPatch?: Partial<GoalBrief>) => Promise<void>;
   onGenerateLayeredPlan: (goalId: string) => Promise<void>;
   onConfirmGuide: (guideId: string) => Promise<void>;
@@ -174,6 +177,13 @@ export function OverviewPage({
                 </div>
               )}
             </div>
+
+            {onboarding?.pendingInteraction?.status === 'open' && !intakePending && (
+              <PendingAgentQuestion
+                interaction={onboarding.pendingInteraction}
+                onCancel={() => void onCancelPendingQuestion()}
+              />
+            )}
 
             <div className="intake-input-dock">
               <div className="intake-input-box">

@@ -74,10 +74,31 @@ export interface GoalIntakeMessage {
   createdAt: string;
 }
 
+export interface PendingAgentInteraction {
+  id: Id;
+  runReviewId: Id;
+  toolReviewId: Id;
+  scopeType: string;
+  scopeId: Id;
+  question: string;
+  reason: string;
+  answerMode: 'free_text' | 'single_choice';
+  options: string[];
+  canSkip: boolean;
+  intent: string;
+  expectedContextVersion: number;
+  status: 'open' | 'answered' | 'skipped' | 'cancelled';
+  answerText: string | null;
+  answerMessageRefId: Id | null;
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
 export interface GoalIntakeState {
   intake: GoalIntake;
   messages: GoalIntakeMessage[];
   activeGoal: LearningGoal | null;
+  pendingInteraction?: PendingAgentInteraction | null;
 }
 
 export interface HistoryIntakeSummary {
@@ -636,6 +657,7 @@ export interface StudyAppApi {
   onboarding: {
     getCurrent: () => Promise<GoalIntakeState>;
     sendMessage: (content: string) => Promise<GoalIntakeState>;
+    cancelQuestion: () => Promise<GoalIntakeState>;
     confirmGoal: (briefPatch?: Partial<GoalBrief>) => Promise<{ goal: LearningGoal; intake: GoalIntake }>;
   };
   guides: {

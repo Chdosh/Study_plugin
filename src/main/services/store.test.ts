@@ -1806,6 +1806,73 @@ describe('learning summary lifecycle', () => {
   });
 });
 
+describe('agent loop persistence', () => {
+  it('persists an open ask_user interaction across database restart and answers it once', async () => {
+    const runReviewId = await store.saveAiReview({
+      kind: 'goal_intake',
+      provider: 'test',
+      model: 'test',
+      inputSnapshot: {},
+      output: {},
+      outputSchemaVersion: 'goal-intake.v1',
+      status: 'waiting_user',
+      recordType: 'run',
+      conversationScope: 'goal_intake',
+      conversationRefId: 'intake-restart',
+      contextVersion: 2
+    });
+    const toolReviewId = await store.saveAiReview({
+      kind: 'tool_call',
+      provider: 'local',
+      model: 'control',
+      inputSnapshot: {},
+      output: { question: '每天可以投入多久？' },
+      outputSchemaVersion: 'ask-user.v1',
+      status: 'waiting_user',
+      recordType: 'tool_call',
+      parentReviewId: runReviewId,
+      toolName: 'ask_user',
+      toolSequence: 1
+    });
+    const interaction = await store.createPendingInteraction({
+      runReviewId,
+      toolReviewId,
+      scopeType: 'goal_intake',
+      scopeId: 'intake-restart',
+      expectedContextVersion: 2,
+      request: {
+        question: '每天可以投入多久？',
+        reason: '缺少时间约束',
+        answerMode: 'free_text',
+        canSkip: true,
+        intent: 'continue_goal_intake'
+      }
+    });
+
+    client.close();
+    const reopened = await createDatabase(tmpPath);
+    client = reopened.client;
+    const restoredStore = new StudyStore(reopened.db);
+    const restored = await restoredStore.getOpenPendingInteraction(
+      'goal_intake',
+      'intake-restart'
+    );
+
+    expect(restored).toMatchObject({
+      id: interaction.id,
+      runReviewId,
+      question: '每天可以投入多久？',
+      status: 'open'
+    });
+    await expect(
+      restoredStore.answerPendingInteraction(interaction.id, '每天一小时')
+    ).resolves.toBe(true);
+    await expect(
+      restoredStore.answerPendingInteraction(interaction.id, '重复回答')
+    ).resolves.toBe(false);
+  });
+});
+
 async function removeTempDir(path: string): Promise<void> {
   for (let attempt = 0; attempt < 5; attempt++) {
     try {

@@ -39,6 +39,8 @@ const api: StudyAppApi = {
     getCurrent: (): Promise<GoalIntakeState> => ipcRenderer.invoke(ipcChannels.onboardingGetCurrent),
     sendMessage: (content: string): Promise<GoalIntakeState> =>
       ipcRenderer.invoke(ipcChannels.onboardingSendMessage, { content }),
+    cancelQuestion: (): Promise<GoalIntakeState> =>
+      ipcRenderer.invoke(ipcChannels.onboardingCancelQuestion),
     confirmGoal: (briefPatch?: Partial<GoalBrief>): Promise<{ goal: LearningGoal; intake: GoalIntake }> =>
       ipcRenderer.invoke(ipcChannels.onboardingConfirmGoal, { briefPatch })
   },

@@ -9,6 +9,9 @@ export function registerIpcHandlers(appService: AppService): void {
   ipcMain.handle(ipcChannels.onboardingSendMessage, (_event, payload) =>
     appService.sendOnboardingMessage(payload.content)
   );
+  ipcMain.handle(ipcChannels.onboardingCancelQuestion, () =>
+    appService.cancelOnboardingQuestion()
+  );
   ipcMain.handle(ipcChannels.onboardingConfirmGoal, (_event, payload) =>
     appService.confirmOnboardingGoal(payload?.briefPatch)
   );

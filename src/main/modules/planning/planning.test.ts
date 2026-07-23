@@ -14,7 +14,6 @@ function fixture(overrides: Partial<PlanningStore> = {}) {
     getGoalBriefForGoal: vi.fn().mockResolvedValue({}),
     getPromptProfile: vi.fn().mockResolvedValue({ id: 'profile-1', activeVersionId: 'version-1' }),
     getKnowledgeContextForGoal: vi.fn().mockResolvedValue({ knowledgeItems: [], reviewKnowledgeItems: [] }),
-    saveAiReview: vi.fn().mockResolvedValue('review-1'),
     saveDailyGuideWithTransaction: vi.fn().mockResolvedValue({ guide: { id: 'guide-1' } }),
     ensureDraftDailyGuide: vi.fn().mockResolvedValue({ id: 'guide-draft', sessionStatus: 'draft', tasks: [] }),
     buildContext: vi.fn().mockResolvedValue({ operation: 'generate_daily_guide', snapshot: {}, context: {}, contextSourceIds: [] }),
@@ -25,7 +24,10 @@ function fixture(overrides: Partial<PlanningStore> = {}) {
     ...overrides
   } as unknown as PlanningStore;
   const deps = {
-    dailyGuideAgent: { run: vi.fn().mockResolvedValue({ tasks: [] }) },
+    runAgentTool: vi.fn().mockResolvedValue({
+      runReviewId: 'run-1',
+      output: { tasks: [] }
+    }),
     getRuntimeSettings: vi.fn().mockResolvedValue({ dailyStudyWindows: [], deepseekModel: 'test-model' }),
     createTraceId: () => 'trace-1',
     todayIso: () => '2026-07-11'
@@ -42,12 +44,12 @@ describe('PlanningModule', () => {
     const result = await new PlanningModule(store).prepareCurrentLearningDay({}, deps);
 
     expect(result.todayState).toBe('plan_exhausted');
-    expect(deps.dailyGuideAgent.run).not.toHaveBeenCalled();
+    expect(deps.runAgentTool).not.toHaveBeenCalled();
   });
 
-  it('AI 失败时保留已激活计划日并记录失败，允许后续重试', async () => {
+  it('AI 失败时保留已激活计划日并允许后续重试', async () => {
     const { store, deps } = fixture();
-    vi.mocked(deps.dailyGuideAgent.run).mockRejectedValue(new Error('模型超时'));
+    vi.mocked(deps.runAgentTool).mockRejectedValue(new Error('模型超时'));
 
     const result = await new PlanningModule(store).prepareCurrentLearningDay({}, deps);
 
@@ -55,11 +57,10 @@ describe('PlanningModule', () => {
     expect(store.activateShortPlanDay).toHaveBeenCalledWith('day-1');
     expect(store.ensureDraftDailyGuide).toHaveBeenCalledWith(expect.objectContaining({ shortPlanDayId: 'day-1' }));
     expect(store.saveDailyGuideWithTransaction).not.toHaveBeenCalled();
-    expect(store.saveAiReview).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
     expect(store.releaseGenerationLock).toHaveBeenCalledWith('daily_guide:goal-1');
   });
 
-  it('草稿创建失败时返回可重试结果并记录前置阶段', async () => {
+  it('草稿创建失败时返回可重试结果且不调用工具', async () => {
     const { store, deps } = fixture({
       ensureDraftDailyGuide: vi.fn().mockRejectedValue(new Error('草稿写入失败'))
     });
@@ -67,12 +68,7 @@ describe('PlanningModule', () => {
     const result = await new PlanningModule(store).prepareCurrentLearningDay({}, deps);
 
     expect(result).toEqual({ todayState: 'generation_failed', errorMessage: '草稿写入失败' });
-    expect(deps.dailyGuideAgent.run).not.toHaveBeenCalled();
-    expect(store.saveAiReview).toHaveBeenCalledWith(expect.objectContaining({
-      status: 'failed',
-      errorMessage: '草稿写入失败',
-      inputSnapshot: expect.objectContaining({ phase: 'create_draft' })
-    }));
+    expect(deps.runAgentTool).not.toHaveBeenCalled();
   });
 
   it('运行设置读取失败时仍返回可重试结果，不依赖已加载模型信息', async () => {
@@ -82,23 +78,7 @@ describe('PlanningModule', () => {
     const result = await new PlanningModule(store).prepareCurrentLearningDay({}, deps);
 
     expect(result).toEqual({ todayState: 'generation_failed', errorMessage: '设置读取失败' });
-    expect(store.saveAiReview).toHaveBeenCalledWith(expect.objectContaining({
-      provider: 'local',
-      model: 'not_loaded',
-      status: 'failed'
-    }));
-  });
-
-  it('失败审计写入异常不会遮蔽原始生成错误', async () => {
-    const { store, deps } = fixture({
-      ensureDraftDailyGuide: vi.fn().mockRejectedValue(new Error('草稿写入失败')),
-      saveAiReview: vi.fn().mockRejectedValue(new Error('审计写入失败'))
-    });
-
-    await expect(new PlanningModule(store).prepareCurrentLearningDay({}, deps)).resolves.toEqual({
-      todayState: 'generation_failed',
-      errorMessage: '草稿写入失败'
-    });
+    expect(deps.runAgentTool).not.toHaveBeenCalled();
   });
 
   it('AI 输出保存失败时保留草稿并返回可重试结果', async () => {
@@ -109,26 +89,22 @@ describe('PlanningModule', () => {
     const result = await new PlanningModule(store).prepareCurrentLearningDay({}, deps);
 
     expect(result).toEqual({ todayState: 'generation_failed', errorMessage: '执行稿保存失败' });
-    expect(store.saveAiReview).toHaveBeenCalledWith(expect.objectContaining({
-      status: 'failed',
-      errorMessage: '执行稿保存失败',
-      inputSnapshot: expect.objectContaining({ phase: 'save_daily_guide' })
-    }));
+    expect(deps.runAgentTool).toHaveBeenCalledTimes(1);
   });
 
   it('同一目标的并发准备共享一次生成任务', async () => {
     const { store, deps } = fixture();
     let resolve!: (value: any) => void;
-    vi.mocked(deps.dailyGuideAgent.run).mockImplementation(() => new Promise((done) => { resolve = done; }));
+    vi.mocked(deps.runAgentTool).mockImplementation(() => new Promise((done) => { resolve = done; }));
     const planning = new PlanningModule(store);
 
     const first = planning.prepareCurrentLearningDay({}, deps);
-    await vi.waitFor(() => expect(deps.dailyGuideAgent.run).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(deps.runAgentTool).toHaveBeenCalledTimes(1));
     const second = planning.prepareCurrentLearningDay({}, deps);
-    resolve({ tasks: [] });
+    resolve({ runReviewId: 'run-1', output: { tasks: [] } });
 
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
-    expect(deps.dailyGuideAgent.run).toHaveBeenCalledTimes(1);
+    expect(deps.runAgentTool).toHaveBeenCalledTimes(1);
     expect(store.acquireGenerationLock).toHaveBeenCalledTimes(1);
   });
 
@@ -160,9 +136,6 @@ describe('PlanningModule', () => {
     });
 
     expect(store.closeCurrentSession).toHaveBeenCalledWith('guide-1');
-    expect(store.saveAiReview).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'reflection', status: 'failed', errorMessage: '复盘模型超时'
-    }));
     expect(result.todayState).toBe('plan_exhausted');
     expect(result.review).toBeNull();
   });

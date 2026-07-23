@@ -1,13 +1,19 @@
-import { and, asc, desc, eq, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lt, sql } from 'drizzle-orm';
 import type { PromptProfile, ReviewResult } from '../../../shared/types';
 import type { ReviewAgentOutput } from '../../../shared/schemas';
-import type { AiCallMetrics } from '../../ai/ai-client';
+import type {
+  CreatePendingInteractionInput,
+  PendingAgentInteraction,
+  SaveAiReviewInput,
+  UpdateAiReviewInput
+} from '../../agent/agent-types';
 import type { Database } from '../../db/client';
 import { defaultPromptProfiles } from '../../db/default-prompts';
 import {
   aiReviews,
   appSettings,
   generationLocks,
+  pendingInteractions,
   promptProfiles,
   promptVersions
 } from '../../db/schema';
@@ -126,7 +132,7 @@ export class OpsPersistence {
     }
     const rows = await this.db
       .select({
-        kind: aiReviews.kind,
+        kind: sql<string>`COALESCE(${aiReviews.toolName}, ${aiReviews.kind})`,
         date: aiReviews.date,
         inputTokens: sql<number>`COALESCE(SUM(${aiReviews.inputTokens}), 0)`,
         outputTokens: sql<number>`COALESCE(SUM(${aiReviews.outputTokens}), 0)`,
@@ -134,7 +140,7 @@ export class OpsPersistence {
       })
       .from(aiReviews)
       .where(and(...conditions))
-      .groupBy(aiReviews.kind, aiReviews.date);
+      .groupBy(sql`COALESCE(${aiReviews.toolName}, ${aiReviews.kind})`, aiReviews.date);
 
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
@@ -253,40 +259,12 @@ export class OpsPersistence {
     return this.getPromptProfile(profileId);
   }
 
-  async saveAiReview(params: {
-    kind:
-      | 'import'
-      | 'plan'
-      | 'goal_intake'
-      | 'roadmap'
-      | 'short_plan'
-      | 'daily_guide'
-      | 'stage_outline'
-      | 'teach_step'
-      | 'question'
-      | 'submission_evaluation'
-      | 'next_step'
-      | 'evaluation'
-      | 'replan'
-      | 'reflection'
-      | 'rolling_plan';
-    date?: string;
-    provider: string;
-    model: string;
-    promptProfileId?: string;
-    promptVersionId?: string | null;
-    inputSnapshot: unknown;
-    output: unknown;
-    outputSchemaVersion: string;
-    status: 'success' | 'failed';
-    errorMessage?: string;
-    metrics?: AiCallMetrics;
-  }): Promise<string> {
+  async saveAiReview(params: SaveAiReviewInput): Promise<string> {
     const id = createId('ai_review');
     const metrics = params.metrics;
     await this.db.insert(aiReviews).values({
       id,
-      kind: params.kind,
+      kind: params.kind as typeof aiReviews.$inferInsert.kind,
       date: params.date,
       provider: params.provider,
       model: params.model,
@@ -295,22 +273,216 @@ export class OpsPersistence {
       inputSnapshotJson: JSON.stringify(params.inputSnapshot),
       outputJson: JSON.stringify(params.output),
       outputSchemaVersion: params.outputSchemaVersion,
-      status: params.status,
+      status: params.status as typeof aiReviews.$inferInsert.status,
       errorMessage: params.errorMessage,
       inputTokens: metrics?.inputTokens ?? null,
       outputTokens: metrics?.outputTokens ?? null,
       latencyMs: metrics?.latencyMs ?? null,
       errorCategory: metrics?.errorCategory ?? null,
       traceId: metrics?.traceId ?? null,
+      recordType: params.recordType ?? 'legacy_call',
+      parentReviewId: params.parentReviewId,
+      toolName: params.toolName,
+      toolSequence: params.toolSequence,
+      idempotencyKey: params.idempotencyKey,
+      goalId: params.goalId,
+      conversationScope: params.conversationScope,
+      conversationRefId: params.conversationRefId,
+      messageRefId: params.messageRefId,
+      contextVersion: params.contextVersion,
+      startedAt: params.startedAt,
+      completedAt: params.completedAt,
       createdAt: nowIso()
     });
     return id;
   }
 
+  async updateAiReview(id: string, patch: UpdateAiReviewInput): Promise<void> {
+    const values: Partial<typeof aiReviews.$inferInsert> = {};
+    if (patch.status !== undefined) values.status = patch.status;
+    if ('output' in patch) values.outputJson = JSON.stringify(patch.output ?? {});
+    if ('errorMessage' in patch) values.errorMessage = patch.errorMessage;
+    if ('completedAt' in patch) values.completedAt = patch.completedAt;
+    if (patch.metrics) {
+      values.inputTokens = patch.metrics.inputTokens;
+      values.outputTokens = patch.metrics.outputTokens;
+      values.latencyMs = patch.metrics.latencyMs;
+      values.errorCategory = patch.metrics.errorCategory ?? null;
+      values.traceId = patch.metrics.traceId;
+    }
+    if (Object.keys(values).length === 0) return;
+    await this.db.update(aiReviews).set(values).where(eq(aiReviews.id, id));
+  }
+
+  async getActiveAgentRun(
+    scopeType: string,
+    scopeId: string
+  ): Promise<{ id: string; status: 'running' | 'waiting_user' } | null> {
+    const rows = await this.db
+      .select({ id: aiReviews.id, status: aiReviews.status })
+      .from(aiReviews)
+      .where(and(
+        eq(aiReviews.recordType, 'run'),
+        eq(aiReviews.conversationScope, scopeType),
+        eq(aiReviews.conversationRefId, scopeId),
+        inArray(aiReviews.status, ['running', 'waiting_user'])
+      ))
+      .orderBy(desc(aiReviews.createdAt))
+      .limit(1);
+    const row = rows[0];
+    if (!row || (row.status !== 'running' && row.status !== 'waiting_user')) return null;
+    return { id: row.id, status: row.status };
+  }
+
+  async getNextAgentToolSequence(runReviewId: string): Promise<number> {
+    const rows = await this.db
+      .select({ value: sql<number>`COALESCE(MAX(${aiReviews.toolSequence}), 0)` })
+      .from(aiReviews)
+      .where(eq(aiReviews.parentReviewId, runReviewId));
+    return Number(rows[0]?.value ?? 0) + 1;
+  }
+
+  async createPendingInteraction(
+    params: CreatePendingInteractionInput
+  ): Promise<PendingAgentInteraction> {
+    const id = createId('pending_interaction');
+    const createdAt = nowIso();
+    await this.db.insert(pendingInteractions).values({
+      id,
+      runReviewId: params.runReviewId,
+      toolReviewId: params.toolReviewId,
+      scopeType: params.scopeType,
+      scopeId: params.scopeId,
+      question: params.request.question,
+      reason: params.request.reason,
+      answerMode: params.request.answerMode,
+      optionsJson: JSON.stringify(params.request.options ?? []),
+      canSkip: params.request.canSkip,
+      intent: params.request.intent,
+      expectedContextVersion: params.expectedContextVersion,
+      status: 'open',
+      createdAt
+    });
+    return {
+      id,
+      runReviewId: params.runReviewId,
+      toolReviewId: params.toolReviewId,
+      scopeType: params.scopeType,
+      scopeId: params.scopeId,
+      question: params.request.question,
+      reason: params.request.reason,
+      answerMode: params.request.answerMode,
+      options: params.request.options ?? [],
+      canSkip: params.request.canSkip,
+      intent: params.request.intent,
+      expectedContextVersion: params.expectedContextVersion,
+      status: 'open',
+      answerText: null,
+      answerMessageRefId: null,
+      createdAt,
+      resolvedAt: null
+    };
+  }
+
+  async getPendingInteraction(id: string): Promise<PendingAgentInteraction | null> {
+    const rows = await this.db
+      .select()
+      .from(pendingInteractions)
+      .where(eq(pendingInteractions.id, id))
+      .limit(1);
+    return rows[0] ? mapPendingInteraction(rows[0]) : null;
+  }
+
+  async getOpenPendingInteraction(
+    scopeType: string,
+    scopeId: string
+  ): Promise<PendingAgentInteraction | null> {
+    const rows = await this.db
+      .select()
+      .from(pendingInteractions)
+      .where(and(
+        eq(pendingInteractions.scopeType, scopeType),
+        eq(pendingInteractions.scopeId, scopeId),
+        eq(pendingInteractions.status, 'open')
+      ))
+      .orderBy(desc(pendingInteractions.createdAt))
+      .limit(1);
+    return rows[0] ? mapPendingInteraction(rows[0]) : null;
+  }
+
+  async answerPendingInteraction(
+    id: string,
+    answer: string,
+    answerMessageRefId?: string
+  ): Promise<boolean> {
+    const rows = await this.db
+      .update(pendingInteractions)
+      .set({
+        status: 'answered',
+        answerText: answer,
+        answerMessageRefId,
+        resolvedAt: nowIso()
+      })
+      .where(and(
+        eq(pendingInteractions.id, id),
+        eq(pendingInteractions.status, 'open')
+      ))
+      .returning({ id: pendingInteractions.id });
+    return rows.length === 1;
+  }
+
+  async cancelPendingInteraction(id: string): Promise<boolean> {
+    const rows = await this.db
+      .update(pendingInteractions)
+      .set({ status: 'cancelled', resolvedAt: nowIso() })
+      .where(and(
+        eq(pendingInteractions.id, id),
+        eq(pendingInteractions.status, 'open')
+      ))
+      .returning({ id: pendingInteractions.id });
+    return rows.length === 1;
+  }
+
+  async skipPendingInteraction(id: string, answerMessageRefId?: string): Promise<boolean> {
+    const rows = await this.db
+      .update(pendingInteractions)
+      .set({
+        status: 'skipped',
+        answerMessageRefId,
+        resolvedAt: nowIso()
+      })
+      .where(and(
+        eq(pendingInteractions.id, id),
+        eq(pendingInteractions.status, 'open')
+      ))
+      .returning({ id: pendingInteractions.id });
+    return rows.length === 1;
+  }
+
+  async failInterruptedAgentRuns(): Promise<number> {
+    const rows = await this.db
+      .update(aiReviews)
+      .set({
+        status: 'failed',
+        errorMessage: '应用在 AI 操作完成前中断，可由用户重试。',
+        completedAt: nowIso()
+      })
+      .where(and(
+        inArray(aiReviews.recordType, ['run', 'tool_call']),
+        eq(aiReviews.status, 'running')
+      ))
+      .returning({ id: aiReviews.id });
+    return rows.length;
+  }
+
   async getLatestReview(date?: string): Promise<ReviewResult | null> {
     const filters = date
-      ? and(eq(aiReviews.kind, 'reflection'), eq(aiReviews.status, 'success'), eq(aiReviews.date, date))
-      : and(eq(aiReviews.kind, 'reflection'), eq(aiReviews.status, 'success'));
+      ? and(
+          eq(aiReviews.kind, 'reflection'),
+          inArray(aiReviews.status, ['success', 'completed']),
+          eq(aiReviews.date, date)
+        )
+      : and(eq(aiReviews.kind, 'reflection'), inArray(aiReviews.status, ['success', 'completed']));
     const rows = await this.db
       .select()
       .from(aiReviews)
@@ -334,7 +506,6 @@ export class OpsPersistence {
         // Ignore malformed historical review payloads and continue to older records.
       }
     }
-
     return null;
   }
 
@@ -344,4 +515,28 @@ export class OpsPersistence {
       await this.putSetting(key, value);
     }
   }
+}
+
+function mapPendingInteraction(
+  row: typeof pendingInteractions.$inferSelect
+): PendingAgentInteraction {
+  return {
+    id: row.id,
+    runReviewId: row.runReviewId,
+    toolReviewId: row.toolReviewId,
+    scopeType: row.scopeType,
+    scopeId: row.scopeId,
+    question: row.question,
+    reason: row.reason,
+    answerMode: row.answerMode,
+    options: JSON.parse(row.optionsJson) as string[],
+    canSkip: row.canSkip,
+    intent: row.intent,
+    expectedContextVersion: row.expectedContextVersion,
+    status: row.status,
+    answerText: row.answerText,
+    answerMessageRefId: row.answerMessageRefId,
+    createdAt: row.createdAt,
+    resolvedAt: row.resolvedAt
+  };
 }

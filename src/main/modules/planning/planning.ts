@@ -12,8 +12,8 @@ import type {
   ShortPlanDay,
   StartNextSessionResult
 } from '../../../shared/types';
-import type { AiCallMetrics } from '../../ai/ai-client';
 import { describeError } from '../../ai/categorized-error';
+import type { AgentContext, AgentRunAudit, AgentToolName } from '../../agent/agent-types';
 import type { StudyStore } from '../../services/store';
 
 export type PlanningStore = Pick<StudyStore,
@@ -25,7 +25,6 @@ export type PlanningStore = Pick<StudyStore,
   | 'getGoalBriefForGoal'
   | 'getPromptProfile'
   | 'getKnowledgeContextForGoal'
-  | 'saveAiReview'
   | 'saveDailyGuideWithTransaction'
   | 'ensureDraftDailyGuide'
   | 'acquireGenerationLock'
@@ -46,7 +45,12 @@ export type PlanningStore = Pick<StudyStore,
 >;
 
 export interface PrepareCurrentLearningDayDeps {
-  dailyGuideAgent: { run(params: any): Promise<DailyGuideAgentOutput> };
+  runAgentTool: <TInput, TOutput>(params: {
+    toolName: AgentToolName;
+    input: TInput;
+    context: AgentContext;
+    audit: AgentRunAudit;
+  }) => Promise<{ runReviewId: string; output: TOutput }>;
   getRuntimeSettings: () => Promise<any>;
   createTraceId: () => string;
   todayIso: () => string;
@@ -57,10 +61,8 @@ export interface AdvanceLearningDayDeps extends PrepareCurrentLearningDayDeps {
 }
 
 export interface GenerateRollingPlanDeps {
-  shortPlanAgent: { runRolling(params: any): Promise<any> };
-  dailyGuideAgent: { run(params: any): Promise<any> };
+  runAgentTool: PrepareCurrentLearningDayDeps['runAgentTool'];
   getRuntimeSettings: () => Promise<any>;
-  saveAiReview: (params: any) => Promise<string>;
   createTraceId: () => string;
   todayIso: () => string;
   onError?: (error: unknown) => void;
@@ -113,13 +115,10 @@ export class PlanningModule {
 
     const traceId = deps.createTraceId();
     const date = deps.todayIso();
-    let metrics: AiCallMetrics | undefined;
     let contextSourceIds: string[] = [];
     let targetDay: ShortPlanDay | null = null;
     let profile: Awaited<ReturnType<PlanningStore['getPromptProfile']>> | undefined;
     let settings: Awaited<ReturnType<PrepareCurrentLearningDayDeps['getRuntimeSettings']>> | undefined;
-    let phase = 'select_plan_day';
-    let aiRequested = false;
 
     try {
       const usedDayIds = await this.store.getUsedShortPlanDayIds(goal.id);
@@ -135,12 +134,10 @@ export class PlanningModule {
       }
       if (!targetDay) return { todayState: 'plan_exhausted' };
 
-      phase = 'activate_plan_day';
       if (!isRetry && !await this.store.activateShortPlanDay(targetDay.id)) {
         return { todayState: 'generating' };
       }
 
-      phase = 'prepare_context';
       const previousDayResult = isRetry
         ? undefined
         : await this.store.getPreviousCompletedLearningDayContext(goal.id) ?? undefined;
@@ -153,12 +150,10 @@ export class PlanningModule {
       profile = loadedProfile;
       settings = loadedSettings;
 
-      phase = 'create_draft';
       await this.store.ensureDraftDailyGuide({
         goal, date, windows: settings.dailyStudyWindows, shortPlanDayId: targetDay.id
       });
 
-      phase = 'build_context';
       const boundedContext = await this.store.buildContext('generate_daily_guide', {
         shortPlanDay: targetDay,
         previousDayResult,
@@ -166,52 +161,42 @@ export class PlanningModule {
       });
       contextSourceIds = boundedContext.contextSourceIds;
 
-      phase = 'generate_daily_guide';
-      aiRequested = true;
-      const output: DailyGuideAgentOutput = await deps.dailyGuideAgent.run({
+      const toolInput = {
         date, windows: settings.dailyStudyWindows, goal, brief, roadmap, targetDay,
         previousDayResult, profile, settings, knowledgeItems: knowledge.knowledgeItems,
-        reviewKnowledgeItems: knowledge.reviewKnowledgeItems, context: boundedContext.context, traceId,
-        onMetrics: (value: AiCallMetrics) => { metrics = value; }
+        reviewKnowledgeItems: knowledge.reviewKnowledgeItems, context: boundedContext.context, traceId
+      };
+      const toolRun = await deps.runAgentTool<typeof toolInput, DailyGuideAgentOutput>({
+        toolName: 'prepare_learning_guide',
+        input: toolInput,
+        context: {
+          kind: 'planning',
+          scopeType: 'short_plan_day',
+          scopeId: targetDay.id,
+          goalId: goal.id,
+          contextVersion: 1
+        },
+        audit: {
+          kind: 'daily_guide',
+          date,
+          provider: 'deepseek',
+          model: settings.deepseekModel,
+          promptProfileId: profile.id,
+          promptVersionId: profile.activeVersionId,
+          inputSnapshot: { goalId: goal.id, targetDay: targetDay.title, contextSourceIds },
+          outputSchemaVersion: 'daily-guide.v2'
+        }
       });
+      const output = toolRun.output;
 
-      phase = 'save_daily_guide';
       const result = await this.store.saveDailyGuideWithTransaction({
         goal, date, windows: settings.dailyStudyWindows,
         shortPlanDayId: targetDay.id, dailyGuide: output
       });
 
-      await this.store.saveAiReview({
-        kind: 'daily_guide', date, provider: 'deepseek', model: settings.deepseekModel,
-        promptProfileId: profile.id, promptVersionId: profile.activeVersionId,
-        inputSnapshot: { goalId: goal.id, targetDay: targetDay.title, contextSourceIds }, output,
-        outputSchemaVersion: 'daily-guide.v2', status: 'success', metrics
-      }).catch(() => undefined);
       return { todayState: 'active', result };
     } catch (error) {
       const described = describeError(error);
-      const errorCategory = phase === 'create_draft' || phase === 'save_daily_guide'
-        ? 'db_error'
-        : described.category;
-      const failureMetrics: AiCallMetrics = metrics
-        ? { ...metrics, errorCategory: metrics.errorCategory ?? errorCategory }
-        : { traceId, inputTokens: null, outputTokens: null, latencyMs: 0, errorCategory };
-      await this.store.saveAiReview({
-        kind: 'daily_guide', date, provider: aiRequested ? 'deepseek' : 'local',
-        model: settings?.deepseekModel ?? 'not_loaded',
-        promptProfileId: profile?.id, promptVersionId: profile?.activeVersionId,
-        inputSnapshot: {
-          goalId: goal.id,
-          targetDayId: targetDay?.id,
-          targetDay: targetDay?.title,
-          phase,
-          contextSourceIds
-        },
-        output: {},
-        outputSchemaVersion: 'daily-guide.v2', status: 'failed',
-        errorMessage: described.message,
-        metrics: failureMetrics
-      }).catch(() => undefined);
       return { todayState: 'generation_failed', errorMessage: described.message };
     }
   }
@@ -260,19 +245,14 @@ export class PlanningModule {
   ): Promise<ReviewResult | null> {
     try {
       return await generateReview(guideId);
-    } catch (error) {
-      await this.store.saveAiReview({
-        kind: 'reflection', date, provider: 'deepseek', model: 'configured',
-        inputSnapshot: { guideId }, output: {}, outputSchemaVersion: 'review.v1', status: 'failed',
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
+    } catch {
       return null;
     }
   }
 
   async generateRollingPlan(params: { goalId: Id }, deps: GenerateRollingPlanDeps): Promise<GenerateRollingPlanResult> {
     const { goalId } = params;
-    const { shortPlanAgent, dailyGuideAgent, getRuntimeSettings, saveAiReview, createTraceId, todayIso } = deps;
+    const { runAgentTool, getRuntimeSettings, createTraceId, todayIso } = deps;
 
     const goal = await this.store.getGoal(goalId);
     if (!goal) throw new Error('找不到要续生计划的学习目标。');
@@ -311,7 +291,7 @@ export class PlanningModule {
         shortPlanDay: targetDay,
         availableMinutes: runtimeSettings.dailyStudyWindows
       });
-      const dailyGuideOutput = await dailyGuideAgent.run({
+      const guideInput = {
         date: todayIso(),
         windows: runtimeSettings.dailyStudyWindows,
         goal,
@@ -323,9 +303,34 @@ export class PlanningModule {
         settings: runtimeSettings,
         knowledgeItems: knowledgeItemsForGuide,
         reviewKnowledgeItems: reviewItemsForGuide,
-        traceId: createTraceId(),
-        onMetrics: () => {}
+        traceId: createTraceId()
+      };
+      const guideRun = await runAgentTool<typeof guideInput, DailyGuideAgentOutput>({
+        toolName: 'prepare_learning_guide',
+        input: guideInput,
+        context: {
+          kind: 'planning',
+          scopeType: 'short_plan_day',
+          scopeId: targetDay.id,
+          goalId: goal.id,
+          contextVersion: 1
+        },
+        audit: {
+          kind: 'daily_guide',
+          date: todayIso(),
+          provider: 'deepseek',
+          model: runtimeSettings.deepseekModel,
+          promptProfileId: profile.id,
+          promptVersionId: profile.activeVersionId,
+          inputSnapshot: {
+            goalId: goal.id,
+            targetDayId: targetDay.id,
+            contextSourceIds: boundedContext.contextSourceIds
+          },
+          outputSchemaVersion: 'daily-guide.v2'
+        }
       });
+      const dailyGuideOutput = guideRun.output;
       const saved = await this.store.saveDailyGuideWithTransaction({
         goal, date: todayIso(), windows: runtimeSettings.dailyStudyWindows, shortPlanDayId: targetDay.id, dailyGuide: dailyGuideOutput
       });
@@ -345,18 +350,39 @@ export class PlanningModule {
       completedDays: completedContext?.summary ?? '暂无已完成任务',
       remainingDays: availableStageDays
     });
-    const rollingOutput = await shortPlanAgent.runRolling({
-      goal, brief, activeStage, completedSummary: completedContext?.summary ?? '暂无已完成任务', reviewSummary, profile, settings: runtimeSettings, knowledgeItems: knowledgeItemsForGuide, reviewKnowledgeItems: reviewItemsForGuide, context: rollingContext.context, traceId, onMetrics: () => {}
+    const rollingInput = {
+      mode: 'rolling' as const,
+      goal, brief, activeStage, completedSummary: completedContext?.summary ?? '暂无已完成任务', reviewSummary, profile, settings: runtimeSettings, knowledgeItems: knowledgeItemsForGuide, reviewKnowledgeItems: reviewItemsForGuide, context: rollingContext.context, traceId
+    };
+    const rollingRun = await runAgentTool<typeof rollingInput, { days: any[]; weekFocus: string }>({
+      toolName: 'propose_short_plan',
+      input: rollingInput,
+      context: {
+        kind: 'planning',
+        scopeType: 'roadmap_stage',
+        scopeId: activeStage.id,
+        goalId: goal.id,
+        contextVersion: 1
+      },
+      audit: {
+        kind: 'rolling_plan',
+        provider: 'deepseek',
+        model: runtimeSettings.deepseekModel,
+        promptProfileId: profile.id,
+        promptVersionId: profile.activeVersionId,
+        inputSnapshot: {
+          goalId: goal.id,
+          stageId: activeStage.id,
+          contextSourceIds: rollingContext.contextSourceIds
+        },
+        outputSchemaVersion: 'rolling-plan.v1'
+      }
     });
+    const rollingOutput = rollingRun.output;
     const expectedStagePosition = activeStage.position + 1;
     if (rollingOutput.days.some((day: any) => day.roadmapStagePosition !== expectedStagePosition)) {
       throw new Error(`滚动计划必须继续当前第 ${expectedStagePosition} 阶段，不能未经确认推进学习阶段。`);
     }
-
-    await saveAiReview({
-      kind: 'rolling_plan', provider: 'deepseek', model: runtimeSettings.deepseekModel, promptProfileId: profile.id, promptVersionId: profile.activeVersionId,
-      inputSnapshot: { goalId: goal.id, stageId: activeStage.id, contextSourceIds: rollingContext.contextSourceIds }, output: rollingOutput, outputSchemaVersion: 'rolling-plan.v1', status: 'success'
-    });
 
     const newPlanDays = await this.store.saveRollingPlanDays({
       goalId: goal.id, roadmapStageId: activeStage.id,

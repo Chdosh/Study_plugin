@@ -1,7 +1,7 @@
 # 架构、数据与兼容规则
 
 状态：CURRENT
-生效日期：2026-07-13
+生效日期：2026-07-23
 适用范围：架构、IPC、Module、Store、数据库、迁移、AI、上下文、安全和旧命名任务。
 失效条件：技术栈、主链 owner 或数据模型经用户确认发生变化。
 
@@ -22,7 +22,8 @@
 Renderer
 → typed preload / narrow IPC
 → AppService
-→ Runtime / Planning / Context / Branch modules
+→ Agent Loop / Runtime / Planning / Context / Branch modules
+→ Tool Registry / bounded tool implementations
 → StudyStore facade / persistence modules
 → CurrentLearningContextPersistence
 → SQLite
@@ -31,7 +32,9 @@ Renderer
 ## 2. 职责边界
 
 * Renderer：展示状态、收集操作，不编排持久化流程。
-* AppService：应用层适配、Electron 行为、AI 协调和错误映射，不复制 Store 状态机。
+* AppService：应用层适配、Electron 行为和错误映射，不编排 AI 调用链，不复制 Store 状态机。
+* Agent Loop：全部 AI 教学与规划能力的唯一运行入口，负责动态工具挂载、Run 生命周期、工具调用审计、暂停和恢复。
+* Tool Registry：按上下文挂载 `explain/quiz/practice/evaluate/search_kb/ask_user` 及规划、复盘工具；新增能力时新增工具，不新增 Agent。
 * Runtime module：Session、Action、Task 执行命令。
 * Planning module：学习单元准备、计划推进、生成失败恢复和计划版本。
 * Context module / ContextBuilder：按操作构建最小 AI 上下文、处理学习事实和知识结果，不能推进学习位置。
@@ -59,7 +62,7 @@ question_threads / question_messages
 learning_submissions / learning_evaluations
 knowledge_items / learner_facts
 plan_adjustment_proposals / plan_versions
-ai_reviews
+ai_reviews / pending_interactions
 ```
 
 不要为了名称理想化重复建表。
@@ -96,7 +99,7 @@ learning_steps
 ## 6. 数据和迁移
 
 * SQLite 是 durable source of truth。
-* schema 修改必须使用迁移，不得只靠启动时 ad hoc SQL。
+* schema 修改必须使用迁移，不得只靠启动时 ad hoc SQL；新增迁移必须附可执行回滚 SQL。
 * 未经用户明确批准，不删除表、列或用户数据。
 * 真实数据修复前先备份，并说明状态变化。
 * 自动修复只处理可唯一推导状态；多种合理选择必须保留数据并让用户选择。
@@ -107,6 +110,10 @@ learning_steps
 
 每个 AI 操作必须有明确输入、输出 schema、上下文来源、预算、失败状态和重试策略。
 
+* 所有 AI 操作通过统一 Agent Loop 执行；AppService 和业务 Module 不得自行实例化 Agent 或重复写 AI 审计。
+* Agent Run、工具调用、暂停、恢复和失败统一记录在扩展后的 `ai_reviews`，不新增 `agent_runs` 或 `agent_tool_invocations`。
+* `ask_user` 使用 `pending_interactions` 保存可恢复问题；用户回答、跳过或取消后继续或结束同一个逻辑 Run。
+* 应用重启时保留 `waiting_user`，把中断的 `running` 标记为失败并允许用户重试。
 * 不发送完整用户历史。
 * 只发送当前操作必要的目标、计划、Task、Action、最近证据和相关知识。
 * 用户确认、系统实际行为和原始提交高于摘要与 AI 推断。

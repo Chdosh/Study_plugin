@@ -1,20 +1,13 @@
 import type { BrowserWindow } from 'electron';
 import { ipcChannels } from '../../shared/ipc';
 import { localDateIso } from '../../shared/date';
-import type { DailyGuideAgentOutput, NextStepDecisionAgentOutput, SubmissionEvaluationAgentOutput } from '../../shared/schemas';
+import type { AnswerStepQuestionAgentOutput, DailyGuideAgentOutput, GoalIntakeAgentOutput, NextStepDecisionAgentOutput, RoadmapAgentOutput, ShortPlanAgentOutput, SubmissionEvaluationAgentOutput } from '../../shared/schemas';
 import type { AppSettings, DailyGuide, DailyGuideTask, DailyPlanBlock, GenerateRollingPlanResult, GoalBrief, Id, KnowledgeItem, KnowledgeItemStatus, LayeredPlanResult, LearnerFactScope, LearnerFactSource, LearningSubmission, PlanProposalInput, PrepareCurrentLearningDayResult, ReviewResult, RoadmapStage, RuntimeAuditResult, ShortPlanDay, StartNextSessionResult, StudySession, SubmissionEvaluationResult, TodayGuideState, TodayState } from '../../shared/types';
-import { AiClient, type AiCallMetrics } from '../ai/ai-client';
+import { AiClient } from '../ai/ai-client';
 import { CategorizedError } from '../ai/categorized-error';
-import {
-  DailyGuideAgent,
-  GoalIntakeAgent,
-  ReflectionAgent,
-  RoadmapAgent,
-  ShortPlanAgent,
-  StepQuestionAgent,
-  SubmissionEvaluationAgent,
-  TeachStepAgent
-} from '../ai/agents';
+import { AgentLoop } from '../agent/agent-loop';
+import type { AgentContext, AgentRunAudit, AgentToolName } from '../agent/agent-types';
+import { createBuiltinToolRegistry } from '../agent/tools/builtin-tools';
 import { FocusMonitor } from './focus-monitor';
 import type { SettingsService } from './settings-service';
 import type { StudyStore } from './store';
@@ -26,17 +19,11 @@ function createTraceId(): string {
 }
 
 const DEDUP_TTL_MS = 5_000;
+const FORCE_START_MESSAGE = '请使用当前信息生成初步计划。';
 
 export class AppService {
   private readonly aiClient = new AiClient();
-  private readonly reflectionAgent = new ReflectionAgent(this.aiClient);
-  private readonly goalIntakeAgent = new GoalIntakeAgent(this.aiClient);
-  private readonly roadmapAgent = new RoadmapAgent(this.aiClient);
-  private readonly shortPlanAgent = new ShortPlanAgent(this.aiClient);
-  private readonly dailyGuideAgent = new DailyGuideAgent(this.aiClient);
-  private readonly teachStepAgent = new TeachStepAgent(this.aiClient);
-  private readonly questionAgent = new StepQuestionAgent(this.aiClient);
-  private readonly evaluationAgent = new SubmissionEvaluationAgent(this.aiClient);
+  private readonly agentLoop: AgentLoop;
   private readonly focusMonitor: FocusMonitor;
   private readonly inFlight = new Map<string, Promise<unknown>>();
   private readonly recentResults = new Map<string, { result: unknown; error: boolean; expiresAt: number }>();
@@ -50,9 +37,26 @@ export class AppService {
   ) {
     this.focusMonitor = new FocusMonitor(store);
     this.modules = new LearningModules(store);
+    this.agentLoop = new AgentLoop(
+      createBuiltinToolRegistry(this.aiClient, async ({ goalId, query, limit }) => {
+        const items = await this.store.getKnowledgeItemsForGoal({
+          goalId,
+          status: 'active',
+          limit: limit ?? 20
+        });
+        const normalized = query?.trim().toLocaleLowerCase();
+        return normalized
+          ? items.filter((item) =>
+              `${item.key} ${item.summary} ${item.detail ?? ''}`.toLocaleLowerCase().includes(normalized)
+            )
+          : items;
+      }),
+      store
+    );
   }
 
   async initialize(): Promise<void> {
+    await this.agentLoop.recoverInterruptedRuns();
     this.startupRuntimeAudit = await this.runRuntimeAudit();
     const recovery = await this.store.recoverPendingEvaluationProgress();
     if (recovery.recovered > 0) {
@@ -104,8 +108,9 @@ export class AppService {
     return this.settings.updateSettings(patch);
   }
 
-  getCurrentOnboarding() {
-    return this.store.getCurrentGoalIntake();
+  async getCurrentOnboarding() {
+    const state = await this.store.getCurrentGoalIntake();
+    return this.withPendingInteraction(state);
   }
 
   sendOnboardingMessage(content: string) {
@@ -122,6 +127,13 @@ export class AppService {
 
   private async _sendOnboardingMessage(content: string) {
     const current = await this.store.getCurrentGoalIntake();
+    const pending = await this.agentLoop.getOpenInteraction('goal_intake', current.intake.id);
+    if (pending && pending.expectedContextVersion !== current.messages.length) {
+      throw new CategorizedError(
+        'validation_error',
+        '目标访谈内容已经变化，原问题没有被自动套用。请刷新后重新回答。'
+      );
+    }
     await this.store.addGoalIntakeMessage(current.intake.id, 'user', content);
     const [nextState, profile, runtimeSettings] = await Promise.all([
       this.store.getCurrentGoalIntake(),
@@ -134,26 +146,21 @@ export class AppService {
       latestUserInput: content
     });
     const traceId = createTraceId();
-    let metrics: AiCallMetrics | undefined;
-    let output;
-    try {
-      output = await this.goalIntakeAgent.run({
-        messages: recentMessages,
-        context: intakeContext.context,
-        profile,
-        settings: runtimeSettings,
-        traceId,
-        onMetrics: (m) => { metrics = m; }
-      });
-    } catch (error) {
-      if (error instanceof CategorizedError) throw error;
-      throw new CategorizedError(
-        'ai_failure',
-        '访谈响应失败，请重试。',
-        error instanceof Error ? error : undefined
-      );
-    }
-    await this.store.saveAiReview({
+    const input = {
+      messages: recentMessages,
+      context: intakeContext.context,
+      profile,
+      settings: runtimeSettings,
+      traceId
+    };
+    const context: AgentContext = {
+      kind: 'goal_intake',
+      scopeType: 'goal_intake',
+      scopeId: current.intake.id,
+      goalId: current.intake.goalId ?? undefined,
+      contextVersion: nextState.messages.length + 1
+    };
+    const audit: AgentRunAudit = {
       kind: 'goal_intake',
       provider: 'deepseek',
       model: runtimeSettings.deepseekModel,
@@ -164,12 +171,53 @@ export class AppService {
         messageCount: nextState.messages.length,
         contextSourceIds: intakeContext.contextSourceIds
       },
-      output,
-      outputSchemaVersion: 'goal-intake.v1',
-      status: 'success',
-      metrics
-    });
-    return this.store.saveGoalIntakeAgentOutput(current.intake.id, output);
+      outputSchemaVersion: 'goal-intake.v1'
+    };
+    let run;
+    try {
+      run = pending
+        ? await this.agentLoop.resume<typeof input, GoalIntakeAgentOutput>({
+            pendingInteractionId: pending.id,
+            answer: content,
+            expectedContextVersion: pending.expectedContextVersion,
+            resolution: content === FORCE_START_MESSAGE ? 'skipped' : 'answered',
+            input,
+            context,
+            audit,
+            toolName: 'propose_goal'
+          })
+        : await this.runAgentTool<typeof input, GoalIntakeAgentOutput>({
+            toolName: 'propose_goal',
+            input,
+            context,
+            audit
+          });
+    } catch (error) {
+      if (error instanceof CategorizedError) throw error;
+      throw new CategorizedError(
+        'ai_failure',
+        '访谈响应失败，请重试。',
+        error instanceof Error ? error : undefined
+      );
+    }
+    const saved = await this.store.saveGoalIntakeAgentOutput(current.intake.id, run.output);
+    return this.withPendingInteraction(saved);
+  }
+
+  private async withPendingInteraction<T extends { intake: { id: string } }>(
+    state: T
+  ): Promise<T & { pendingInteraction: Awaited<ReturnType<AgentLoop['getOpenInteraction']>> }> {
+    const pendingInteraction = await this.agentLoop.getOpenInteraction('goal_intake', state.intake.id);
+    return { ...state, pendingInteraction };
+  }
+
+  async cancelOnboardingQuestion() {
+    const state = await this.store.getCurrentGoalIntake();
+    const pending = await this.agentLoop.getOpenInteraction('goal_intake', state.intake.id);
+    if (pending) {
+      await this.agentLoop.cancelPendingInteraction(pending.id);
+    }
+    return this.withPendingInteraction(await this.store.getCurrentGoalIntake());
   }
 
   async confirmOnboardingGoal(briefPatch?: Partial<GoalBrief>) {
@@ -201,32 +249,39 @@ export class AppService {
     const windows = runtimeSettings.dailyStudyWindows;
 
     const roadmapTraceId = createTraceId();
-    let roadmapMetrics: AiCallMetrics | undefined;
     const roadmapContext = await this.modules.context.build('generate_roadmap', {
       goalUnderstanding: brief,
       availableTime: runtimeSettings.dailyStudyWindows
     });
-    const roadmapOutput = await this.roadmapAgent.run({
+    const roadmapInput = {
       goal,
       brief,
       context: roadmapContext.context,
       profile,
       settings: runtimeSettings,
-      traceId: roadmapTraceId,
-      onMetrics: (m) => { roadmapMetrics = m; }
+      traceId: roadmapTraceId
+    };
+    const roadmapRun = await this.runAgentTool<typeof roadmapInput, RoadmapAgentOutput>({
+      toolName: 'propose_roadmap',
+      input: roadmapInput,
+      context: {
+        kind: 'planning',
+        scopeType: 'goal_plan',
+        scopeId: goalId,
+        goalId,
+        contextVersion: 1
+      },
+      audit: {
+        kind: 'roadmap',
+        provider: 'deepseek',
+        model: runtimeSettings.deepseekModel,
+        promptProfileId: profile.id,
+        promptVersionId: profile.activeVersionId,
+        inputSnapshot: { goalId, brief, contextSourceIds: roadmapContext.contextSourceIds },
+        outputSchemaVersion: 'roadmap.v1'
+      }
     });
-    await this.store.saveAiReview({
-      kind: 'roadmap',
-      provider: 'deepseek',
-      model: runtimeSettings.deepseekModel,
-      promptProfileId: profile.id,
-      promptVersionId: profile.activeVersionId,
-      inputSnapshot: { goalId, brief, contextSourceIds: roadmapContext.contextSourceIds },
-      output: roadmapOutput,
-      outputSchemaVersion: 'roadmap.v1',
-      status: 'success',
-      metrics: roadmapMetrics
-    });
+    const roadmapOutput = roadmapRun.output;
     const draftRoadmap = roadmapOutput.stages.map<RoadmapStage>((stage, index) => ({
       id: `draft-roadmap-${index}`,
       goalId,
@@ -241,34 +296,47 @@ export class AppService {
     }));
 
     const shortPlanTraceId = createTraceId();
-    let shortPlanMetrics: AiCallMetrics | undefined;
     const shortPlanContext = await this.modules.context.build('generate_short_plan', {
       goalUnderstanding: brief,
       roadmap: draftRoadmap,
       availableTime: runtimeSettings.dailyStudyWindows
     });
-    const shortPlanOutput = await this.shortPlanAgent.run({
+    const shortPlanInput = {
+      mode: 'initial' as const,
       goal,
       brief,
       roadmap: draftRoadmap,
       context: shortPlanContext.context,
       profile,
       settings: runtimeSettings,
-      traceId: shortPlanTraceId,
-      onMetrics: (m) => { shortPlanMetrics = m; }
+      traceId: shortPlanTraceId
+    };
+    const shortPlanRun = await this.runAgentTool<typeof shortPlanInput, ShortPlanAgentOutput>({
+      toolName: 'propose_short_plan',
+      input: shortPlanInput,
+      context: {
+        kind: 'planning',
+        scopeType: 'goal_plan',
+        scopeId: goalId,
+        goalId,
+        contextVersion: 2
+      },
+      audit: {
+        kind: 'short_plan',
+        provider: 'deepseek',
+        model: runtimeSettings.deepseekModel,
+        promptProfileId: profile.id,
+        promptVersionId: profile.activeVersionId,
+        inputSnapshot: {
+          goalId,
+          brief,
+          roadmap: roadmapOutput,
+          contextSourceIds: shortPlanContext.contextSourceIds
+        },
+        outputSchemaVersion: 'short-plan.v1'
+      }
     });
-    await this.store.saveAiReview({
-      kind: 'short_plan',
-      provider: 'deepseek',
-      model: runtimeSettings.deepseekModel,
-      promptProfileId: profile.id,
-      promptVersionId: profile.activeVersionId,
-      inputSnapshot: { goalId, brief, roadmap: roadmapOutput, contextSourceIds: shortPlanContext.contextSourceIds },
-      output: shortPlanOutput,
-      outputSchemaVersion: 'short-plan.v1',
-      status: 'success',
-      metrics: shortPlanMetrics
-    });
+    const shortPlanOutput = shortPlanRun.output;
     const draftShortPlan = shortPlanOutput.days.map<ShortPlanDay>((day) => ({
       id: `draft-short-day-${day.dayIndex}`,
       goalId,
@@ -287,13 +355,12 @@ export class AppService {
     const { knowledgeItems: initialKnowledge, reviewKnowledgeItems: initialReviewKnowledge } = await this.store.getKnowledgeContextForGoal(goalId);
     let dailyGuideOutput: DailyGuideAgentOutput;
     const dailyGuideTraceId = createTraceId();
-    let dailyGuideMetrics: AiCallMetrics | undefined;
     const dailyGuideContext = await this.modules.context.build('generate_daily_guide', {
       shortPlanDay: draftShortPlan.find((d) => d.dayIndex === 1),
       availableMinutes: windows
     });
     try {
-      dailyGuideOutput = await this.dailyGuideAgent.run({
+      const dailyGuideInput = {
         date,
         windows,
         goal,
@@ -305,41 +372,37 @@ export class AppService {
         settings: runtimeSettings,
         knowledgeItems: initialKnowledge,
         reviewKnowledgeItems: initialReviewKnowledge,
-        traceId: dailyGuideTraceId,
-        onMetrics: (m) => { dailyGuideMetrics = m; }
+        traceId: dailyGuideTraceId
+      };
+      const dailyGuideRun = await this.runAgentTool<typeof dailyGuideInput, DailyGuideAgentOutput>({
+        toolName: 'prepare_learning_guide',
+        input: dailyGuideInput,
+        context: {
+          kind: 'planning',
+          scopeType: 'goal_plan',
+          scopeId: goalId,
+          goalId,
+          contextVersion: 3
+        },
+        audit: {
+          kind: 'daily_guide',
+          date,
+          provider: 'deepseek',
+          model: runtimeSettings.deepseekModel,
+          promptProfileId: profile.id,
+          promptVersionId: profile.activeVersionId,
+          inputSnapshot: {
+            goalId,
+            brief,
+            roadmap: roadmapOutput,
+            shortPlan: shortPlanOutput,
+            contextSourceIds: dailyGuideContext.contextSourceIds
+          },
+          outputSchemaVersion: 'daily-guide.v2'
+        }
       });
-      await this.store.saveAiReview({
-        kind: 'daily_guide',
-        date,
-        provider: 'deepseek',
-        model: runtimeSettings.deepseekModel,
-        promptProfileId: profile.id,
-        promptVersionId: profile.activeVersionId,
-        inputSnapshot: { goalId, brief, roadmap: roadmapOutput, shortPlan: shortPlanOutput, contextSourceIds: dailyGuideContext.contextSourceIds },
-        output: dailyGuideOutput,
-        outputSchemaVersion: 'daily-guide.v2',
-        status: 'success',
-        metrics: dailyGuideMetrics
-      });
+      dailyGuideOutput = dailyGuideRun.output;
     } catch (error) {
-      const resolvedCategory = dailyGuideMetrics?.errorCategory ?? 'ai_failure';
-      if (dailyGuideMetrics) {
-        dailyGuideMetrics = { ...dailyGuideMetrics, errorCategory: resolvedCategory };
-      }
-      await this.store.saveAiReview({
-        kind: 'daily_guide',
-        date,
-        provider: 'deepseek',
-        model: runtimeSettings.deepseekModel,
-        promptProfileId: profile.id,
-        promptVersionId: profile.activeVersionId,
-        inputSnapshot: { goalId, brief, roadmap: roadmapOutput, shortPlan: shortPlanOutput, contextSourceIds: dailyGuideContext.contextSourceIds },
-        output: {},
-        outputSchemaVersion: 'daily-guide.v2',
-        status: 'failed',
-        errorMessage: error instanceof Error ? error.message : String(error),
-        metrics: dailyGuideMetrics
-      });
       if (error instanceof CategorizedError) throw error;
       if (error instanceof Error && /DeepSeek API Key|API [Kk]ey/i.test(error.message)) {
         throw new CategorizedError('missing_config', error.message, error);
@@ -391,7 +454,12 @@ export class AppService {
     return this.modules.planning.advanceLearningDay(
       { goalId },
       {
-        dailyGuideAgent: this.dailyGuideAgent,
+        runAgentTool: <TInput, TOutput>(params: {
+          toolName: AgentToolName;
+          input: TInput;
+          context: AgentContext;
+          audit: AgentRunAudit;
+        }) => this.runAgentTool<TInput, TOutput>(params),
         getRuntimeSettings: () => this.settings.getRuntimeSettings(),
         createTraceId,
         todayIso,
@@ -409,6 +477,15 @@ export class AppService {
     return this.generateReviewForDay(guide.date, guide.id);
   }
 
+  private runAgentTool<TInput, TOutput>(params: {
+    toolName: AgentToolName;
+    input: TInput;
+    context: AgentContext;
+    audit: AgentRunAudit;
+  }) {
+    return this.agentLoop.run<TInput, TOutput>(params);
+  }
+
   async generateReview(date: string) {
     return this.generateReviewForDay(date, date);
   }
@@ -420,39 +497,47 @@ export class AppService {
       this.settings.getRuntimeSettings()
     ]);
     const traceId = createTraceId();
-    let metrics: AiCallMetrics | undefined;
     const reviewContext = await this.modules.context.build('generate_review');
     const summaryRun = await this.store.beginLearningSummary('day', summaryRefId);
-    let output;
+    let run;
     try {
-      output = await this.reflectionAgent.run({
+      const input = {
         date,
         snapshot,
         context: reviewContext.context,
         profile,
         settings: runtimeSettings,
-        traceId,
-        onMetrics: (m) => { metrics = m; }
+        traceId
+      };
+      run = await this.runAgentTool<typeof input, Omit<ReviewResult, 'reviewId' | 'date'>>({
+        toolName: 'reflect',
+        input,
+        context: {
+          kind: 'review',
+          scopeType: 'learning_summary',
+          scopeId: summaryRefId,
+          contextVersion: 1
+        },
+        audit: {
+          kind: 'reflection',
+          date,
+          provider: 'deepseek',
+          model: runtimeSettings.deepseekModel,
+          promptProfileId: profile.id,
+          promptVersionId: profile.activeVersionId,
+          inputSnapshot: {
+            daySnapshot: snapshot,
+            contextSourceIds: reviewContext.contextSourceIds
+          },
+          outputSchemaVersion: 'review.v1'
+        }
       });
-      await this.store.completeLearningSummary(summaryRun.id, output);
+      await this.store.completeLearningSummary(summaryRun.id, run.output);
     } catch (error) {
       await this.store.failLearningSummary(summaryRun.id, error instanceof CategorizedError ? error.category : 'ai_failure');
       throw error;
     }
-    const reviewId = await this.store.saveAiReview({
-      kind: 'reflection',
-      date,
-      provider: 'deepseek',
-      model: runtimeSettings.deepseekModel,
-      promptProfileId: profile.id,
-      promptVersionId: profile.activeVersionId,
-      inputSnapshot: { daySnapshot: snapshot, contextSourceIds: reviewContext.contextSourceIds },
-      output,
-      outputSchemaVersion: 'review.v1',
-      status: 'success',
-      metrics
-    });
-    return { reviewId, date, ...output };
+    return { reviewId: run.runReviewId, date, ...run.output };
   }
 
   async getTodayState(): Promise<TodayState> {
@@ -492,7 +577,12 @@ export class AppService {
     return this.modules.planning.prepareCurrentLearningDay(
       { forceRetry },
       {
-        dailyGuideAgent: this.dailyGuideAgent,
+        runAgentTool: <TInput, TOutput>(params: {
+          toolName: AgentToolName;
+          input: TInput;
+          context: AgentContext;
+          audit: AgentRunAudit;
+        }) => this.runAgentTool<TInput, TOutput>(params),
         getRuntimeSettings: () => this.settings.getRuntimeSettings(),
         createTraceId,
         todayIso
@@ -504,10 +594,13 @@ export class AppService {
     return this.modules.planning.generateRollingPlan(
       { goalId },
       {
-        shortPlanAgent: this.shortPlanAgent,
-        dailyGuideAgent: this.dailyGuideAgent,
+        runAgentTool: <TInput, TOutput>(params: {
+          toolName: AgentToolName;
+          input: TInput;
+          context: AgentContext;
+          audit: AgentRunAudit;
+        }) => this.runAgentTool<TInput, TOutput>(params),
         getRuntimeSettings: () => this.settings.getRuntimeSettings(),
-        saveAiReview: (params) => this.store.saveAiReview(params),
         createTraceId,
         todayIso
       }
@@ -656,27 +749,38 @@ export class AppService {
       throw new Error('当前没有可展开的学习步骤。请先开始今日任务。');
     }
     const traceId = createTraceId();
-    let metrics: AiCallMetrics | undefined;
-    const output = await this.teachStepAgent.run({
+    const input = {
+      mode: 'teach' as const,
       context: built.context,
       profile,
       settings: runtimeSettings,
-      traceId,
-      onMetrics: (m) => { metrics = m; }
+      traceId
+    };
+    const run = await this.runAgentTool<typeof input, {
+      explanation: string;
+      userAction: string;
+      requiresSubmission: boolean;
+    }>({
+      toolName: 'explain',
+      input,
+      context: {
+        kind: 'study',
+        scopeType: 'learning_action',
+        scopeId: built.snapshot.dailyGuideAction.id,
+        goalId: built.snapshot.goal?.id,
+        contextVersion: 1
+      },
+      audit: {
+        kind: 'teach_step',
+        provider: 'deepseek',
+        model: runtimeSettings.deepseekModel,
+        promptProfileId: profile.id,
+        promptVersionId: profile.activeVersionId,
+        inputSnapshot: { contextSourceIds: built.contextSourceIds, context: built.context },
+        outputSchemaVersion: 'teach-step.v1'
+      }
     });
-    const aiReviewId = await this.store.saveAiReview({
-      kind: 'teach_step',
-      provider: 'deepseek',
-      model: runtimeSettings.deepseekModel,
-      promptProfileId: profile.id,
-      promptVersionId: profile.activeVersionId,
-      inputSnapshot: { contextSourceIds: built.contextSourceIds, context: built.context },
-      output,
-      outputSchemaVersion: 'teach-step.v1',
-      status: 'success',
-      metrics
-    });
-    void aiReviewId;
+    const output = run.output;
     return {
       action: built.snapshot.dailyGuideAction,
       explanation: output.explanation,
@@ -701,7 +805,12 @@ export class AppService {
       const prepared = await this.modules.planning.prepareCurrentLearningDay(
         {},
         {
-          dailyGuideAgent: this.dailyGuideAgent,
+          runAgentTool: <TInput, TOutput>(params: {
+            toolName: AgentToolName;
+            input: TInput;
+            context: AgentContext;
+            audit: AgentRunAudit;
+          }) => this.runAgentTool<TInput, TOutput>(params),
           getRuntimeSettings: () => this.settings.getRuntimeSettings(),
           createTraceId,
           todayIso
@@ -762,17 +871,37 @@ export class AppService {
       this.settings.getRuntimeSettings()
     ]);
     const questionTraceId = createTraceId();
-    let questionMetrics: AiCallMetrics | undefined;
     let output;
     try {
-      output = await this.questionAgent.run({
+      const input = {
+        mode: 'question' as const,
         question,
         context: built.context,
         profile,
         settings: runtimeSettings,
-        traceId: questionTraceId,
-        onMetrics: (m) => { questionMetrics = m; }
+        traceId: questionTraceId
+      };
+      const run = await this.runAgentTool<typeof input, AnswerStepQuestionAgentOutput>({
+        toolName: 'explain',
+        input,
+        context: {
+          kind: 'study',
+          scopeType: 'question_thread',
+          scopeId: threadId,
+          goalId,
+          contextVersion: 1
+        },
+        audit: {
+          kind: 'question',
+          provider: 'deepseek',
+          model: runtimeSettings.deepseekModel,
+          promptProfileId: profile.id,
+          promptVersionId: profile.activeVersionId,
+          inputSnapshot: { contextSourceIds: built.contextSourceIds, question },
+          outputSchemaVersion: 'question-answer.v1'
+        }
       });
+      output = run.output;
     } catch (error) {
       if (error instanceof CategorizedError) throw error;
       throw new CategorizedError(
@@ -781,18 +910,6 @@ export class AppService {
         error instanceof Error ? error : undefined
       );
     }
-    await this.store.saveAiReview({
-      kind: 'question',
-      provider: 'deepseek',
-      model: runtimeSettings.deepseekModel,
-      promptProfileId: profile.id,
-      promptVersionId: profile.activeVersionId,
-      inputSnapshot: { contextSourceIds: built.contextSourceIds, question },
-      output,
-      outputSchemaVersion: 'question-answer.v1',
-      status: 'success',
-      metrics: questionMetrics
-    });
     const updatedThread = await this.store.saveQuestionAnswer(threadId, output);
     const messages = await this.store.getQuestionMessages(threadId);
     return {
@@ -918,22 +1035,45 @@ export class AppService {
       goalIdForEval ? this.store.getKnowledgeContextForGoal(goalIdForEval) : Promise.resolve({ knowledgeItems: [], reviewKnowledgeItems: [] })
     ]);
     let evaluationAiReviewId: string | undefined;
-    let evaluationMetrics: AiCallMetrics | undefined;
     let evaluationOutput;
     if (guideTask?.evaluationMode === 'local') {
       evaluationOutput = buildLocalSubmissionEvaluation(submission.content, guideTask);
     } else {
       try {
-        evaluationOutput = await this.evaluationAgent.run({
+        const input = {
           submission: submission.content,
           context: evaluationContext.context,
           profile,
           settings: runtimeSettings,
           knowledgeItems: evalKnowledgeCtx.knowledgeItems,
           reviewKnowledgeItems: evalKnowledgeCtx.reviewKnowledgeItems,
-          traceId: createTraceId(),
-          onMetrics: (m) => { evaluationMetrics = m; }
+          traceId: createTraceId()
+        };
+        const run = await this.runAgentTool<typeof input, SubmissionEvaluationAgentOutput>({
+          toolName: 'evaluate',
+          input,
+          context: {
+            kind: 'evaluation',
+            scopeType: 'submission',
+            scopeId: submission.id,
+            goalId: goalIdForEval,
+            contextVersion: 1
+          },
+          audit: {
+            kind: 'submission_evaluation',
+            provider: 'deepseek',
+            model: runtimeSettings.deepseekModel,
+            promptProfileId: profile.id,
+            promptVersionId: profile.activeVersionId,
+            inputSnapshot: {
+              contextSourceIds: evaluationContext.contextSourceIds,
+              submissionId: submission.id
+            },
+            outputSchemaVersion: 'submission-evaluation.v1'
+          }
         });
+        evaluationOutput = run.output;
+        evaluationAiReviewId = run.runReviewId;
       } catch (error) {
         await this.store.markSubmissionEvaluation(submission.id, 'failed');
         if (error instanceof CategorizedError) throw error;
@@ -943,23 +1083,6 @@ export class AppService {
           error instanceof Error ? error : undefined
         );
       }
-    }
-    if (guideTask?.evaluationMode !== 'local') {
-      evaluationAiReviewId = await this.store.saveAiReview({
-        kind: 'submission_evaluation',
-        provider: 'deepseek',
-        model: runtimeSettings.deepseekModel,
-        promptProfileId: profile.id,
-        promptVersionId: profile.activeVersionId,
-        inputSnapshot: {
-          contextSourceIds: evaluationContext.contextSourceIds,
-          submissionId: submission.id
-        },
-        output: evaluationOutput,
-        outputSchemaVersion: 'submission-evaluation.v1',
-        status: 'success',
-        metrics: evaluationMetrics
-      });
     }
     const decisionOutput = buildLocalDecisionFromEvaluation(evaluationOutput);
     const result = await this.store.saveEvaluationAndDecision({

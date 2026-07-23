@@ -486,7 +486,9 @@ export const aiReviews = sqliteTable('ai_reviews', {
       'evaluation',
       'replan',
       'reflection',
-      'rolling_plan'
+      'rolling_plan',
+      'agent_loop',
+      'tool_call'
     ]
   }).notNull(),
   date: text('date'),
@@ -497,7 +499,9 @@ export const aiReviews = sqliteTable('ai_reviews', {
   inputSnapshotJson: text('input_snapshot_json').notNull(),
   outputJson: text('output_json').notNull(),
   outputSchemaVersion: text('output_schema_version').notNull(),
-  status: text('status', { enum: ['success', 'failed'] }).notNull(),
+  status: text('status', {
+    enum: ['success', 'running', 'waiting_user', 'completed', 'failed', 'cancelled']
+  }).notNull(),
   errorMessage: text('error_message'),
   inputTokens: integer('input_tokens'),
   outputTokens: integer('output_tokens'),
@@ -506,7 +510,43 @@ export const aiReviews = sqliteTable('ai_reviews', {
     enum: ['user_input_error', 'ai_failure', 'schema_violation', 'db_error', 'missing_config', 'validation_error']
   }),
   traceId: text('trace_id'),
+  recordType: text('record_type', { enum: ['legacy_call', 'run', 'tool_call'] }).notNull().default('legacy_call'),
+  parentReviewId: text('parent_review_id'),
+  toolName: text('tool_name'),
+  toolSequence: integer('tool_sequence'),
+  idempotencyKey: text('idempotency_key'),
+  goalId: text('goal_id').references(() => goals.id),
+  conversationScope: text('conversation_scope'),
+  conversationRefId: text('conversation_ref_id'),
+  messageRefId: text('message_ref_id'),
+  contextVersion: integer('context_version'),
+  startedAt: text('started_at'),
+  completedAt: text('completed_at'),
   createdAt: text('created_at').notNull()
+});
+
+export const pendingInteractions = sqliteTable('pending_interactions', {
+  id: text('id').primaryKey(),
+  runReviewId: text('run_review_id')
+    .notNull()
+    .references(() => aiReviews.id),
+  toolReviewId: text('tool_review_id')
+    .notNull()
+    .references(() => aiReviews.id),
+  scopeType: text('scope_type').notNull(),
+  scopeId: text('scope_id').notNull(),
+  question: text('question').notNull(),
+  reason: text('reason').notNull(),
+  answerMode: text('answer_mode', { enum: ['free_text', 'single_choice'] }).notNull(),
+  optionsJson: text('options_json').notNull().default('[]'),
+  canSkip: integer('can_skip', { mode: 'boolean' }).notNull().default(false),
+  intent: text('intent').notNull(),
+  expectedContextVersion: integer('expected_context_version').notNull(),
+  status: text('status', { enum: ['open', 'answered', 'skipped', 'cancelled'] }).notNull().default('open'),
+  answerText: text('answer_text'),
+  answerMessageRefId: text('answer_message_ref_id'),
+  createdAt: text('created_at').notNull(),
+  resolvedAt: text('resolved_at')
 });
 
 export const promptProfiles = sqliteTable('prompt_profiles', {

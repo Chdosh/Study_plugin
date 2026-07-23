@@ -270,8 +270,54 @@ const CURRENT_SCHEMA_SQL = `
       latency_ms INTEGER,
       error_category TEXT,
       trace_id TEXT,
+      record_type TEXT NOT NULL DEFAULT 'legacy_call',
+      parent_review_id TEXT REFERENCES ai_reviews(id),
+      tool_name TEXT,
+      tool_sequence INTEGER,
+      idempotency_key TEXT,
+      goal_id TEXT REFERENCES goals(id),
+      conversation_scope TEXT,
+      conversation_ref_id TEXT,
+      message_ref_id TEXT,
+      context_version INTEGER,
+      started_at TEXT,
+      completed_at TEXT,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS pending_interactions (
+      id TEXT PRIMARY KEY,
+      run_review_id TEXT NOT NULL REFERENCES ai_reviews(id),
+      tool_review_id TEXT NOT NULL REFERENCES ai_reviews(id),
+      scope_type TEXT NOT NULL,
+      scope_id TEXT NOT NULL,
+      question TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      answer_mode TEXT NOT NULL,
+      options_json TEXT NOT NULL DEFAULT '[]',
+      can_skip INTEGER NOT NULL DEFAULT 0,
+      intent TEXT NOT NULL,
+      expected_context_version INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      answer_text TEXT,
+      answer_message_ref_id TEXT,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS ai_reviews_parent_tool_idx
+      ON ai_reviews(parent_review_id, tool_sequence);
+    CREATE UNIQUE INDEX IF NOT EXISTS ai_reviews_idempotency_unique
+      ON ai_reviews(idempotency_key) WHERE idempotency_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS ai_reviews_scope_status_idx
+      ON ai_reviews(conversation_scope, conversation_ref_id, status);
+    CREATE UNIQUE INDEX IF NOT EXISTS ai_reviews_one_active_run_per_scope
+      ON ai_reviews(conversation_scope, conversation_ref_id)
+      WHERE record_type = 'run' AND status IN ('running', 'waiting_user');
+    CREATE UNIQUE INDEX IF NOT EXISTS pending_interactions_one_open_per_run
+      ON pending_interactions(run_review_id) WHERE status = 'open';
+    CREATE INDEX IF NOT EXISTS pending_interactions_scope_status_idx
+      ON pending_interactions(scope_type, scope_id, status);
 
     CREATE TABLE IF NOT EXISTS prompt_profiles (
       id TEXT PRIMARY KEY,

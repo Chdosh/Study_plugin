@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildDailyGuidePrompt, buildEvaluateSubmissionPrompt, buildRollingPlanPrompt } from './agent-prompts';
-import type { KnowledgeItem } from '../../shared/types';
+import { buildDailyGuidePrompt, buildEvaluateSubmissionPrompt, buildRollingPlanPrompt } from './builtin-tools';
+import type { KnowledgeItem } from '../../../shared/types';
 
 const makeProfile = () => ({
   id: 'p1',
@@ -29,7 +29,7 @@ const sampleKnowledge: KnowledgeItem = {
   updatedAt: '2026-07-08'
 };
 
-describe('agent-prompts', () => {
+describe('built-in Agent Loop tools', () => {
   it('buildDailyGuidePrompt includes review items text when reviewKnowledgeItems provided', () => {
     const prompt = buildDailyGuidePrompt({
       date: '2026-07-08',

@@ -332,10 +332,23 @@ describe('AppService progressive AI flow', () => {
     const firstMessage = await appService.sendOnboardingMessage('我想学前端，但不确定具体方向。');
     expect(firstMessage.intake.status).toBe('collecting');
     expect(firstMessage.intake.brief).toBeNull();
+    expect(firstMessage.pendingInteraction).toMatchObject({
+      status: 'open',
+      intent: 'continue_goal_intake'
+    });
+    const waitingRunId = firstMessage.pendingInteraction!.runReviewId;
 
     const secondMessage = await appService.sendOnboardingMessage('每天晚上 2 小时，三个月内达到初级水平。');
     expect(secondMessage.intake.status).toBe('ready');
     expect(secondMessage.intake.brief?.title).toBe('三个月达到初级前端工程师水平');
+    expect(secondMessage.pendingInteraction).toBeNull();
+    const runRows = (await db.select().from(aiReviews))
+      .filter((row) => row.id === waitingRunId || row.parentReviewId === waitingRunId);
+    expect(runRows.filter((row) => row.recordType === 'run')).toEqual([
+      expect.objectContaining({ id: waitingRunId, status: 'completed' })
+    ]);
+    expect(runRows.filter((row) => row.recordType === 'tool_call').map((row) => row.toolName))
+      .toEqual(['propose_goal', 'ask_user', 'propose_goal']);
 
     const confirmed = await appService.confirmOnboardingGoal();
     expect(confirmed.goal.title).toBe('三个月达到初级前端工程师水平');
@@ -344,7 +357,7 @@ describe('AppService progressive AI flow', () => {
     expect(layered.guide.tasks).toHaveLength(1);
   });
 
-  it('generates a daily review via ReflectionAgent', async () => {
+  it('generates a daily review via the unified Agent Loop', async () => {
     const date = todayIso();
     installDeterministicAi();
 
@@ -1237,14 +1250,14 @@ function installDeterministicAiWithDailyGuideFailure(): Array<{ operation: strin
 }
 
 function operationFromSystem(system: string): string {
-  if (system.includes('goal-intake-agent')) return 'goal_intake';
-  if (system.includes('generate-roadmap-agent')) return 'roadmap';
-  if (system.includes('generate-short-plan-agent') || system.includes('rolling-plan-agent')) return 'short_plan';
-  if (system.includes('generate-daily-guide-agent')) return 'daily_guide';
-  if (system.includes('tutoring-service')) return 'teach_step';
-  if (system.includes('question-branch')) return 'question';
-  if (system.includes('evaluation-service')) return 'submission_evaluation';
-  if (system.includes('reflection-agent')) return 'reflection';
+  if (system.includes('目标澄清与访谈')) return 'goal_intake';
+  if (system.includes('长期学习路径规划')) return 'roadmap';
+  if (system.includes('近期滚动学习规划')) return 'short_plan';
+  if (system.includes('当前学习内容准备')) return 'daily_guide';
+  if (system.includes('渐进式概念讲解')) return 'teach_step';
+  if (system.includes('学习问题答疑')) return 'question';
+  if (system.includes('成果评价')) return 'submission_evaluation';
+  if (system.includes('学习复盘')) return 'reflection';
   return 'unknown';
 }
 

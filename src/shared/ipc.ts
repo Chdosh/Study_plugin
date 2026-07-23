@@ -3,6 +3,7 @@ export const ipcChannels = {
   settingsUpdate: 'settings:update',
   onboardingGetCurrent: 'onboarding:getCurrent',
   onboardingSendMessage: 'onboarding:sendMessage',
+  onboardingCancelQuestion: 'onboarding:cancelQuestion',
   onboardingConfirmGoal: 'onboarding:confirmGoal',
   guidesGenerateLayeredPlan: 'guides:generateLayeredPlan',
   guidesConfirmDailyGuide: 'guides:confirmDailyGuide',

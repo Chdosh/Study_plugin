@@ -42,7 +42,12 @@ import type {
 } from '../../shared/schemas';
 import { applyEvaluationResult } from '../domain/execution-state-machine';
 import type { Database } from '../db/client';
-import type { AiCallMetrics } from '../ai/ai-client';
+import type {
+  CreatePendingInteractionInput,
+  PendingAgentInteraction,
+  SaveAiReviewInput,
+  UpdateAiReviewInput
+} from '../agent/agent-types';
 import type { LearningAiOperation, BuiltLearningContext } from './context-builder';
 export type { LearningAiOperation, BuiltLearningContext };
 import {
@@ -325,7 +330,10 @@ export class StudyStore extends KnowledgeStore {
       .where(and(eq(aiReviews.kind, 'reflection'), eq(aiReviews.date, guide.date)))
       .orderBy(desc(aiReviews.createdAt))
       .limit(1);
-    if (reviewRows.length > 0 && reviewRows[0].status === 'success') {
+    if (
+      reviewRows.length > 0
+      && (reviewRows[0].status === 'success' || reviewRows[0].status === 'completed')
+    ) {
       try {
         const output = JSON.parse(reviewRows[0].outputJson);
         reviewSummary = output.summary ?? undefined;
@@ -363,7 +371,10 @@ export class StudyStore extends KnowledgeStore {
     const reviewRows = await this.db
       .select()
       .from(aiReviews)
-      .where(and(eq(aiReviews.kind, 'reflection'), eq(aiReviews.status, 'success')))
+      .where(and(
+        eq(aiReviews.kind, 'reflection'),
+        inArray(aiReviews.status, ['success', 'completed'])
+      ))
       .orderBy(desc(aiReviews.createdAt))
       .limit(1);
     if (reviewRows.length > 0) {
@@ -738,36 +749,57 @@ export class StudyStore extends KnowledgeStore {
     return this.ops.updatePrompt(profileId, content);
   }
 
-  async saveAiReview(params: {
-    kind:
-      | 'import'
-      | 'plan'
-      | 'goal_intake'
-      | 'roadmap'
-      | 'short_plan'
-      | 'daily_guide'
-      | 'stage_outline'
-      | 'teach_step'
-      | 'question'
-      | 'submission_evaluation'
-      | 'next_step'
-      | 'evaluation'
-      | 'replan'
-      | 'reflection'
-      | 'rolling_plan';
-    date?: string;
-    provider: string;
-    model: string;
-    promptProfileId?: string;
-    promptVersionId?: string | null;
-    inputSnapshot: unknown;
-    output: unknown;
-    outputSchemaVersion: string;
-    status: 'success' | 'failed';
-    errorMessage?: string;
-    metrics?: AiCallMetrics;
-  }): Promise<string> {
+  async saveAiReview(params: SaveAiReviewInput): Promise<string> {
     return this.ops.saveAiReview(params);
+  }
+
+  updateAiReview(id: string, patch: UpdateAiReviewInput): Promise<void> {
+    return this.ops.updateAiReview(id, patch);
+  }
+
+  getActiveAgentRun(scopeType: string, scopeId: string) {
+    return this.ops.getActiveAgentRun(scopeType, scopeId);
+  }
+
+  getNextAgentToolSequence(runReviewId: string): Promise<number> {
+    return this.ops.getNextAgentToolSequence(runReviewId);
+  }
+
+  createPendingInteraction(
+    params: CreatePendingInteractionInput
+  ): Promise<PendingAgentInteraction> {
+    return this.ops.createPendingInteraction(params);
+  }
+
+  getPendingInteraction(id: string): Promise<PendingAgentInteraction | null> {
+    return this.ops.getPendingInteraction(id);
+  }
+
+  getOpenPendingInteraction(
+    scopeType: string,
+    scopeId: string
+  ): Promise<PendingAgentInteraction | null> {
+    return this.ops.getOpenPendingInteraction(scopeType, scopeId);
+  }
+
+  answerPendingInteraction(
+    id: string,
+    answer: string,
+    answerMessageRefId?: string
+  ): Promise<boolean> {
+    return this.ops.answerPendingInteraction(id, answer, answerMessageRefId);
+  }
+
+  cancelPendingInteraction(id: string): Promise<boolean> {
+    return this.ops.cancelPendingInteraction(id);
+  }
+
+  skipPendingInteraction(id: string, answerMessageRefId?: string): Promise<boolean> {
+    return this.ops.skipPendingInteraction(id, answerMessageRefId);
+  }
+
+  failInterruptedAgentRuns(): Promise<number> {
+    return this.ops.failInterruptedAgentRuns();
   }
 
   async getLatestReview(date?: string): Promise<ReviewResult | null> {
