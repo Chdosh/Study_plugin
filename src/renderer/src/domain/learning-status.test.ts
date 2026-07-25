@@ -9,16 +9,19 @@ function task(status: DailyGuideTask['status'], actionStatuses: Array<'planned' 
     title: `步骤 ${index + 1}`,
     instruction: '',
     checkpoint: '',
+    requirement: 'optional' as const,
     status: actionStatus,
     progressNote: null,
     completedAt: actionStatus === 'done' ? '2026-07-13T00:00:00.000Z' : null,
+    origin: 'guide_generated' as const,
+    sourceAiReviewId: null,
     position: index
   }));
   return {
     id: 'task-1', guideId: 'guide-1', roadmapStageId: null, legacyPlanBlockId: null,
     title: '任务', objective: '', scope: '', estimatedMinutes: { min: 10, target: 20, max: 30 },
     actions, deliverable: '', doneWhen: [], quickHint: '', evaluationMode: 'ai', submissionPolicy: 'once_after_task', carryoverAllowed: true,
-    status, progressPercent: 0,
+    status, closureKind: null, closureReason: null, progressPercent: 0,
     completedActions: actions.filter((action) => action.status !== 'planned').map((action) => action.id),
     remainingActions: actions.filter((action) => action.status === 'planned').map((action) => action.id),
     currentAction: actions.find((action) => action.status === 'planned') ?? null,

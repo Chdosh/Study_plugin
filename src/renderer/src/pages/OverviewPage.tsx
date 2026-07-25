@@ -19,12 +19,15 @@ import type {
   GoalIntakeState,
   HistoryIntakeSummary,
   KnowledgeItem,
+  LearningGoal,
   LearningRuntimeSnapshot,
+  QuestionAnswerResult,
   StudySession,
-  TodayGuideState
+  LearningOverviewState
 } from '../../../shared/types';
 import { TypingDots } from '../components/ai/TypingDots';
 import { PendingAgentQuestion } from '../components/ai/PendingAgentQuestion';
+import { MessageContent } from '../components/ai/MessageContent';
 import { HistoryPanel } from '../components/shared/HistoryPanel';
 import { GoalBriefEditor } from '../components/today/GoalBriefEditor';
 import { deriveLearningTaskStatus } from '../domain/learning-status';
@@ -38,6 +41,12 @@ export function OverviewPage({
   learningState,
   runAction,
   onSendOnboarding,
+  temporaryLearning,
+  onAskTemporaryQuestion,
+  onLinkTemporaryQuestionToGoal,
+  onKeepTemporaryQuestion,
+  onConvertTemporaryQuestionToTask,
+  availableGoals,
   onCancelPendingQuestion,
   onConfirmGoal,
   onGenerateLayeredPlan,
@@ -50,11 +59,17 @@ export function OverviewPage({
 }: {
   settings: AppSettings;
   onboarding: GoalIntakeState | null;
-  todayGuide: TodayGuideState | null;
+  todayGuide: LearningOverviewState | null;
   activeSession: StudySession | null;
   learningState: LearningRuntimeSnapshot | null;
   runAction: (label: string, action: () => Promise<void>) => Promise<void>;
   onSendOnboarding: (content: string) => Promise<void>;
+  temporaryLearning: QuestionAnswerResult | null;
+  onAskTemporaryQuestion: (question: string, threadId?: string) => Promise<void>;
+  onLinkTemporaryQuestionToGoal: (threadId: string, goalId: string) => Promise<void>;
+  onKeepTemporaryQuestion: (threadId: string) => Promise<void>;
+  onConvertTemporaryQuestionToTask: (threadId: string, goalId: string) => Promise<void>;
+  availableGoals: LearningGoal[];
   onCancelPendingQuestion: () => Promise<void>;
   onConfirmGoal: (briefPatch?: Partial<GoalBrief>) => Promise<void>;
   onGenerateLayeredPlan: (goalId: string) => Promise<void>;
@@ -74,19 +89,30 @@ export function OverviewPage({
   const [historyPending, setHistoryPending] = useState(false);
   const [selectedHistoryIntake, setSelectedHistoryIntake] = useState<GoalIntakeState | null>(null);
   const [showRestartConfirm, setShowRestartConfirm] = useState(false);
+  const [temporaryMessage, setTemporaryMessage] = useState('');
+  const [temporaryGoalId, setTemporaryGoalId] = useState('');
 
   const guide = todayGuide?.guide ?? null;
   const roadmap = todayGuide?.roadmap ?? [];
   const goal = todayGuide?.goal ?? onboarding?.activeGoal ?? null;
-  const shortPlanDays = todayGuide?.shortPlan ?? [];
-  const noGuideAction = todayGuide?.todayState === 'stage_review_required'
+  const nearTermPlanItems = todayGuide?.shortPlan ?? [];
+  useEffect(() => {
+    setTemporaryGoalId((current) =>
+      current
+      || temporaryLearning?.thread.goalId
+      || goal?.id
+      || availableGoals.find((item) => item.status === 'active')?.id
+      || ''
+    );
+  }, [availableGoals, goal?.id, temporaryLearning?.thread.goalId]);
+  const noGuideAction = todayGuide?.preparationState === 'stage_review_required'
     ? 'stage_review'
-    : todayGuide?.todayState === 'plan_exhausted'
+    : todayGuide?.preparationState === 'plan_exhausted'
     ? 'rolling_plan'
-    : shortPlanDays.length > 0
+    : nearTermPlanItems.length > 0
       ? 'current_unit'
       : 'layered_plan';
-  const currentShortPlanDay = shortPlanDays.find((d) => d.id === guide?.shortPlanDayId) ?? null;
+  const currentNearTermPlanItem = nearTermPlanItems.find((item) => item.id === guide?.nearTermPlanItemId) ?? null;
   const completedTaskCount = guide?.tasks.filter((t) => t.status === 'done').length ?? 0;
 
   useEffect(() => {
@@ -147,7 +173,7 @@ export function OverviewPage({
             <ChevronRight size={16} />
             <strong>近期计划</strong>
             <ChevronRight size={16} />
-            <strong>今日执行稿</strong>
+            <strong>当前 Learning Guide</strong>
           </div>
 
           <section className="surface intake-chat-panel" aria-label="主动访谈">
@@ -155,7 +181,7 @@ export function OverviewPage({
               {(onboarding?.messages ?? []).length === 0 && (
                 <div className="intake-message assistant">
                   <span>AI</span>
-                  <div className="message-content">你准备学习什么？可以直接说目标、期限、基础和每天可投入时间。</div>
+                  <div className="message-content">你准备学习什么？可以直接说目标、期限、基础和通常可投入的时间。</div>
                 </div>
               )}
               {(onboarding?.messages ?? []).map((item) => (
@@ -196,6 +222,19 @@ export function OverviewPage({
                 />
               </div>
               <div className="intake-actions">
+                <button
+                  className="text-action"
+                  type="button"
+                  disabled={!message.trim() || !hasApiKey || intakePending}
+                  onClick={() => {
+                    const question = message.trim();
+                    setMessage('');
+                    void onAskTemporaryQuestion(question);
+                  }}
+                >
+                  <Sparkles size={16} />
+                  临时学习这个问题
+                </button>
                 <button className="text-action" type="button" disabled={!hasApiKey || intakePending} onClick={() => void send('请使用当前信息生成初步计划。')}>
                   <Wand2 size={16} />
                   使用当前信息生成初步计划
@@ -207,6 +246,99 @@ export function OverviewPage({
               </div>
             </div>
           </section>
+          {temporaryLearning && (
+            <section className="surface intake-chat-panel" aria-label="临时学习记录">
+              <div className="current-step-heading">
+                <div>
+                  <span className="focus-eyebrow">临时学习</span>
+                  <h2>{temporaryLearning.thread.question}</h2>
+                </div>
+                <span className="micro-hint">
+                  {temporaryLearning.thread.status === 'open' ? '可继续原对话，或显式选择收口方式。' : '此临时学习已收口。'}
+                </span>
+              </div>
+              <div className="intake-thread redesigned">
+                {temporaryLearning.messages.map((item) => (
+                  <div className={item.role === 'assistant' ? 'intake-message assistant' : 'intake-message user'} key={item.id}>
+                    <span>{item.role === 'assistant' ? 'AI' : '你'}</span>
+                    <div className="message-content"><MessageContent content={item.content} /></div>
+                  </div>
+                ))}
+              </div>
+              {temporaryLearning.thread.status === 'open' && (
+                <>
+                  <div className="submission-composer">
+                    <label htmlFor="temporary-follow-up">继续这段临时学习</label>
+                    <textarea
+                      id="temporary-follow-up"
+                      value={temporaryMessage}
+                      onChange={(event) => setTemporaryMessage(event.target.value)}
+                      placeholder="继续追问会写入同一个 Thread"
+                    />
+                    <button
+                      className="primary-action"
+                      type="button"
+                      disabled={!temporaryMessage.trim()}
+                      onClick={() => {
+                        const question = temporaryMessage.trim();
+                        if (!question) return;
+                        void onAskTemporaryQuestion(
+                          question,
+                          temporaryLearning.thread.id
+                        ).then(() => setTemporaryMessage(''));
+                      }}
+                    >
+                      继续对话
+                    </button>
+                  </div>
+                  <div className="temporary-disposition">
+                    <select
+                      aria-label="临时学习对应 Goal"
+                      value={temporaryGoalId}
+                      onChange={(event) => setTemporaryGoalId(event.target.value)}
+                    >
+                      <option value="">选择已有 Goal</option>
+                      {availableGoals.map((item) => (
+                        <option key={item.id} value={item.id}>{item.title}</option>
+                      ))}
+                    </select>
+                    <button
+                      className="secondary-action"
+                      type="button"
+                      onClick={() => void onKeepTemporaryQuestion(temporaryLearning.thread.id)}
+                    >
+                      仅保留记录
+                    </button>
+                    <button
+                      className="secondary-action"
+                      type="button"
+                      disabled={!temporaryGoalId}
+                      onClick={() => void onLinkTemporaryQuestionToGoal(
+                        temporaryLearning.thread.id,
+                        temporaryGoalId
+                      )}
+                    >
+                      关联已有 Goal
+                    </button>
+                    <button
+                      className="secondary-action"
+                      type="button"
+                      disabled={!temporaryGoalId}
+                      onClick={() => void onConvertTemporaryQuestionToTask(
+                        temporaryLearning.thread.id,
+                        temporaryGoalId
+                      )}
+                    >
+                      转成正式 Task
+                    </button>
+                  </div>
+                  <p className="micro-hint">
+                    不会自动创建 Goal 或调整 Roadmap。转成 Task 时优先加入对应 Goal 的当前 Guide，否则保存为未安排 Task。
+                  </p>
+                </>
+              )}
+            </section>
+          )}
         </div>
 
         {(onboarding?.intake.status === 'ready' || goal) && <aside className="context-panel intake-summary-panel">
@@ -262,7 +394,7 @@ export function OverviewPage({
                 {noGuideAction === 'stage_review'
                   ? '前往记录确认成果'
                   : noGuideAction === 'current_unit'
-                  ? todayGuide?.todayState === 'generation_failed'
+                  ? todayGuide?.preparationState === 'generation_failed'
                     ? '重新生成当前学习单元'
                     : '生成当前学习单元'
                   : noGuideAction === 'rolling_plan'
@@ -311,6 +443,7 @@ export function OverviewPage({
     evaluationResult: learningState.latestEvaluation?.result
   } : null) : null;
   const activeStage = todayGuide?.currentStage ?? null;
+  const goalProgress = todayGuide?.goalProgress ?? null;
   const statusLabel = (status: string): string => ({ planned: '待开始', active: '进行中', done: '已完成', skipped: '已跳过', deferred: '已暂缓' })[status] ?? status;
   const activeStageIndex = activeStage ? roadmap.findIndex((stage) => stage.id === activeStage.id) : -1;
   const actions = currentTask?.actions ?? [];
@@ -344,11 +477,27 @@ export function OverviewPage({
         ? `任务记录为“${todayGuide.stageConflict.taskStage.title}”，学习单元记录为“${todayGuide.stageConflict.shortPlanDayStage.title}”。`
         : `学习路线记录为“${todayGuide.stageConflict.formalStage.title}”，当前学习单元属于“${todayGuide.stageConflict.learningUnitStage.title}”。`}系统没有静默选择阶段。</small></section>}
 
-      {todayGuide?.todayState === 'generation_failed' && (
-        <section className="overview-pending" role="alert"><div><h2>今日执行稿生成失败</h2><p>已有目标和计划已保留，可以重新生成当前学习单元。</p></div><button className="primary-action" type="button" onClick={() => void onPrepareCurrentLearningDay()}>重试生成</button></section>
+      {goalProgress?.status === 'checkpoint_missed' && (
+        <section className="overview-stage-conflict" role="status">
+          <strong>阶段检查点已过</strong>
+          <p>“{goalProgress.currentStageTitle}”尚未确认达到阶段标准，原学习位置和记录均已保留。</p>
+          <small>阶段检查点：{goalProgress.currentStageTargetDate}。继续当前任务，或前往记录查看证据后再决定是否调整计划。</small>
+        </section>
       )}
 
-      {todayGuide?.todayState === 'stage_review_required' && (
+      {goalProgress?.status === 'goal_due' && (
+        <section className="overview-stage-conflict" role="alert">
+          <strong>目标截止日期已到</strong>
+          <p>当前 Goal 的成功标准尚未全部确认，系统没有自动关闭或重建计划。</p>
+          <small>截止日期：{goalProgress.dueDate}。请结合记录决定继续原目标、调整范围或重新确认期限。</small>
+        </section>
+      )}
+
+      {todayGuide?.preparationState === 'generation_failed' && (
+        <section className="overview-pending" role="alert"><div><h2>当前执行稿生成失败</h2><p>已有目标和计划已保留，可以重新生成当前学习单元。</p></div><button className="primary-action" type="button" onClick={() => void onPrepareCurrentLearningDay()}>重试生成</button></section>
+      )}
+
+      {todayGuide?.preparationState === 'stage_review_required' && (
         <section className="overview-pending"><div><h2>当前阶段等待确认</h2><p>阶段成果和历史记录已保留。确认成果后才会进入下一阶段。</p></div><button className="primary-action" type="button" onClick={() => onNavigate?.('records')}>前往记录确认成果</button></section>
       )}
 
@@ -362,6 +511,8 @@ export function OverviewPage({
               <div className="overview-goal-meta">
                 {activeStageIndex >= 0 && roadmap.length > 0 && <span>阶段 {activeStageIndex + 1} / {roadmap.length}</span>}
                 {activeStage && <span>{activeStage.title}</span>}
+                {goalProgress?.dueDate && <span>目标截止 {goalProgress.dueDate}</span>}
+                {goalProgress?.currentStageTargetDate && <span>阶段检查 {goalProgress.currentStageTargetDate}</span>}
                 {onboarding?.intake.brief?.availableTime && <span>{onboarding.intake.brief.availableTime}</span>}
               </div>
             </div>
@@ -376,10 +527,10 @@ export function OverviewPage({
                 <div>
                   <span className="section-label">当前任务</span>
                   <h2 id="current-task-title">{currentTask.title}</h2>
-                  <p>{currentShortPlanDay?.focus || currentTask.objective}</p>
+                  <p>{currentNearTermPlanItem?.focus || currentTask.objective}</p>
                 </div>
                 {guide.status === 'draft' ? (
-                  <button className="primary-action overview-task-primary" type="button" onClick={() => void onConfirmGuide(guide.id)}>确认执行稿</button>
+                  <button className="primary-action overview-task-primary" type="button" onClick={() => void onConfirmGuide(guide.id)}>确认学习路径与执行稿</button>
                 ) : (
                   <button className="primary-action overview-task-primary" type="button" disabled={Boolean(todayGuide?.stageConflict)} onClick={() => onNavigate?.('study')}><Play size={16} />{primaryActionLabel}</button>
                 )}
@@ -401,11 +552,11 @@ export function OverviewPage({
         <aside className="overview-side-column">
           {roadmap.length > 0 && <section className="overview-reference-card overview-route-card" aria-labelledby="learning-path-title"><header><h2 id="learning-path-title">学习路径</h2><span>当前单元 {completedTaskCount} / {guide.tasks.length} 个任务完成</span></header><div className="overview-route-steps">{roadmap.map((stage, index) => {
             const presentation = getRoadmapStagePresentation(stage, activeStage?.id ?? null);
-            return <article className={presentation.className} key={stage.id} aria-current={presentation.isCurrentLearningUnit ? 'step' : undefined}><span>{stage.status === 'completed' ? <CheckCircle2 size={15} /> : index + 1}</span><strong>{stage.title}</strong><small>{presentation.label}</small></article>;
+            return <article className={presentation.className} key={stage.id} aria-current={presentation.isCurrentLearningUnit ? 'step' : undefined}><span>{stage.status === 'completed' ? <CheckCircle2 size={15} /> : index + 1}</span><strong>{stage.title}</strong><small>{presentation.label}{stage.targetDate ? ` · 检查点 ${stage.targetDate}` : ''}</small></article>;
           })}</div></section>}
 
-          <section className="overview-reference-card overview-focus-card" aria-labelledby="today-focus-title">
-            <header><h2 id="today-focus-title">今日聚焦</h2></header>
+          <section className="overview-reference-card overview-focus-card" aria-labelledby="current-focus-title">
+            <header><h2 id="current-focus-title">当前聚焦</h2></header>
             <div className="overview-focus-list">
               {focusActions.length > 0 ? focusActions.map((action) => {
                 const isCurrent = action.id === currentAction?.id;

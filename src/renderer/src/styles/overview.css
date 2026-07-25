@@ -842,7 +842,7 @@
   justify-self: stretch;
 }
 
-/* ---- 今日任务精简行 ---- */
+/* ---- 当前任务精简行 ---- */
 .section-head-row {
   display: flex;
   align-items: baseline;
@@ -1649,4 +1649,15 @@
     align-items: center;
     text-align: left;
   }
+}
+.temporary-disposition {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.temporary-disposition select {
+  min-width: min(100%, 240px);
 }

@@ -91,9 +91,9 @@ describe('AI output schemas', () => {
     });
     const shortPlan = shortPlanAgentOutputSchema.parse({
       weekFocus: '建立项目主流程理解',
-      days: [
+      items: [
         {
-          dayIndex: 1,
+          itemIndex: 1,
           roadmapStagePosition: 1,
           title: '梳理项目',
           focus: '理解目录和主流程',
@@ -132,7 +132,7 @@ describe('AI output schemas', () => {
     });
 
     expect(roadmap.stages).toHaveLength(1);
-    expect(shortPlan.days[0].dayIndex).toBe(1);
+    expect(shortPlan.items[0].itemIndex).toBe(1);
     expect(guide.tasks[0].title).toBe('完成项目主流程接管');
   });
 
@@ -391,12 +391,12 @@ describe('AI output schemas', () => {
     expect(guide.tasks[0].estimatedMinutes.max).toBe(20);
   });
 
-  it('rounds float dayIndex in short plan', () => {
+  it('rounds float itemIndex in short plan', () => {
     const plan = shortPlanAgentOutputSchema.parse({
       weekFocus: '测试',
-      days: [
+      items: [
         {
-          dayIndex: 1.2,
+          itemIndex: 1.2,
           roadmapStagePosition: 1,
           title: '第一天',
           focus: '测试',
@@ -406,22 +406,35 @@ describe('AI output schemas', () => {
         }
       ]
     });
-    expect(plan.days[0].dayIndex).toBe(1);
+    expect(plan.items[0].itemIndex).toBe(1);
   });
 
   it('requires stage ownership and rejects a short plan that moves backwards between stages', () => {
     expect(() => shortPlanAgentOutputSchema.parse({
       weekFocus: '测试',
-      days: [{ dayIndex: 1, title: '缺少阶段', focus: '测试', tasks: ['任务'], expectedOutput: '产出', successCriteria: '标准' }]
+      items: [{ itemIndex: 1, title: '缺少阶段', focus: '测试', tasks: ['任务'], expectedOutput: '产出', successCriteria: '标准' }]
     })).toThrow();
 
     expect(() => shortPlanAgentOutputSchema.parse({
       weekFocus: '测试',
-      days: [
-        { dayIndex: 1, roadmapStagePosition: 2, title: '项目', focus: '项目', tasks: ['任务'], expectedOutput: '产出', successCriteria: '标准' },
-        { dayIndex: 2, roadmapStagePosition: 1, title: '基础', focus: '基础', tasks: ['任务'], expectedOutput: '产出', successCriteria: '标准' }
+      items: [
+        { itemIndex: 1, roadmapStagePosition: 2, title: '项目', focus: '项目', tasks: ['任务'], expectedOutput: '产出', successCriteria: '标准' },
+        { itemIndex: 2, roadmapStagePosition: 1, title: '基础', focus: '基础', tasks: ['任务'], expectedOutput: '产出', successCriteria: '标准' }
       ]
     })).toThrow(/不能从后续阶段倒退/);
+  });
+
+  it('rejects an invalid Roadmap checkpoint date', () => {
+    expect(() => roadmapAgentOutputSchema.parse({
+      goalSummary: '测试',
+      stages: [{
+        title: '阶段',
+        objective: '目标',
+        direction: '方向',
+        successCriteria: '标准',
+        targetDate: '2026-02-30'
+      }]
+    })).toThrow(/日期必须是真实的/);
   });
 
   it('rejects estimatedMinutes that violate min <= target <= max', () => {

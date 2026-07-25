@@ -2,131 +2,139 @@
 
 状态：CURRENT
 生效日期：2026-07-23
-适用范围：架构、IPC、Module、Store、数据库、迁移、AI、上下文、安全和旧命名任务。
-失效条件：技术栈、主链 owner 或数据模型经用户确认发生变化。
+适用范围：架构、IPC、Module、Store、数据库、迁移、AI 上下文、安全边界和旧命名任务。
+失效条件：技术栈、主链 owner、V2 数据模型或切库策略经用户确认发生变化。
 
-## 1. 技术栈和依赖方向
+## 1. 当前架构
 
-当前技术栈以 `package.json`、lockfile 和代码为准：
+技术栈以 `package.json`、lockfile 和当前代码为准：
 
-* Electron + React + TypeScript
-* SQLite/libSQL + Drizzle ORM
-* OpenAI-compatible DeepSeek client
-* Zod runtime validation
-* typed preload API + narrow IPC
-* Vitest
+- Electron + React + TypeScript
+- SQLite/libSQL + Drizzle ORM
+- OpenAI-compatible DeepSeek client
+- Zod runtime validation
+- typed preload API + narrow IPC
+- Vitest
 
-推荐依赖方向：
+调用方向：
 
 ```text
 Renderer
 → typed preload / narrow IPC
 → AppService
 → Agent Loop / Runtime / Planning / Context / Branch modules
-→ Tool Registry / bounded tool implementations
-→ StudyStore facade / persistence modules
-→ CurrentLearningContextPersistence
-→ SQLite
+→ StudyStore facade / persistence owners
+→ SQLite V2
 ```
 
-## 2. 职责边界
+Renderer 只展示状态并提交用户显式操作。AppService 只做应用层适配、Electron 行为和错误映射。业务 Module 负责用例，持久化 owner 负责事务和正式状态，任何一层都不得复制另一套状态机。
 
-* Renderer：展示状态、收集操作，不编排持久化流程。
-* AppService：应用层适配、Electron 行为和错误映射，不编排 AI 调用链，不复制 Store 状态机。
-* Agent Loop：全部 AI 教学与规划能力的唯一运行入口，负责动态工具挂载、Run 生命周期、工具调用审计、暂停和恢复。
-* Tool Registry：按上下文挂载 `explain/quiz/practice/evaluate/search_kb/ask_user` 及规划、复盘工具；新增能力时新增工具，不新增 Agent。
-* Runtime module：Session、Action、Task 执行命令。
-* Planning module：学习单元准备、计划推进、生成失败恢复和计划版本。
-* Context module / ContextBuilder：按操作构建最小 AI 上下文、处理学习事实和知识结果，不能推进学习位置。
-* Branch module：问题分支打开、追加、解决和返回主线。
-* Store persistence：事务、查询和持久状态变化。
-* CurrentLearningContextPersistence：当前学习位置解析、冲突候选和可唯一推导的恢复。
+## 2. V2 正式事实源
 
-同一用例出现多个入口时先确定 owner，其他层只做薄适配。禁止在 Renderer、AppService、Module 和 Store 各维护相似编排。
-
-## 3. 当前主流程数据
-
-新增功能优先映射到：
+正常 Runtime 只允许使用以下 V2 表：
 
 ```text
 goals
 goal_intakes / goal_intake_messages
 roadmap_stages
-short_plan_days
-daily_guides
-daily_guide_tasks
-daily_guide_actions
-study_sessions
-learning_runtime_states
-question_threads / question_messages
+near_term_plan_items / plan_versions
+learning_guides
+learning_tasks / learning_actions
+focus_sessions
+current_learning_context
+conversation_threads / conversation_messages
 learning_submissions / learning_evaluations
-knowledge_items / learner_facts
-plan_adjustment_proposals / plan_versions
 ai_reviews / pending_interactions
+learner_facts
+knowledge_items / knowledge_item_evidence
+prompt_profiles / prompt_versions
+app_settings
 ```
 
-不要为了名称理想化重复建表。
+V2 不包含 `task_items`、`daily_plans`、`daily_plan_blocks`、`daily_guide_blocks`、`learning_steps`、`learning_runtime_states`、`next_step_decisions`、`plan_adjustment_proposals`、`focus_events`、`generation_locks` 等 V1 事实源。旧名只能存在于隔离迁移器、迁移测试或明确的 UI DTO 兼容边界，不能出现在 Runtime SQL 或正常查询链。
 
-## 4. 历史兼容结构
+## 3. 状态所有权
 
-以下结构仍可能被 schema、导出、迁移或兼容路径引用，但不能重新成为新流程中心：
+| 事实 | 唯一写入 owner | 约束 |
+| --- | --- | --- |
+| Task 状态与 closureKind | ExecutionRuntime | Evaluation 不修改；CommandGateway 只能调用 Runtime 命令 |
+| Action 状态 | ExecutionRuntime | Renderer 不推导或回写 |
+| Focus Session 状态与 duration_seconds | Runtime | 全库最多一个 active/paused；结束 Task 不结束 Session |
+| Current Context | CurrentLearningContextPersistence | 只保存 Goal/Guide/Task/Action 导航指针和版本 |
+| Submission 原文 | EvaluationPersistence | 先落库再调用 AI，不保存评价状态副本 |
+| Evaluation 与 Recommendation | EvaluationPersistence | accepted 与 applied 分离；不直接推进其他业务对象 |
+| Recommendation 应用 | CommandGateway | 先校验命令和目标，再调用对应业务 owner |
+| Agent Run / tool call | OpsPersistence | 统一落在 ai_reviews，不保存隐藏推理 |
+| ask_user 暂停 | OpsPersistence | pending_interactions 只保存恢复所需结构化意图，不复制 Current Context |
+
+Task/Guide 的关闭、暂缓或切换如果影响导航指针，业务命令与 Current Context 必须在同一数据库事务内完成。Current Context 不是业务状态事实源；指针失效时只回退到可唯一确定的 Goal 入口并提示用户选择，不猜测 Task 或 Action。
+
+Goal 的 `due_date` 与 Roadmap Stage 的 `target_date` 是进度参照事实。Near-term Plan 和 Learning Guide 的 `suggested_date` 在正常 Runtime 中保持为空，不参与选择、恢复或推进；当前日期只允许派生只读进度提示，不得产生漏学计数、每日实例或自动计划变更。
+
+## 4. Evaluation 与 Recommendation
+
+- `learning_evaluations.kind=submission` 必须关联 Submission；Goal 可由 Submission 链确定，也可为空。
+- `kind=goal_review` 必须关联 Goal，不伪装成 Submission Evaluation。
+- Recommendation 为空时，`recommendation_decision`、`application_status`、`application_error`、`applied_at` 必须全部为空。
+- 多条或冲突 Decision 不选择第一条，也不生成可执行 Recommendation。
+- `accepted` 只记录用户决定；只有 CommandGateway 成功执行后才写 `applied`。
+- Evaluation、Self-Note 和知识派生都不能直接修改 Task、Action、Session、Guide 或计划。
+
+## 5. 统一 Agent Loop
+
+全部 AI 教学、规划和复盘能力通过一个 Agent Loop 和 Tool Registry 运行。新增能力时新增工具，不新增独立 Agent。`ask_user` 在同一个持久化 Run 内进入 `waiting_user`，回答后恢复原 Run 和结构化工具上下文。
+
+每次 AI 操作必须有明确输入、输出 schema、上下文来源、失败状态和重试语义。Submission 必须先持久化。Agent Run、工具调用、暂停、恢复和失败统一写入 `ai_reviews`；`pending_interactions` 不保存正式业务状态副本。
+
+## 6. V1 → V2 独立升级
+
+升级器源码位于 `src/migration-v1-v2/`，只能通过手动升级命令运行：
 
 ```text
-task_items
-plan_stages
-daily_plans
-daily_plan_blocks
-daily_guide_blocks
-learning_steps
-旧 block/step 锚点字段
+npm run db:upgrade-v2 -- <应用数据目录>
+npm run db:restore-v1 -- <应用数据目录>
 ```
 
-* 新 Task/Action/Session 功能不得重新使用旧 block/step 产品语义。
-* 删除旧结构前必须区分兼容写入、导出、迁移和实际主链。
-* 清理必须包含读写者清单、历史数据迁移、回滚和验证方案。
-* `defaultBlockMinutes`、`getAccumulatedSeconds` 等旧名称不能作为恢复固定 Time Block 的理由。
+升级顺序：
 
-## 5. 当前命名债
+```text
+识别 V1
+→ VACUUM INTO 生成永久 V1 归档
+→ 创建 study-supervisor-v2.building.db
+→ 仅复制白名单且可唯一映射的数据
+→ 完成 integrity/FK/schema/Session/旧表核对
+→ 生成外部迁移报告
+→ 原子切换为 study-supervisor-v2.db
+```
 
-* `TodayPage.tsx` 当前导出 `OverviewPage`；旧文件名不代表恢复 Today 页面。
-* `ReviewResult` 和 review service 是业务能力；复盘由记录体系承载，不代表需要全局 Review 页面。
-* `today.css`、`review.css`、`layout-v2.css` 等文件名不是信息架构事实源。
-* `StudyStore` 是兼容门面；新持久化逻辑进入实际 owner 模块，不继续扩大门面。
-* `CurrentLearningContextPersistence` 是 Goal、Guide、Task、Action 和可恢复 Session 的统一解析 seam；其他模块不得重新按时间或局部指针推导 Current Guide。
+规则：
 
-不做孤立的机械重命名。重命名必须同时更新调用、类型、测试和必要兼容说明。
+- 迁移器不进入 Store、Runtime、正常启动、正常查询或主运行 bundle。
+- V1 归档永久保留；无法唯一映射的数据只留在归档和外部报告。
+- 不双写、不双读，不为 V1 字段建立永久兼容层。
+- 消息按 Goal → Task → Action 的可确定层级迁移；下级无法确定时置空，不丢弃已经确定 Goal 的原文。只迁移部分消息的 Thread 标记为 partial。
+- 多条 Decision 冲突时不生成 Recommendation。独立 Proposal 不迁移；已经形成正式计划结果时只迁移最终 Plan Version。
+- V1 中 accepted 但未 applied 的建议不恢复成待执行命令。
+- 重复运行发现正式 V2 已存在时返回 `not_needed`，不得覆盖。
+- Runtime 只打开完成核对的 `study-supervisor-v2.db`，忽略 `.building`、`.ready`、归档和报告文件。
+- 回退是重新启用已验证的 V1 归档，不执行 V2 → V1 反向数据合并。
 
-## 6. 数据和迁移
+## 7. 后续 V2 Schema 迁移
 
-* SQLite 是 durable source of truth。
-* schema 修改必须使用迁移，不得只靠启动时 ad hoc SQL；新增迁移必须附可执行回滚 SQL。
-* 未经用户明确批准，不删除表、列或用户数据。
-* 真实数据修复前先备份，并说明状态变化。
-* 自动修复只处理可唯一推导状态；多种合理选择必须保留数据并让用户选择。
-* 计划、提交、评价和历史必须可追溯，不能静默覆盖。
-* 核心动作必须处理双击、IPC 重复、网络重试、应用中断和启动恢复。
+V2 正常运行后的 schema 变化必须使用版本化迁移，并附可执行 `rollbackSql`。迁移前后至少验证：
 
-## 7. AI 和上下文
+- `PRAGMA integrity_check`
+- `PRAGMA foreign_key_check`
+- schemaVersion
+- 关键唯一索引和状态约束
+- 受影响业务事实的行数与可恢复路径
 
-每个 AI 操作必须有明确输入、输出 schema、上下文来源、预算、失败状态和重试策略。
+未经用户明确批准，不删除 V2 表、列或用户数据。
 
-* 所有 AI 操作通过统一 Agent Loop 执行；AppService 和业务 Module 不得自行实例化 Agent 或重复写 AI 审计。
-* Agent Run、工具调用、暂停、恢复和失败统一记录在扩展后的 `ai_reviews`，不新增 `agent_runs` 或 `agent_tool_invocations`。
-* `ask_user` 使用 `pending_interactions` 保存可恢复问题；用户回答、跳过或取消后继续或结束同一个逻辑 Run。
-* 应用重启时保留 `waiting_user`，把中断的 `running` 标记为失败并允许用户重试。
-* 不发送完整用户历史。
-* 只发送当前操作必要的目标、计划、Task、Action、最近证据和相关知识。
-* 用户确认、系统实际行为和原始提交高于摘要与 AI 推断。
-* 结构化输出使用 Zod 或等价运行时校验。
-* 不通过放宽必填字段或编造关键字段掩盖模型失败。
-* AI 请求不长时间占用数据库事务。
-* 提交先保存；评价成功后再事务性应用业务状态。
+## 8. Electron 与安全边界
 
-## 8. Electron 和隐私
-
-* Renderer 不直接访问数据库、Node 文件系统、safeStorage、API key 或监控 API。
-* IPC 必须窄、可枚举、类型化并校验输入。
-* 不暴露通用 shell、通用文件系统或动态 IPC。
-* secret 不进入日志、错误、AI 审计或数据库快照。
-* 不自动执行 AI 代码或命令。
-* 不实现截图、录屏、键盘记录、剪贴板监听、麦克风/摄像头采集、完整浏览历史、私信收集、强制锁屏或隐藏监控。
+- Renderer 不直接访问 SQLite、Node 文件系统、API key、safeStorage 或系统监控 API。
+- IPC 必须窄、类型化并校验输入，不暴露通用 shell、文件系统或动态 IPC。
+- secret 不进入日志、错误、AI 审计或数据库快照。
+- 不自动执行 AI 生成的代码或命令。
+- 不实现截图、录屏、键盘记录、剪贴板监听、麦克风/摄像头采集、完整浏览历史、私信收集、强制锁屏或隐藏监控。

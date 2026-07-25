@@ -19,7 +19,7 @@ function makeSnapshot(overrides: Partial<LearningRuntimeSnapshot> = {}): Learnin
       id: 'guide-1',
       goalId: 'goal-1',
       planId: 'plan-1',
-      shortPlanDayId: 'day-1',
+      nearTermPlanItemId: 'day-1',
       date: '2026-07-11',
       status: 'confirmed',
       sessionStatus: 'active',
@@ -42,8 +42,8 @@ function makeSnapshot(overrides: Partial<LearningRuntimeSnapshot> = {}): Learnin
           scope: '范围',
           estimatedMinutes: { min: 20, target: 30, max: 40 },
           actions: [
-            { id: 'act-1', taskId: 'task-1', title: '步骤1', instruction: '说明', checkpoint: '标准', status: 'planned', progressNote: null, completedAt: null, position: 0 },
-            { id: 'act-2', taskId: 'task-1', title: '步骤2', instruction: '说明', checkpoint: '标准', status: 'planned', progressNote: null, completedAt: null, position: 1 }
+            { id: 'act-1', taskId: 'task-1', title: '步骤1', instruction: '说明', checkpoint: '标准', requirement: 'optional', status: 'planned', progressNote: null, completedAt: null, origin: 'guide_generated', sourceAiReviewId: null, position: 0 },
+            { id: 'act-2', taskId: 'task-1', title: '步骤2', instruction: '说明', checkpoint: '标准', requirement: 'optional', status: 'planned', progressNote: null, completedAt: null, origin: 'guide_generated', sourceAiReviewId: null, position: 1 }
           ],
           deliverable: '',
           doneWhen: [],
@@ -52,6 +52,8 @@ function makeSnapshot(overrides: Partial<LearningRuntimeSnapshot> = {}): Learnin
           submissionPolicy: 'once_after_task',
           carryoverAllowed: false,
           status: 'active',
+          closureKind: null,
+          closureReason: null,
           progressPercent: 0,
           completedActions: [],
           remainingActions: ['act-1', 'act-2'],
@@ -82,6 +84,8 @@ function makeSnapshot(overrides: Partial<LearningRuntimeSnapshot> = {}): Learnin
       submissionPolicy: 'once_after_task',
       carryoverAllowed: false,
       status: 'active',
+      closureKind: null,
+      closureReason: null,
       progressPercent: 0,
       completedActions: [],
       remainingActions: ['act-1', 'act-2'],
@@ -92,14 +96,15 @@ function makeSnapshot(overrides: Partial<LearningRuntimeSnapshot> = {}): Learnin
       createdAt: '',
       updatedAt: ''
     },
-    dailyGuideAction: { id: 'act-1', taskId: 'task-1', title: '步骤1', instruction: '说明1', checkpoint: '标准1', status: 'planned', progressNote: null, completedAt: null, position: 0 },
-    roadmapStage: { id: 'stage-1', goalId: 'goal-1', title: '阶段一', objective: '', direction: '', successCriteria: '', status: 'active', position: 0, createdAt: '', updatedAt: '' },
+    dailyGuideAction: { id: 'act-1', taskId: 'task-1', title: '步骤1', instruction: '说明1', checkpoint: '标准1', requirement: 'optional', status: 'planned', progressNote: null, completedAt: null, origin: 'guide_generated', sourceAiReviewId: null, position: 0 },
+    roadmapStage: { id: 'stage-1', goalId: 'goal-1', title: '阶段一', objective: '', direction: '', successCriteria: '', targetDate: null, status: 'active', position: 0, createdAt: '', updatedAt: '' },
     stageConflict: null,
     questionThread: null,
     questionMessages: [],
     latestSubmission: null,
     latestEvaluation: null,
     latestDecision: null,
+    submissionAttempts: [],
     pendingAdjustment: null,
     ...overrides
   };
@@ -122,6 +127,15 @@ describe('computeCommandPolicy', () => {
     expect(policy.canTerminate).toBe(false);
   });
 
+  it('allows submitting evidence without starting a Focus Session', () => {
+    const snapshot = makeSnapshot({ state: { ...makeSnapshot().state, sessionStatus: 'idle' } });
+    const policy = computeCommandPolicy(snapshot);
+
+    expect(policy.canStart).toBe(true);
+    expect(policy.canSubmit).toBe(true);
+    expect(policy.canCloseTask).toBe(true);
+  });
+
   it('enables pause and complete action when session active', () => {
     const snapshot = makeSnapshot({ state: { ...makeSnapshot().state, sessionStatus: 'active' } });
     const policy = computeCommandPolicy(snapshot);
@@ -132,6 +146,14 @@ describe('computeCommandPolicy', () => {
     expect(policy.canAskQuestion).toBe(true);
     expect(policy.canTerminate).toBe(true);
     expect(policy.sessionStatus).toBe('active');
+  });
+
+  it('allows submitting evidence before every Action is terminal', () => {
+    const snapshot = makeSnapshot({ state: { ...makeSnapshot().state, sessionStatus: 'active' } });
+    const policy = computeCommandPolicy(snapshot);
+
+    expect(policy.canCompleteAction).toBe(true);
+    expect(policy.canSubmit).toBe(true);
   });
 
   it('enables resume and terminate when session paused', () => {
@@ -186,7 +208,7 @@ describe('computeCommandPolicy', () => {
     expect(policy.canStart).toBe(false);
     expect(policy.canCompleteAction).toBe(false);
     expect(policy.canSkipAction).toBe(false);
-    expect(policy.canSkipTask).toBe(false);
+    expect(policy.canCloseTask).toBe(true);
     expect(policy.canSubmit).toBe(true);
     expect(policy.sessionStatus).toBe('active');
   });

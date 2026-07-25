@@ -50,13 +50,14 @@ async function createTestGuideWithTask() {
         title: '测试阶段',
         objective: '完成测试',
         direction: '测试方向',
-        successCriteria: '通过测试'
+        successCriteria: '通过测试',
+        targetDate: null
       }]
     },
     shortPlan: {
       weekFocus: '测试周',
-      days: [{
-        dayIndex: 1,
+      items: [{
+        itemIndex: 1,
         roadmapStagePosition: 1,
         title: '测试日',
         focus: '测试',
@@ -112,7 +113,7 @@ describe('LearningBranchModule', () => {
 
     const thread = await branch.getThread(handle.threadId);
     expect(thread).not.toBeNull();
-    expect(thread?.taskId).toBeNull();
+    expect(thread?.taskId).toBe(guide.tasks[0].id);
     expect(thread!.status).toBe('open');
     expect(thread!.question).toBe('为什么这里会报错？');
     const messages = await branch.getMessages(handle.threadId);

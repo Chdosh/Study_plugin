@@ -61,14 +61,54 @@
 - D042: 个人知识库积累是主学习闭环的一部分，不是附属统计。原始证据负责可追溯，Self-Notes 负责压缩，知识状态负责跨多次证据聚合，三者不得混成一份可互相覆盖的数据。
 - D043: 用户侧不使用看似精确的掌握度百分比作为硬门槛；系统可以表达“需要巩固、初步理解、能够应用、长期稳定”等有证据支持的判断，并允许用户查看和纠正。
 - D044: 专注监测是可选辅助能力，默认最小化采集并允许关闭；不得记录具体输入内容，也不得让监测结果直接推进核心学习状态。
+- D045: Phase 2 的目标是整合现有业务、删除重复事实源和隐式状态、最大限度降低长期复杂度，同时保持现有核心功能不退化；V2 是 V1 的收缩整理，不是重新建设更完整的平台。
+- D046: V1→V2 使用完整 V1 归档和干净 V2 数据库一次性切换。取消同库扩展、双写、双读、长期兼容适配和逐步删表方案；D046 替代 D005、D036、D037、D038 中关于同库合并和兼容期的执行方式。
+- D047: V1 数据库永久只读归档。只迁移仍有产品价值且可唯一映射的数据；无法唯一映射的数据保留在归档和外部迁移报告中，不为它们增加 Runtime 兼容字段。
+- D048: V1→V2 迁移器是独立一次性升级模块，不进入 Store、Runtime、正常查询、日常启动流程或主运行 bundle；源码、测试、版本识别和手动恢复能力长期保留。
+- D049: Phase 2 正常 Runtime 使用 23 个现有能力对应的最小业务表；删除 `raw_imports/task_items/plan_stages/task_dependencies/daily_plans/daily_plan_blocks/daily_guide_blocks/learning_steps/next_step_decisions/plan_adjustment_proposals/learning_summaries/focus_events/skip_logs/generation_locks`。
+- D050: `learning_tasks.goal_id` 可以为 NULL。临时 Task 后续关联 Goal 时只通过用户显式操作新增引用，不自动创建 Goal，不回写历史 Message、Submission 或 Session。
+- D051: Action 保存 `requirement=required/optional`；V1 无法唯一判断的 Action 迁为 optional。required 不得成为提交、评价或关闭 Task 的统一硬门槛。
+- D052: difficulty 只允许 `foundation/standard/advanced/NULL`；旧 `exam` 迁为 `task_mode=exam`，其 difficulty 置 NULL。
+- D053: 全库最多一个 `active` 或 `paused` 的未结束 Focus Session。`duration_seconds` 只有 Runtime 可以写入，Task 不再缓存累计时长。
+- D054: `current_learning_context` 只保留 Goal/Guide/Task/Action 导航指针和版本，不保存 Session、对话、评价、恢复分支或其他业务状态副本；它由一个 persistence owner 写入。
+- D055: Submission 直接关联 Task，Goal 可空；它只保存原始提交事实，不保存评价和应用状态副本。评价运行状态从 `ai_reviews` 推导，评价结果从 `learning_evaluations` 查询。
+- D056: `learning_evaluations` 只支持当前真实流程 `submission/goal_review`，不建设通用 subject 平台。正式周期复盘的计划建议保存在 goal_review Recommendation 中；独立 Proposal 留在 V1。
+- D057: Evaluation 不直接推进 Task、Action、Session、Guide 或计划。Recommendation 使用 `recommendation + decision + applicationStatus` 的最小存储，accepted 与 applied 分离；多条或冲突 Decision 不选择第一条。
+- D058: 对话表只整理现有 Question Thread 能力。Goal、Task、Action 使用消息级锚点；Thread 不成为 Goal 所有权事实源。部分消息可迁移，但不得猜测缺失锚点。
+- D059: 迁移过程状态、V1 ID 映射、行级失败原因和核对报告全部放在 V2 外部；正常 V2 Schema 不保存迁移状态机或永久兼容元数据。
+- D060: V1→V2 回退方式是重新启用已校验的 V1 归档，不要求反向 SQL。D041 继续适用于 V2 正式运行后的常规 V2→V2 Schema 迁移。
 
-## 当前已知冲突（尚未实施）
+## 2026-07-24 Learning Turn 深化确认
 
-以下内容用于防止把“已确认目标”误认为“当前代码已经完成”：
+- D061: 主线内 AI 教师采用受控自主 Learning Turn。App 只提供意图和可信上下文；Loop 可以自主串联当前上下文已挂载的非破坏性教学工具，单轮最多 6 次、顺序执行。Task/Session/计划等正式状态仍只能由程序命令推进。
+- D062: AI 可以自动把解释、示例、微练习或复习作为 optional Action 插入当前 Guide 的当前 Task，但不得创建正式 Task。该 Action 标记 `origin=agent_supplement`，以产生它的 tool review 作为幂等来源；完成或跳过后返回原 Action。
+- D063: `ask_user` 保存问题并暂停同一个 Learning Turn；回答、跳过或取消都处理原 Run，应用重启后从 `ai_reviews` 的结构化工具结果恢复。不得持久化隐藏推理、API Key 或完整模型运行配置。
+- D064: 主线主动教学中的理解检查使用同一个 Learning Turn 完成 `quiz → ask_user → 用户回答 → evaluate`。回答先保存为过程事实，评价中的正确点和误区幂等沉淀到现有知识证据，不创建 Submission、不推进 Task/Action/Session；用户可将派生知识判断标记为已掌握、排除或恢复关注。
 
-- `AGENTS.md` 仍写着“全部 Action 终态后等待提交、评价通过后 Task 才完成”，与 D001、D002、D011 冲突；应在对应 Phase 的实际 diff 中删除。
-- `AGENTS.md` 当前把 `Daily Guide` 当作正式产品语义，与 D020 冲突；应在 Phase 2 统一。
-- `docs/rules/ARCHITECTURE_DATA_COMPATIBILITY.md` 仍把 `plan_adjustment_proposals` 列为主流程数据，并保留“评价成功后应用业务状态”的旧规则，与 D002、D005、D025、D037 冲突。
-- Phase 1 分支已删除 8 个独立 Agent、独立 prompt 和对应的分散 AppService 编排；旧表读写仍属于后续 Phase，不能在 Phase 1 提前改动。
+## 2026-07-24 计划与日期分离确认
 
-在对应 Phase 完成前，不得用临时双写、别名包装或页面局部状态假装冲突已经消失。
+- D065: 日期只作为 Goal 截止日期和 Roadmap Stage 检查点的进度参照，不成为 Near-term Plan、Learning Guide、Task 或 Action 的业务身份与推进条件。用户数日未学习时保留当前学习位置，不按天补建、跳过或重排内容，不统计漏学天数；日期变化只产生只读的正常、阶段检查点已过或目标到期提示，计划调整仍由用户确认。
+
+## 2026-07-24 Phase 2 收口确认
+
+- D066: Learning Guide 的收口条件是其 Task 全部进入正式终态；`completed/partial/abandoned/replaced` 都是合法关闭结果。最后一个 Task 被放弃时仍可收口 Guide，Session 保持独立，不被隐式结束。
+- D067: 用户确认最后一个 `ready_for_review` Roadmap Stage 达成时，同时把 Goal 标记为完成；非最后阶段只推进到下一阶段，AI 评价仍不得自动完成 Stage 或 Goal。
+- D068: 用户纠正 Evaluation 时追加 `source=user_correction` 的新 Evaluation，并记录被纠正评价、原因和知识证据；原评价不覆盖。Recommendation 决定可以保存用户原因，`accepted` 与 `applied` 仍保持分离。
+- D069: 独立临时学习使用统一 Learning Turn 和 Conversation 持久化，不创建 Goal、Guide 或 Task。后续关联 Goal 时新增带 Goal 引用的消息，不改写已有消息。
+- D070: 复盘以单个 Learning Guide 下已保存的 Task、Action、Session、Submission、Evaluation 和问题记录为证据；不得按日历连续性、漏学天数或前台窗口推断投入与专注。
+- D071: 当前版本移除自动前台窗口监测及其空写入接口。未来若恢复专注辅助，必须作为用户明确开启的独立切片，并满足 D044，不得混入核心状态推进。
+- D072: preload、IPC、AppService、共享公开 API 及 Overview 页面/样式入口统一使用 `Learning Overview / Learning Unit / Learning Guide` 命名；旧 `Today/Daily/Day` 名称不得继续出现在新增公开接口。底层持久化类型、V1 升级器和数据库兼容列按调用链分批替换，不在本轮做危险的大爆炸改名。
+
+## 当前实施状态
+
+- Phase 1 已深化为统一 Learning Turn：目标、规划、Guide、教学、提问、评价和复盘全部进入同一 Agent Loop；工具只负责 schema、权限和业务执行，不再在工具内部二次调用模型；旧单工具执行通道、独立 prompt builder 和 TTL 结果缓存已删除。
+- 主线教学已支持 `search_kb → explain` 自主串联、`quiz/practice/evaluate/ask_user` 动态挂载，以及当前 Guide 临时补充 Action。
+- 主线小测已支持在同一 Run 内等待回答、重启恢复、即时评价和过程证据沉淀；后续 `search_kb` 只消费仍为 active 的知识判断。
+- Phase 2 已建立干净 V2 Schema、V2 Runtime persistence 和隔离的一次性 V1→V2 升级器；正常 Runtime 不再读取 V1 表。
+- V1 永久归档、白名单迁移、外部迁移报告和手动恢复入口已经保留；正式 V2 存在时重复升级不会覆盖。
+- Goal 截止日期和 Roadmap Stage 检查点已成为真实持久化事实；近期计划与 Learning Guide 不写建议日期，进度提示不推进学习状态。
+- Guide、最终 Stage/Goal、评价纠正、Recommendation 原因、独立临时学习和证据复盘的收口链路已经实现。
+- 提问、提交评价和复盘编排已从 AppService 下沉到 Conversation、Evaluation 和 Review 模块，仍复用唯一 Agent Loop。
+- 自动前台窗口监测已移除；Overview 页面入口及 preload/IPC/AppService 的 Today/Daily 公开接口已改为 Learning 语义。
+- `docs/rules/ARCHITECTURE_DATA_COMPATIBILITY.md` 已同步为当前 V2 所有权和切库规则。
+- Phase 2 仍以测试、构建和主 bundle 隔离核对的最终结果为完成门槛；检查失败时不得把本节视为已验收。

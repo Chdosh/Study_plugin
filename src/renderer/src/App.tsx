@@ -4,7 +4,7 @@ import { RoadmapTree } from './components/layout/RoadmapTree';
 import { TeacherSidebar } from './components/layout/TeacherSidebar';
 import { StudyPage } from './pages/StudyPage';
 import { RecordsPage } from './pages/RecordsPage';
-import { OverviewPage } from './pages/TodayPage';
+import { OverviewPage } from './pages/OverviewPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { Drawer } from './components/shared/Drawer';
 import type { ViewKey } from './types/navigation';
@@ -20,8 +20,9 @@ import type {
   RuntimeAuditResult,
   SubmissionEvaluationResult,
   StudySession,
-  TodayGuideState,
-  TeachStepResult
+  LearningOverviewState,
+  TeachStepResult,
+  LearningGoal
 } from '../../shared/types';
 import { localDateIso } from '../../shared/date';
 import { deriveLearningTaskStatus } from './domain/learning-status';
@@ -33,11 +34,12 @@ export default function App(): JSX.Element {
   const [view, setView] = useState<ViewKey>('overview');
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [onboarding, setOnboarding] = useState<GoalIntakeState | null>(null);
-  const [todayGuide, setTodayGuide] = useState<TodayGuideState | null>(null);
+  const [todayGuide, setTodayGuide] = useState<LearningOverviewState | null>(null);
   const [activeSession, setActiveSession] = useState<StudySession | null>(null);
   const [learningState, setLearningState] = useState<LearningRuntimeSnapshot | null>(null);
   const [teaching, setTeaching] = useState<TeachStepResult | null>(null);
   const [questionAnswer, setQuestionAnswer] = useState<QuestionAnswerResult | null>(null);
+  const [temporaryLearning, setTemporaryLearning] = useState<QuestionAnswerResult | null>(null);
   const [submissionResult, setSubmissionResult] = useState<SubmissionEvaluationResult | null>(null);
   const [review, setReview] = useState<ReviewResult | null>(null);
   const [notice, setNotice] = useState<string>('就绪');
@@ -47,6 +49,7 @@ export default function App(): JSX.Element {
   const [roadmapDrawerOpen, setRoadmapDrawerOpen] = useState(false);
   const [teacherDrawerOpen, setTeacherDrawerOpen] = useState(false);
   const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
+  const [availableGoals, setAvailableGoals] = useState<LearningGoal[]>([]);
   const mountedRef = useRef(false);
   const failedActionRef = useRef<{ label: string; action: () => Promise<void> } | null>(null);
 
@@ -54,18 +57,22 @@ export default function App(): JSX.Element {
     if (!window.studyApp) {
       throw new Error('Electron preload API 不可用，请检查主进程里的 preload 路径。');
     }
-    const [nextSettings, nextOnboarding, nextTodayGuide, nextLearningState, latestReview] = await Promise.all([
+    const [nextSettings, nextOnboarding, nextTodayGuide, nextLearningState, latestReview, latestTemporary, goals] = await Promise.all([
       window.studyApp.settings.get(),
       window.studyApp.onboarding.getCurrent(),
-      window.studyApp.guides.listToday(),
+      window.studyApp.guides.getOverview(),
       window.studyApp.learning.getState(),
-      window.studyApp.reviews.getLatest()
+      window.studyApp.reviews.getLatest(),
+      window.studyApp.learning.getLatestTemporaryQuestion(),
+      window.studyApp.data.listGoals()
     ]);
     setSettings(nextSettings);
     setOnboarding(nextOnboarding);
     setTodayGuide(nextTodayGuide);
     setLearningState(nextLearningState);
     setReview((current) => current ?? latestReview);
+    setTemporaryLearning(latestTemporary);
+    setAvailableGoals(goals);
     if (nextTodayGuide?.goal?.id && window.studyApp?.knowledge?.listForGoal) {
       try {
         const items = await window.studyApp.knowledge.listForGoal(nextTodayGuide.goal.id);
@@ -78,7 +85,7 @@ export default function App(): JSX.Element {
     const [active, nextLearningState, nextTodayGuide] = await Promise.all([
       window.studyApp.sessions.getActive(),
       window.studyApp.learning.getState(),
-      window.studyApp.guides.listToday()
+      window.studyApp.guides.getOverview()
     ]);
     setActiveSession(active?.session ?? null);
     setLearningState(nextLearningState);
@@ -282,6 +289,34 @@ export default function App(): JSX.Element {
                   setOnboarding(await window.studyApp.onboarding.sendMessage(content));
                   await refresh();
                 })}
+                temporaryLearning={temporaryLearning}
+                availableGoals={availableGoals}
+                onAskTemporaryQuestion={(question, threadId) => runAction('临时学习', async () => {
+                  setTemporaryLearning(await window.studyApp.learning.askTemporaryQuestion(
+                    question,
+                    undefined,
+                    threadId
+                  ));
+                })}
+                onLinkTemporaryQuestionToGoal={(threadId, goalId) => runAction('关联临时学习记录', async () => {
+                  setTemporaryLearning(await window.studyApp.learning.linkTemporaryQuestionToGoal(
+                    threadId,
+                    goalId
+                  ));
+                  await refresh();
+                })}
+                onKeepTemporaryQuestion={(threadId) => runAction('保留临时学习记录', async () => {
+                  setTemporaryLearning(await window.studyApp.learning.keepTemporaryQuestion(threadId));
+                  await refresh();
+                })}
+                onConvertTemporaryQuestionToTask={(threadId, goalId) => runAction('转成正式 Task', async () => {
+                  const converted = await window.studyApp.learning.convertTemporaryQuestionToTask(
+                    threadId,
+                    goalId
+                  );
+                  setTemporaryLearning(converted);
+                  await refresh();
+                })}
                 onCancelPendingQuestion={() => runAction('取消 AI 追问', async () => {
                   setOnboarding(await window.studyApp.onboarding.cancelQuestion());
                   await refresh();
@@ -295,12 +330,12 @@ export default function App(): JSX.Element {
                   await window.studyApp.guides.generateLayeredPlan(goalId);
                   await refresh();
                 })}
-                onConfirmGuide={(guideId) => runAction('确认今日执行稿', async () => {
-                  await window.studyApp.guides.confirmDailyGuide(guideId);
+                onConfirmGuide={(guideId) => runAction('确认当前 Learning Guide', async () => {
+                  await window.studyApp.guides.confirmLearningGuide(guideId);
                   await refresh();
                 })}
                 onArchiveTodayAndRestart={() => runAction('归档计划并重新开始', async () => {
-                  setOnboarding(await window.studyApp.guides.archiveTodayAndRestart());
+                  setOnboarding(await window.studyApp.guides.resetLearningWorkspace());
                   await refresh();
                   setActiveSession(null); setReview(null);
                   setSubmissionResult(null); setQuestionAnswer(null); setTeaching(null);
@@ -312,9 +347,9 @@ export default function App(): JSX.Element {
                 })}
                 onNavigate={setView}
                 onPrepareCurrentLearningDay={() => runAction('重新生成当前学习单元', async () => {
-                  const result = await window.studyApp.guides.prepareCurrentLearningDay(true);
+                  const result = await window.studyApp.guides.prepareCurrentLearningUnit(true);
                   await refresh();
-                  if (result.todayState !== 'active') throw new Error(result.errorMessage ?? '当前学习单元仍未生成成功，请稍后重试。');
+                  if (result.preparationState !== 'active') throw new Error(result.errorMessage ?? '当前学习单元仍未生成成功，请稍后重试。');
                 })}
                 knowledgeItems={knowledgeItems}
               />
@@ -329,7 +364,7 @@ export default function App(): JSX.Element {
                 submissionResult={submissionResult}
                 onStartSession={(taskId) => runAction('开始学习', async () => {
                   if (todayGuide?.guide?.status === 'draft') {
-                    await window.studyApp.guides.confirmDailyGuide(todayGuide.guide.id);
+                    await window.studyApp.guides.confirmLearningGuide(todayGuide.guide.id);
                   }
                   const session = await window.studyApp.sessions.start(taskId);
                   setActiveSession(session);
@@ -349,11 +384,34 @@ export default function App(): JSX.Element {
                       await syncActiveSession();
                     })
                   : Promise.resolve()}
+                onEndSession={() => activeSession
+                  ? runAction('结束本次 Session', async () => {
+                      const session = await window.studyApp.sessions.end(activeSession.id);
+                      setActiveSession(session);
+                      await refresh();
+                      await syncActiveSession();
+                    })
+                  : Promise.resolve()}
                 onTeachStep={() => runAction('展开当前步骤', async () => {
                   const result = await window.studyApp.learning.teachCurrentStep();
                   setTeaching(result);
                   setLearningState(await window.studyApp.learning.getState());
                 })}
+                onResumeLearningTurn={(pendingInteractionId, answer, expectedContextVersion) =>
+                  runAction('继续本轮学习', async () => {
+                    const result = await window.studyApp.learning.resumeLearningTurn(
+                      pendingInteractionId,
+                      answer,
+                      expectedContextVersion
+                    );
+                    setTeaching(result);
+                    setLearningState(await window.studyApp.learning.getState());
+                  })}
+                onCancelLearningTurn={(pendingInteractionId) =>
+                  runAction('取消导师询问', async () => {
+                    await window.studyApp.learning.cancelLearningTurn(pendingInteractionId);
+                    setTeaching(null);
+                  })}
                 onCompleteCurrentAction={() => runAction('完成当前步骤', async () => {
                   setLearningState(await window.studyApp.learning.completeCurrentAction());
                   await refresh();
@@ -364,8 +422,8 @@ export default function App(): JSX.Element {
                   await refresh();
                   setTeaching(null);
                 })}
-                onSkipCurrentTask={() => runAction('跳过当前任务', async () => {
-                  setLearningState(await window.studyApp.learning.skipCurrentTask());
+                onCloseCurrentTask={(input) => runAction('收口当前任务', async () => {
+                  setLearningState(await window.studyApp.learning.closeCurrentTask(input));
                   await refresh();
                   await syncActiveSession();
                   setTeaching(null);
@@ -384,6 +442,32 @@ export default function App(): JSX.Element {
                 onRetrySubmissionEvaluation={(submissionId) => runAction('重新评价提交', async () => {
                   await retrySubmissionEvaluationAndSyncSession(submissionId);
                 })}
+                onDecideRecommendation={(evaluationId, decision, reason) => runAction(
+                  decision === 'accepted'
+                    ? '采纳评价建议'
+                    : decision === 'deferred'
+                      ? '稍后决定'
+                      : '不采纳评价建议',
+                  async () => {
+                    setLearningState(await window.studyApp.learning.decideRecommendation(
+                      evaluationId,
+                      decision,
+                      reason
+                    ));
+                    await refresh();
+                    await syncActiveSession();
+                  }
+                )}
+                onCorrectEvaluation={(evaluationId, reason) => runAction(
+                  '纠正评价',
+                  async () => {
+                    setLearningState(await window.studyApp.learning.correctEvaluation(
+                      evaluationId,
+                      reason
+                    ));
+                    await refresh();
+                  }
+                )}
                 onOpenTeacher={() => setTeacherDrawerOpen(true)}
                 onOpenRoadmap={() => setRoadmapDrawerOpen(true)}
               />
@@ -425,6 +509,10 @@ export default function App(): JSX.Element {
                   await refresh();
                 })}
                 knowledgeItems={knowledgeItems}
+                onSetKnowledgeStatus={(itemId, status) => runAction('更新知识判断', async () => {
+                  await window.studyApp.knowledge.setStatus(itemId, status);
+                  await refresh();
+                })}
               />
             )}
             {view === 'settings' && (
@@ -451,7 +539,7 @@ export default function App(): JSX.Element {
       ) : undefined}
     />
     <Drawer open={roadmapDrawerOpen} title="学习大纲" onClose={() => setRoadmapDrawerOpen(false)}>
-        <RoadmapTree stages={todayGuide?.roadmap ?? []} shortPlanDays={todayGuide?.shortPlan ?? []} knowledgeItems={knowledgeItems} collapsed={false} onToggleCollapse={() => setRoadmapDrawerOpen(false)} />
+        <RoadmapTree stages={todayGuide?.roadmap ?? []} nearTermPlanItems={todayGuide?.shortPlan ?? []} knowledgeItems={knowledgeItems} collapsed={false} onToggleCollapse={() => setRoadmapDrawerOpen(false)} />
       </Drawer>
       <Drawer open={teacherDrawerOpen} title="AI 导师" onClose={() => setTeacherDrawerOpen(false)}>
         <TeacherSidebar knowledgeItems={knowledgeItems} collapsed={false} onToggleCollapse={() => setTeacherDrawerOpen(false)} contextSummary={learningState?.dailyGuideAction?.title ?? learningState?.dailyGuideTask?.title} questionAnswer={questionAnswer} activeThreadId={learningState?.questionThread?.id ?? null} onResolveQuestion={(threadId) => void runAction('结束问题分支', async () => { setLearningState(await window.studyApp.learning.resolveQuestion(threadId)); })} onAskQuestion={(question) => runAction('回答问题', async () => {

@@ -116,21 +116,36 @@ export interface RoadmapStage {
   objective: string;
   direction: string;
   successCriteria: string;
+  targetDate: string | null;
   status: RoadmapStageStatus;
   position: number;
   createdAt: string;
   updatedAt: string;
 }
 
-export type ShortPlanDayStatus = 'pending' | 'active' | 'completed' | 'skipped';
+export type GoalProgressStatus =
+  | 'schedule_unset'
+  | 'on_schedule'
+  | 'checkpoint_missed'
+  | 'goal_due'
+  | 'completed';
 
-export interface ShortPlanDay {
+export interface GoalProgress {
+  status: GoalProgressStatus;
+  dueDate: string | null;
+  currentStageTargetDate: string | null;
+  currentStageTitle: string | null;
+}
+
+export type NearTermPlanItemStatus = 'pending' | 'active' | 'completed' | 'skipped';
+
+export interface NearTermPlanItem {
   id: Id;
   goalId: Id;
   roadmapStageId: string | null;
-  dayIndex: number;
+  itemIndex: number;
   date: string | null;
-  sessionStatus: ShortPlanDayStatus;
+  sessionStatus: NearTermPlanItemStatus;
   title: string;
   focus: string;
   tasks: string[];
@@ -143,13 +158,18 @@ export interface ShortPlanDay {
 export interface GenerateRollingPlanResult {
   goal: LearningGoal;
   roadmap: RoadmapStage[];
-  shortPlan: ShortPlanDay[];
+  shortPlan: NearTermPlanItem[];
   guide: DailyGuide;
   activatedStage: RoadmapStage | null;
 }
 
 export type KnowledgeItemSourceType = 'misconception' | 'weakness' | 'insight' | 'correction';
 export type KnowledgeItemStatus = 'active' | 'resolved' | 'dormant';
+export type QualitativeMasteryState =
+  | 'needs_reinforcement'
+  | 'initial_understanding'
+  | 'can_apply'
+  | 'stable';
 
 export interface KnowledgeItem {
   id: Id;
@@ -162,6 +182,10 @@ export interface KnowledgeItem {
   occurrenceCount: number;
   lastSeenAt: string | null;
   status: KnowledgeItemStatus;
+  masteryState: QualitativeMasteryState;
+  masteryLabel: '需要巩固' | '初步理解' | '能够应用' | '较稳定';
+  masteryReason: string;
+  evidenceCount: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -207,6 +231,14 @@ export interface EstimatedMinutes {
 
 export type DailyGuideTaskStatus = 'planned' | 'active' | 'done' | 'skipped' | 'deferred';
 export type DailyGuideActionStatus = 'planned' | 'done' | 'skipped';
+export type TaskClosureKind = 'completed' | 'partial' | 'abandoned' | 'replaced';
+
+export interface CloseTaskInput {
+  taskId: Id;
+  closureKind: TaskClosureKind;
+  closureReason?: string;
+  nextStartPoint?: string;
+}
 
 export interface DailyGuideAction {
   id: Id;
@@ -214,15 +246,18 @@ export interface DailyGuideAction {
   title: string;
   instruction: string;
   checkpoint: string;
+  requirement: 'required' | 'optional';
   status: DailyGuideActionStatus;
   progressNote: string | null;
   completedAt: string | null;
+  origin: 'guide_generated' | 'agent_supplement';
+  sourceAiReviewId: Id | null;
   position: number;
 }
 
 export interface DailyGuideTask {
   id: Id;
-  guideId: Id;
+  guideId: Id | null;
   roadmapStageId: Id | null;
   legacyPlanBlockId: Id | null;
   title: string;
@@ -237,6 +272,8 @@ export interface DailyGuideTask {
   submissionPolicy: 'once_after_task';
   carryoverAllowed: boolean;
   status: DailyGuideTaskStatus;
+  closureKind: TaskClosureKind | null;
+  closureReason: string | null;
   progressPercent: number;
   completedActions: Id[];
   remainingActions: Id[];
@@ -252,7 +289,7 @@ export interface DailyGuide {
   id: Id;
   goalId: Id;
   planId: Id;
-  shortPlanDayId: string | null;
+  nearTermPlanItemId: string | null;
   date: string;
   status: 'draft' | 'confirmed' | 'completed' | 'archived';
   sessionStatus: 'draft' | 'active' | 'closed';
@@ -271,11 +308,11 @@ export interface DailyGuide {
 export interface LayeredPlanResult {
   goal: LearningGoal;
   roadmap: RoadmapStage[];
-  shortPlan: ShortPlanDay[];
+  shortPlan: NearTermPlanItem[];
   guide: DailyGuide;
 }
 
-export type TodayState =
+export type LearningPreparationState =
   | 'needs_goal'
   | 'ready_to_generate'
   | 'generating'
@@ -285,30 +322,31 @@ export type TodayState =
   | 'completed'
   | 'plan_exhausted';
 
-export interface TodayGuideState {
+export interface LearningOverviewState {
   goal: LearningGoal | null;
   roadmap: RoadmapStage[];
-  shortPlan: ShortPlanDay[];
+  shortPlan: NearTermPlanItem[];
   guide: DailyGuide | null;
   currentStage: RoadmapStage | null;
+  goalProgress: GoalProgress;
   stageConflict: LearningStageConflict | null;
-  todayState: TodayState;
+  preparationState: LearningPreparationState;
   pendingEvaluations?: string[];
 }
 
-export interface PreviousLearningDayResult {
+export interface PreviousLearningUnitResult {
   completedTasks: string[];
   evaluationSummary: string;
   reviewSummary?: string;
 }
 
-export interface PrepareCurrentLearningDayResult {
-  todayState: TodayState;
+export interface PrepareCurrentLearningUnitResult {
+  preparationState: LearningPreparationState;
   result?: LayeredPlanResult;
   errorMessage?: string;
 }
 
-export interface StartNextSessionResult extends PrepareCurrentLearningDayResult {
+export interface StartNextSessionResult extends PrepareCurrentLearningUnitResult {
   review: ReviewResult | null;
 }
 
@@ -347,7 +385,6 @@ export interface DailyPlanBlock {
 export interface StudySession {
   id: Id;
   taskId: Id | null;
-  taskItemsId: Id | null;
   startedAt: string;
   endedAt: string | null;
   durationMinutes: number | null;
@@ -427,12 +464,13 @@ export interface QuestionMessage {
 
 export interface LearningSubmission {
   id: Id;
+  taskId: Id;
   stepId: Id | null;
   dailyGuideActionId: Id | null;
   sessionId: Id | null;
   content: string;
   evaluationStatus: 'waiting' | 'evaluating' | 'completed' | 'failed';
-  applicationStatus: 'pending' | 'applied' | 'failed';
+  applicationStatus: 'pending' | 'applied' | 'failed' | null;
   applicationError: string | null;
   appliedAt: string | null;
   createdAt: string;
@@ -443,7 +481,6 @@ export interface LearningEvaluation {
   submissionId: Id;
   stepId: Id | null;
   result: 'passed' | 'partial' | 'failed' | 'unclear';
-  mastery: number;
   evidence: string[];
   correctParts: string[];
   misconceptions: string[];
@@ -451,8 +488,30 @@ export interface LearningEvaluation {
   feedback: string;
   recommendedAction: NextStepDecision;
   decision: 'advance' | 'stay' | 'remediate' | 'replan';
+  selfNote?: string | null;
+  recommendationDecision?: 'pending' | 'accepted' | 'declined' | 'deferred' | null;
+  recommendationDecisionReason?: string | null;
+  applicationStatus?: 'pending' | 'applied' | 'failed' | null;
+  applicationError?: string | null;
+  appliedAt?: string | null;
+  source: 'ai' | 'user_correction';
+  supersedesEvaluationId: Id | null;
+  correctionReason: string | null;
   aiReviewId: Id | null;
   createdAt: string;
+}
+
+/** Renderer DTO compatibility name; runtime code should use NearTermPlanItem. */
+
+export interface TemporaryTaskConversionResult extends QuestionAnswerResult {
+  taskId: Id;
+  guideId: Id | null;
+}
+
+export interface SubmissionAttemptHistory {
+  submission: LearningSubmission;
+  evaluations: LearningEvaluation[];
+  latestEvaluation: LearningEvaluation | null;
 }
 
 export interface StoredNextStepDecision {
@@ -517,6 +576,7 @@ export interface LearningRuntimeSnapshot {
   latestSubmission: LearningSubmission | null;
   latestEvaluation: LearningEvaluation | null;
   latestDecision: StoredNextStepDecision | null;
+  submissionAttempts: SubmissionAttemptHistory[];
   pendingAdjustment: PlanAdjustmentProposal | null;
 }
 
@@ -538,7 +598,7 @@ export interface ReviewResult {
   summary: string;
   nextActions: string[];
   planAdjustments: Array<{
-    dayIndex: number;
+    itemIndex: number;
     title: string;
     focus: string;
     expectedOutput: string;
@@ -548,11 +608,18 @@ export interface ReviewResult {
 }
 
 export interface TeachStepResult {
-  step: LearningStep;
+  runId: Id;
+  action: DailyGuideAction;
+  artifacts: LearningTurnArtifact[];
+  contextSourceIds: string[];
+  pendingInteraction?: PendingAgentInteraction;
+}
+
+export interface LearningTurnArtifact {
+  kind: 'explanation' | 'quiz' | 'practice' | 'evaluation' | 'question';
   explanation: string;
   userAction: string;
   requiresSubmission: boolean;
-  contextSourceIds: string[];
 }
 
 export interface QuestionAnswerResult {
@@ -628,7 +695,7 @@ export interface PlanVersionEntry {
   createdAt: string;
   snapshot: {
     shortPlan?: Array<{
-      dayIndex: number;
+      itemIndex: number;
       title: string;
       focus: string;
       expectedOutput: string;
@@ -641,7 +708,7 @@ export interface PlanVersionEntry {
 export interface PlanProposalInput {
   reason: string;
   adjustments: Array<{
-    dayIndex: number;
+    itemIndex: number;
     title: string;
     focus: string;
     expectedOutput: string;
@@ -662,13 +729,13 @@ export interface StudyAppApi {
   };
   guides: {
     generateLayeredPlan: (goalId: Id) => Promise<LayeredPlanResult>;
-    confirmDailyGuide: (guideId: Id) => Promise<DailyGuide>;
-    archiveTodayAndRestart: () => Promise<GoalIntakeState>;
-    prepareCurrentLearningDay: (forceRetry?: boolean) => Promise<PrepareCurrentLearningDayResult>;
+    confirmLearningGuide: (guideId: Id) => Promise<DailyGuide>;
+    resetLearningWorkspace: () => Promise<GoalIntakeState>;
+    prepareCurrentLearningUnit: (forceRetry?: boolean) => Promise<PrepareCurrentLearningUnitResult>;
     startNextSession: (goalId?: Id) => Promise<StartNextSessionResult>;
     generateRollingPlan: (goalId: Id) => Promise<GenerateRollingPlanResult>;
-    getTodayState: () => Promise<TodayState>;
-    listToday: () => Promise<TodayGuideState>;
+    getPreparationState: () => Promise<LearningPreparationState>;
+    getOverview: () => Promise<LearningOverviewState>;
   };
   history: {
     listAll: () => Promise<HistoryIntakeSummary[]>;
@@ -678,20 +745,44 @@ export interface StudyAppApi {
     getActive: () => Promise<{ session: StudySession; block: DailyPlanBlock } | null>;
     start: (taskId: Id) => Promise<StudySession>;
     pause: (sessionId: Id) => Promise<StudySession>;
-    skip: (blockId: Id, reason: string) => Promise<void>;
+    end: (sessionId: Id) => Promise<StudySession>;
     getAccumulated: (taskId: Id, excludeSessionId?: Id) => Promise<number>;
   };
   learning: {
     getState: () => Promise<LearningRuntimeSnapshot>;
     teachCurrentStep: (promptProfileId?: Id) => Promise<TeachStepResult>;
+    resumeLearningTurn: (
+      pendingInteractionId: Id,
+      answer: string,
+      expectedContextVersion: number
+    ) => Promise<TeachStepResult>;
+    cancelLearningTurn: (pendingInteractionId: Id) => Promise<boolean>;
     completeCurrentAction: () => Promise<LearningRuntimeSnapshot>;
     skipCurrentAction: () => Promise<LearningRuntimeSnapshot>;
-    skipCurrentTask: () => Promise<LearningRuntimeSnapshot>;
+    closeCurrentTask: (input: CloseTaskInput) => Promise<LearningRuntimeSnapshot>;
     terminateLearning: () => Promise<LearningRuntimeSnapshot>;
     askQuestion: (question: string, promptProfileId?: Id) => Promise<QuestionAnswerResult>;
+    askTemporaryQuestion: (
+      question: string,
+      promptProfileId?: Id,
+      threadId?: Id
+    ) => Promise<QuestionAnswerResult>;
+    getLatestTemporaryQuestion: () => Promise<QuestionAnswerResult | null>;
+    linkTemporaryQuestionToGoal: (threadId: Id, goalId: Id) => Promise<QuestionAnswerResult>;
+    keepTemporaryQuestion: (threadId: Id) => Promise<QuestionAnswerResult>;
+    convertTemporaryQuestionToTask: (
+      threadId: Id,
+      goalId: Id
+    ) => Promise<TemporaryTaskConversionResult>;
     resolveQuestion: (threadId: Id, summary?: string) => Promise<LearningRuntimeSnapshot>;
     submitResult: (content: string, promptProfileId?: Id) => Promise<SubmissionEvaluationResult>;
     retrySubmissionEvaluation: (submissionId: Id, promptProfileId?: Id) => Promise<SubmissionEvaluationResult>;
+    decideRecommendation: (
+      evaluationId: Id,
+      decision: 'accepted' | 'declined' | 'deferred',
+      reason?: string
+    ) => Promise<LearningRuntimeSnapshot>;
+    correctEvaluation: (evaluationId: Id, reason: string) => Promise<LearningRuntimeSnapshot>;
     decideAdjustment: (proposalId: Id, status: 'accepted' | 'rejected') => Promise<PlanAdjustmentProposal>;
   };
   reviews: {
@@ -700,6 +791,7 @@ export interface StudyAppApi {
   };
   knowledge: {
     listForGoal: (goalId: string) => Promise<KnowledgeItem[]>;
+    setStatus: (itemId: Id, status: KnowledgeItemStatus) => Promise<KnowledgeItem>;
   };
   learnerContext: {
     proposeFact: (goalId: string, fact: { scope: LearnerFactScope; taskId?: Id; key: string; value: string; source: LearnerFactSource; confidence?: number }) => Promise<LearnerFact>;
@@ -721,6 +813,7 @@ export interface StudyAppApi {
     resolveLearningUnit: (guideId: Id, decision: 'restore' | 'skip') => Promise<RuntimeAuditResult>;
   };
   data: {
+    listGoals: () => Promise<LearningGoal[]>;
     exportGoal: (goalId: string) => Promise<Record<string, unknown>>;
     getPlanVersions: (goalId: string) => Promise<PlanVersionEntry[]>;
     createPlanProposal: (goalId: string, proposal: PlanProposalInput) => Promise<PlanAdjustmentProposal>;

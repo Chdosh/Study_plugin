@@ -7,6 +7,7 @@ import type {
   GenerateRollingPlanResult,
   HistoryIntakeSummary,
   Id,
+  KnowledgeItemStatus,
   LearnerFact,
   LearnerFactScope,
   LearnerFactSource,
@@ -15,17 +16,18 @@ import type {
   GoalIntake,
   GoalIntakeState,
   LayeredPlanResult,
+  CloseTaskInput,
   PlanAdjustmentProposal,
   PlanProposalInput,
   PlanVersionEntry,
-  PrepareCurrentLearningDayResult,
+  PrepareCurrentLearningUnitResult,
   QuestionAnswerResult,
   StudyAppApi,
   StudySession,
   StartNextSessionResult,
   SubmissionEvaluationResult,
-  TodayGuideState,
-  TodayState,
+  LearningOverviewState,
+  LearningPreparationState,
   TeachStepResult
 } from '../shared/types';
 
@@ -47,18 +49,18 @@ const api: StudyAppApi = {
   guides: {
     generateLayeredPlan: (goalId: Id): Promise<LayeredPlanResult> =>
       ipcRenderer.invoke(ipcChannels.guidesGenerateLayeredPlan, { goalId }),
-    confirmDailyGuide: (guideId: Id) => ipcRenderer.invoke(ipcChannels.guidesConfirmDailyGuide, { guideId }),
-    archiveTodayAndRestart: (): Promise<GoalIntakeState> =>
-      ipcRenderer.invoke(ipcChannels.guidesArchiveTodayAndRestart),
-    prepareCurrentLearningDay: (forceRetry?: boolean): Promise<PrepareCurrentLearningDayResult> =>
-      ipcRenderer.invoke(ipcChannels.guidesPrepareCurrentLearningDay, { forceRetry }),
+    confirmLearningGuide: (guideId: Id) => ipcRenderer.invoke(ipcChannels.guidesConfirmLearningGuide, { guideId }),
+    resetLearningWorkspace: (): Promise<GoalIntakeState> =>
+      ipcRenderer.invoke(ipcChannels.guidesResetLearningWorkspace),
+    prepareCurrentLearningUnit: (forceRetry?: boolean): Promise<PrepareCurrentLearningUnitResult> =>
+      ipcRenderer.invoke(ipcChannels.guidesPrepareCurrentLearningUnit, { forceRetry }),
     startNextSession: (goalId?: Id): Promise<StartNextSessionResult> =>
       ipcRenderer.invoke(ipcChannels.guidesStartNextSession, { goalId }),
     generateRollingPlan: (goalId: Id): Promise<GenerateRollingPlanResult> =>
       ipcRenderer.invoke(ipcChannels.guidesGenerateRollingPlan, { goalId }),
-    getTodayState: (): Promise<TodayState> =>
-      ipcRenderer.invoke(ipcChannels.guidesGetTodayState),
-    listToday: (): Promise<TodayGuideState> => ipcRenderer.invoke(ipcChannels.guidesListToday)
+    getPreparationState: (): Promise<LearningPreparationState> =>
+      ipcRenderer.invoke(ipcChannels.guidesGetPreparationState),
+    getOverview: (): Promise<LearningOverviewState> => ipcRenderer.invoke(ipcChannels.guidesGetOverview)
   },
   history: {
     listAll: (): Promise<HistoryIntakeSummary[]> => ipcRenderer.invoke(ipcChannels.historyListAll),
@@ -68,7 +70,7 @@ const api: StudyAppApi = {
     getActive: () => ipcRenderer.invoke(ipcChannels.sessionGetActive),
     start: (taskId: Id) => ipcRenderer.invoke(ipcChannels.sessionsStart, { taskId }),
     pause: (sessionId: Id) => ipcRenderer.invoke(ipcChannels.sessionsPause, { sessionId }),
-    skip: (blockId: Id, reason: string) => ipcRenderer.invoke(ipcChannels.sessionsSkip, { blockId, reason }),
+    end: (sessionId: Id) => ipcRenderer.invoke(ipcChannels.sessionsEnd, { sessionId }),
     getAccumulated: (taskId: Id, excludeSessionId?: Id) =>
       ipcRenderer.invoke(ipcChannels.sessionsGetAccumulated, { blockId: taskId, excludeSessionId })
   },
@@ -76,22 +78,52 @@ const api: StudyAppApi = {
     getState: (): Promise<LearningRuntimeSnapshot> => ipcRenderer.invoke(ipcChannels.learningGetState),
     teachCurrentStep: (promptProfileId?: Id): Promise<TeachStepResult> =>
       ipcRenderer.invoke(ipcChannels.learningTeachCurrentStep, { promptProfileId }),
+    resumeLearningTurn: (
+      pendingInteractionId: Id,
+      answer: string,
+      expectedContextVersion: number
+    ): Promise<TeachStepResult> =>
+      ipcRenderer.invoke(ipcChannels.learningResumeTurn, {
+        pendingInteractionId,
+        answer,
+        expectedContextVersion
+      }),
+    cancelLearningTurn: (pendingInteractionId: Id): Promise<boolean> =>
+      ipcRenderer.invoke(ipcChannels.learningCancelTurn, { pendingInteractionId }),
     completeCurrentAction: (): Promise<LearningRuntimeSnapshot> =>
       ipcRenderer.invoke(ipcChannels.learningCompleteCurrentAction),
     skipCurrentAction: (): Promise<LearningRuntimeSnapshot> =>
       ipcRenderer.invoke(ipcChannels.learningSkipCurrentAction),
-    skipCurrentTask: (): Promise<LearningRuntimeSnapshot> =>
-      ipcRenderer.invoke(ipcChannels.learningSkipCurrentTask),
+    closeCurrentTask: (input: CloseTaskInput): Promise<LearningRuntimeSnapshot> =>
+      ipcRenderer.invoke(ipcChannels.learningCloseCurrentTask, input),
     terminateLearning: (): Promise<LearningRuntimeSnapshot> =>
       ipcRenderer.invoke(ipcChannels.learningTerminateLearning),
     askQuestion: (question: string, promptProfileId?: Id): Promise<QuestionAnswerResult> =>
       ipcRenderer.invoke(ipcChannels.learningAskQuestion, { question, promptProfileId }),
+    askTemporaryQuestion: (question: string, promptProfileId?: Id, threadId?: Id): Promise<QuestionAnswerResult> =>
+      ipcRenderer.invoke(ipcChannels.learningAskTemporaryQuestion, { question, promptProfileId, threadId }),
+    getLatestTemporaryQuestion: (): Promise<QuestionAnswerResult | null> =>
+      ipcRenderer.invoke(ipcChannels.learningGetLatestTemporaryQuestion),
+    linkTemporaryQuestionToGoal: (threadId: Id, goalId: Id): Promise<QuestionAnswerResult> =>
+      ipcRenderer.invoke(ipcChannels.learningLinkTemporaryQuestionToGoal, { threadId, goalId }),
+    keepTemporaryQuestion: (threadId: Id) =>
+      ipcRenderer.invoke(ipcChannels.learningKeepTemporaryQuestion, { threadId }),
+    convertTemporaryQuestionToTask: (threadId: Id, goalId: Id) =>
+      ipcRenderer.invoke(ipcChannels.learningConvertTemporaryQuestionToTask, { threadId, goalId }),
     resolveQuestion: (threadId: Id, summary?: string): Promise<LearningRuntimeSnapshot> =>
       ipcRenderer.invoke(ipcChannels.learningResolveQuestion, { threadId, summary }),
     submitResult: (content: string, promptProfileId?: Id): Promise<SubmissionEvaluationResult> =>
       ipcRenderer.invoke(ipcChannels.learningSubmitResult, { content, promptProfileId }),
     retrySubmissionEvaluation: (submissionId: Id, promptProfileId?: Id): Promise<SubmissionEvaluationResult> =>
       ipcRenderer.invoke(ipcChannels.learningRetrySubmissionEvaluation, { submissionId, promptProfileId }),
+    decideRecommendation: (
+      evaluationId: Id,
+      decision: 'accepted' | 'declined' | 'deferred',
+      reason?: string
+    ): Promise<LearningRuntimeSnapshot> =>
+      ipcRenderer.invoke(ipcChannels.learningDecideRecommendation, { evaluationId, decision, reason }),
+    correctEvaluation: (evaluationId: Id, reason: string): Promise<LearningRuntimeSnapshot> =>
+      ipcRenderer.invoke(ipcChannels.learningCorrectEvaluation, { evaluationId, reason }),
     decideAdjustment: (proposalId: Id, status: 'accepted' | 'rejected'): Promise<PlanAdjustmentProposal> =>
       ipcRenderer.invoke(ipcChannels.learningDecideAdjustment, { proposalId, status })
   },
@@ -100,7 +132,9 @@ const api: StudyAppApi = {
     getLatest: (date?: string) => ipcRenderer.invoke(ipcChannels.reviewsGetLatest, { date }),
   },
   knowledge: {
-    listForGoal: (goalId: string) => ipcRenderer.invoke(ipcChannels.knowledgeListForGoal, { goalId })
+    listForGoal: (goalId: string) => ipcRenderer.invoke(ipcChannels.knowledgeListForGoal, { goalId }),
+    setStatus: (itemId: string, status: KnowledgeItemStatus) =>
+      ipcRenderer.invoke(ipcChannels.knowledgeSetStatus, { itemId, status })
   },
   learnerContext: {
     proposeFact: (goalId: string, fact: { scope: LearnerFactScope; taskId?: string; key: string; value: string; source: LearnerFactSource; confidence?: number }) =>
@@ -133,6 +167,7 @@ const api: StudyAppApi = {
       ipcRenderer.invoke(ipcChannels.systemResolveLearningUnit, { guideId, decision })
   },
   data: {
+    listGoals: () => ipcRenderer.invoke(ipcChannels.dataListGoals),
     exportGoal: (goalId: string) => ipcRenderer.invoke(ipcChannels.dataExportGoal, { goalId }),
     getPlanVersions: (goalId: string) => ipcRenderer.invoke(ipcChannels.dataGetPlanVersions, { goalId }),
     createPlanProposal: (goalId: string, proposal: PlanProposalInput) => ipcRenderer.invoke(ipcChannels.dataCreatePlanProposal, { goalId, proposal }),

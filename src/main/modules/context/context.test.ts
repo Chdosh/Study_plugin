@@ -105,6 +105,26 @@ describe('LearnerContextModule', () => {
     facts = await module.listFactsForGoal(goal.id);
     expect(facts.length).toBe(0);
   });
+
+  it('records the same teaching evaluation source only once', async () => {
+    const goal = await store.createGoal('过程证据目标');
+    const observation = {
+      goalId: goal.id,
+      sourceId: 'tool-review-1',
+      correctParts: [],
+      misconceptions: ['把编译期类型误认为运行期检查']
+    };
+
+    await module.processConversationEvaluation(observation);
+    await module.processConversationEvaluation(observation);
+
+    const items = await module.getFactsForGoal(goal.id, 'active');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      summary: '把编译期类型误认为运行期检查',
+      occurrenceCount: 1
+    });
+  });
 });
 
 async function removeTempDir(path: string): Promise<void> {

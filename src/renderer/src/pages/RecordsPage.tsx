@@ -1,11 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import { BookOpenCheck, Brain, CalendarClock, ClipboardCheck, FileCheck2, FileText, Lightbulb, Loader2, Sparkles } from 'lucide-react';
-import type { KnowledgeItem, LearningRuntimeSnapshot, PlanAdjustmentProposal, PlanVersionEntry, ReviewResult, TodayGuideState } from '../../../shared/types';
+import type { KnowledgeItem, LearningOverviewState, LearningRuntimeSnapshot, PlanAdjustmentProposal, PlanVersionEntry, ReviewResult } from '../../../shared/types';
 import { deriveLearningTaskStatus } from '../domain/learning-status';
 
 type RecordTab = 'timeline' | 'knowledge' | 'versions';
 type ExportRow = Record<string, unknown>;
-type TimelineEvent = { id: string; at: string; kind: string; title: string; summary: string };
+type TimelineEvent = {
+  id: string;
+  at: string;
+  kind: string;
+  title: string;
+  summary: string;
+  details?: string[];
+};
 
 function rows(value: unknown): ExportRow[] { return Array.isArray(value) ? value.filter((item): item is ExportRow => Boolean(item) && typeof item === 'object') : []; }
 function text(value: unknown): string { return typeof value === 'string' ? value : ''; }
@@ -32,9 +39,9 @@ function readableVersionTitle(summary: string, version: number): string {
   return summary;
 }
 
-export function RecordsPage({ review, todayGuide, learningState, pendingAdjustment, onGenerate, hasApiKey, onDecideAdjustment, onConfirmRoadmapStage, onApplyPlanAdjustments, onGenerateRollingPlan, knowledgeItems }: {
+export function RecordsPage({ review, todayGuide, learningState, pendingAdjustment, onGenerate, hasApiKey, onDecideAdjustment, onConfirmRoadmapStage, onApplyPlanAdjustments, onGenerateRollingPlan, knowledgeItems, onSetKnowledgeStatus }: {
   review: ReviewResult | null;
-  todayGuide: TodayGuideState | null;
+  todayGuide: LearningOverviewState | null;
   learningState: LearningRuntimeSnapshot | null;
   pendingAdjustment: PlanAdjustmentProposal | null;
   onGenerate: () => Promise<void>;
@@ -44,6 +51,7 @@ export function RecordsPage({ review, todayGuide, learningState, pendingAdjustme
   onApplyPlanAdjustments?: (adjustments: ReviewResult['planAdjustments']) => Promise<number>;
   onGenerateRollingPlan?: () => Promise<void>;
   knowledgeItems: KnowledgeItem[];
+  onSetKnowledgeStatus: (itemId: string, status: KnowledgeItem['status']) => Promise<void>;
 }): JSX.Element {
   const [tab, setTab] = useState<RecordTab>('timeline');
   const [exportData, setExportData] = useState<Record<string, unknown>>({});
@@ -63,16 +71,27 @@ export function RecordsPage({ review, todayGuide, learningState, pendingAdjustme
   }, [todayGuide?.goal?.id]);
 
   const events = useMemo<TimelineEvent[]>(() => {
-    const tasks = rows(exportData.dailyGuideTasks);
+    const tasks = rows(exportData.learningTasks);
     const taskTitle = new Map(tasks.map((task) => [text(task.id), text(task.title) || '学习任务']));
-    const actions = rows(exportData.dailyGuideActions);
+    const actions = rows(exportData.learningActions);
     const actionTitle = new Map(actions.map((action) => [text(action.id), text(action.title) || '行动步骤']));
+    const submissions = rows(exportData.learningSubmissions)
+      .sort((left, right) => text(left.createdAt).localeCompare(text(right.createdAt)));
+    const attemptIndex = new Map<string, number>();
+    const taskAttempts = new Map<string, number>();
+    for (const submission of submissions) {
+      const taskId = text(submission.taskId);
+      const next = (taskAttempts.get(taskId) ?? 0) + 1;
+      taskAttempts.set(taskId, next);
+      attemptIndex.set(text(submission.id), next);
+    }
+    const submissionById = new Map(submissions.map((submission) => [text(submission.id), submission]));
     const result: TimelineEvent[] = [];
     const currentTaskStatus = learningState?.dailyGuideTask ? deriveLearningTaskStatus(learningState.dailyGuideTask, learningState.latestSubmission ? {
       evaluationStatus: learningState.latestSubmission.evaluationStatus,
       evaluationResult: learningState.latestEvaluation?.result
     } : null) : null;
-    rows(exportData.studySessions).forEach((session) => {
+    rows(exportData.focusSessions).forEach((session) => {
       const isCurrent = text(session.taskId) === learningState?.dailyGuideTask?.id && ['active', 'paused'].includes(text(session.status));
       const sessionLabel = isCurrent && currentTaskStatus?.phase !== 'executing'
         ? currentTaskStatus?.label ?? '进行中'
@@ -80,9 +99,43 @@ export function RecordsPage({ review, todayGuide, learningState, pendingAdjustme
       result.push({ id: `session-${text(session.id)}`, at: text(session.startedAt), kind: '学习会话', title: taskTitle.get(text(session.taskId)) ?? '学习会话', summary: `${sessionLabel}${Number(session.durationMinutes) > 0 ? ` · ${Number(session.durationMinutes)} 分钟` : ''}` });
     });
     actions.filter((action) => ['done', 'skipped'].includes(text(action.status))).forEach((action) => result.push({ id: `action-${text(action.id)}`, at: text(action.completedAt) || text(action.updatedAt), kind: '行动', title: actionTitle.get(text(action.id)) ?? '行动步骤', summary: text(action.status) === 'done' ? '步骤已完成' : '步骤已跳过' }));
-    rows(exportData.submissions).forEach((submission) => result.push({ id: `submission-${text(submission.id)}`, at: text(submission.createdAt), kind: '提交', title: actionTitle.get(text(submission.dailyGuideActionId)) ?? '主任务结果', summary: '学习结果已保存' }));
-    rows(exportData.evaluations).forEach((evaluation) => result.push({ id: `evaluation-${text(evaluation.id)}`, at: text(evaluation.createdAt), kind: '评价', title: '提交评价结果', summary: text(evaluation.feedback) || text(evaluation.summary) || '评价已完成' }));
-    rows(exportData.questionThreads).forEach((thread) => result.push({ id: `question-${text(thread.id)}`, at: text(thread.createdAt), kind: '问题', title: text(thread.question) || '问题分支', summary: getLatestQuestionAnswer(exportData, text(thread.id)) || text(thread.resolutionSummary) || (text(thread.status) === 'resolved' ? '问题已解决' : '待继续处理') }));
+    submissions.forEach((submission) => {
+      const attempt = attemptIndex.get(text(submission.id)) ?? 1;
+      const title = taskTitle.get(text(submission.taskId)) ?? '学习任务';
+      result.push({
+        id: `submission-${text(submission.id)}`,
+        at: text(submission.createdAt),
+        kind: '提交',
+        title: `${title} · 第 ${attempt} 次尝试`,
+        summary: '成果原文已保存',
+        details: [text(submission.content)]
+      });
+    });
+    rows(exportData.learningEvaluations).forEach((evaluation) => {
+      const submission = submissionById.get(text(evaluation.submissionId));
+      const attempt = attemptIndex.get(text(evaluation.submissionId)) ?? 1;
+      const title = submission
+        ? taskTitle.get(text(submission.taskId)) ?? '学习任务'
+        : '学习任务';
+      const source = text(evaluation.source);
+      const recommendationDecision = text(evaluation.recommendationDecision);
+      result.push({
+        id: `evaluation-${text(evaluation.id)}`,
+        at: text(evaluation.createdAt),
+        kind: source === 'user_correction' ? '评价纠正' : '评价',
+        title: `${title} · 第 ${attempt} 次尝试`,
+        summary: text(evaluation.feedback) || '评价已完成',
+        details: [
+          source === 'user_correction'
+            ? `纠正原评价：${text(evaluation.supersedesEvaluationId)}`
+            : `结果：${evaluationResultLabel(text(evaluation.result))}`,
+          recommendationDecision
+            ? `本评价建议：${recommendationDecisionLabel(recommendationDecision)}`
+            : ''
+        ].filter(Boolean)
+      });
+    });
+    rows(exportData.conversationThreads).forEach((thread) => result.push({ id: `question-${text(thread.id)}`, at: text(thread.createdAt), kind: '问题', title: text(thread.question) || '问题分支', summary: getLatestQuestionAnswer(exportData, text(thread.id)) || text(thread.resolutionSummary) || (text(thread.status) === 'resolved' ? '问题已解决' : '待继续处理') }));
     if (review) result.push({ id: `review-${review.reviewId}`, at: `${todayGuide?.guide?.date ?? new Date().toISOString().slice(0, 10)}T23:59:00`, kind: '复盘', title: '学习复盘', summary: review.summary });
     return result.filter((item) => item.at).sort((a, b) => b.at.localeCompare(a.at));
   }, [exportData, learningState, review, todayGuide?.guide?.date]);
@@ -90,6 +143,11 @@ export function RecordsPage({ review, todayGuide, learningState, pendingAdjustme
   const selected = events.find((item) => item.id === selectedId) ?? events[0] ?? null;
   const selectedSummary = selected && normalizedText(selected.summary) !== normalizedText(selected.title) ? selected.summary : '';
   const stageReady = todayGuide?.roadmap.find((stage) => stage.status === 'ready_for_review') ?? null;
+  const finalStageReady = stageReady
+    ? !todayGuide?.roadmap.some((stage) =>
+        stage.position > stageReady.position && stage.status !== 'completed'
+      )
+    : false;
 
   return (
     <section className="records-page">
@@ -97,7 +155,7 @@ export function RecordsPage({ review, todayGuide, learningState, pendingAdjustme
 
       {(stageReady || pendingAdjustment?.status === 'pending') && <section className="records-pending">
         <header><div><span className="page-kicker">待处理</span><h2>需要你的决定</h2></div></header>
-        {stageReady && onConfirmRoadmapStage && <div className="records-pending-row"><span className="records-pending-icon"><ClipboardCheck size={18} /></span><div><strong>阶段成果待确认</strong><p>“{stageReady.title}”需要人工复核后才会推进。</p></div><button className="primary-action" type="button" onClick={() => void onConfirmRoadmapStage(stageReady.id)}>确认阶段成果</button></div>}
+        {stageReady && onConfirmRoadmapStage && <div className="records-pending-row"><span className="records-pending-icon"><ClipboardCheck size={18} /></span><div><strong>{finalStageReady ? '最终成果待确认' : '阶段成果待确认'}</strong><p>“{stageReady.title}”需要人工复核后才会推进。{finalStageReady ? '确认后将完成当前 Goal。' : ''}</p></div><button className="primary-action" type="button" onClick={() => void onConfirmRoadmapStage(stageReady.id)}>{finalStageReady ? '确认成果并完成目标' : '确认阶段成果'}</button></div>}
         {pendingAdjustment?.status === 'pending' && <div className="records-pending-row"><span className="records-pending-icon"><BookOpenCheck size={18} /></span><div><strong>即时调整待决定</strong><p>{pendingAdjustment.reason}</p></div><div className="records-pending-buttons"><button className="primary-action" type="button" onClick={() => void onDecideAdjustment(pendingAdjustment.id, 'accepted')}>采纳建议</button><button className="secondary-action" type="button" onClick={() => void onDecideAdjustment(pendingAdjustment.id, 'rejected')}>保持原计划</button></div></div>}
       </section>}
 
@@ -106,14 +164,14 @@ export function RecordsPage({ review, todayGuide, learningState, pendingAdjustme
 
         {tab === 'timeline' && <div className="records-master-detail">
         <div className="record-list">{events.length === 0 ? <div className="records-empty"><CalendarClock size={20} /><strong>还没有学习记录</strong><span>开始一次学习后，Session、步骤、提交和评价会按时间汇总在这里。</span></div> : events.map((event) => <button type="button" key={event.id} className={selected?.id === event.id ? 'record-row active' : 'record-row'} onClick={() => setSelectedId(event.id)}><span>{event.kind}</span><strong>{event.title}</strong><small>{new Date(event.at).toLocaleString('zh-CN', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</small></button>)}</div>
-        <article className="record-detail">{selected ? <><span className="record-kind">{selected.kind}</span><h2>{selected.title}</h2>{selectedSummary && <p>{selectedSummary}</p>}</> : <div className="records-empty"><FileText size={20} /><span>选择一条记录查看详情。</span></div>}
-          {review && selected?.kind === '复盘' && <section className="review-result"><h3>后续行动与计划调整</h3>{review.nextActions.length > 0 && <ul>{review.nextActions.map((item) => <li key={item}>{item}</li>)}</ul>}{review.planAdjustments.length > 0 && onApplyPlanAdjustments && <><div className="proposal-note"><Brain size={16} /><span>以下是 AI 建议，尚未应用到正式计划。</span></div>{review.planAdjustments.map((item) => <div className="record-proposal" key={`${item.dayIndex}-${item.title}`}><strong>第 {item.dayIndex} 单元 · {item.title}</strong><span>{item.focus}</span><small>影响范围：尚未执行的对应学习单元</small></div>)}<button className="primary-action" type="button" disabled={applying} onClick={() => { setApplying(true); void onApplyPlanAdjustments(review.planAdjustments).finally(() => setApplying(false)); }}>{applying ? '正在应用…' : '确认应用调整'}</button></>}</section>}
+        <article className="record-detail">{selected ? <><span className="record-kind">{selected.kind}</span><h2>{selected.title}</h2>{selectedSummary && <p>{selectedSummary}</p>}{selected.details?.map((detail) => <p key={detail}>{detail}</p>)}</> : <div className="records-empty"><FileText size={20} /><span>选择一条记录查看详情。</span></div>}
+          {review && selected?.kind === '复盘' && <section className="review-result"><h3>后续行动与计划调整</h3>{review.nextActions.length > 0 && <ul>{review.nextActions.map((item) => <li key={item}>{item}</li>)}</ul>}{review.planAdjustments.length > 0 && onApplyPlanAdjustments && <><div className="proposal-note"><Brain size={16} /><span>以下是 AI 建议，尚未应用到正式计划。</span></div>{review.planAdjustments.map((item) => <div className="record-proposal" key={`${item.itemIndex}-${item.title}`}><strong>第 {item.itemIndex} 单元 · {item.title}</strong><span>{item.focus}</span><small>影响范围：尚未执行的对应学习单元</small></div>)}<button className="primary-action" type="button" disabled={applying} onClick={() => { setApplying(true); void onApplyPlanAdjustments(review.planAdjustments).finally(() => setApplying(false)); }}>{applying ? '正在应用…' : '确认应用调整'}</button></>}</section>}
         </article>
         </div>}
 
-        {tab === 'knowledge' && <div className="knowledge-records">{knowledgeItems.length === 0 ? <div className="records-empty"><Lightbulb size={20} /><strong>暂无知识沉淀</strong><span>重复薄弱点、纠正和洞见会在完成评价后出现。</span></div> : knowledgeItems.map((item) => <article key={item.id}><span>{item.sourceType === 'misconception' ? '错误' : item.sourceType === 'weakness' ? '薄弱点' : item.sourceType === 'correction' ? '纠正' : '洞见'}</span><h3>{item.key}</h3><p>{item.summary}</p><small>{item.occurrenceCount > 1 ? `出现 ${item.occurrenceCount} 次` : '首次记录'} · {item.status === 'resolved' ? '已解决' : '持续关注'}</small></article>)}</div>}
+        {tab === 'knowledge' && <div className="knowledge-records">{knowledgeItems.length === 0 ? <div className="records-empty"><Lightbulb size={20} /><strong>暂无知识沉淀</strong><span>重复薄弱点、纠正和洞见会在完成评价后出现。</span></div> : knowledgeItems.map((item) => <article key={item.id}><span>{item.masteryLabel}</span><h3>{item.key}</h3><p>{item.summary}</p><p>{item.masteryReason}</p><small>{item.evidenceCount > 1 ? `${item.evidenceCount} 条真实证据` : '1 条真实证据'} · {item.status === 'resolved' ? '用户已确认' : item.status === 'dormant' ? '已排除后续关注' : '持续关注'}</small><div className="records-pending-buttons">{item.status === 'active' ? <><button className="secondary-action" type="button" onClick={() => void onSetKnowledgeStatus(item.id, 'resolved')}>纠正为已掌握</button><button className="secondary-action" type="button" onClick={() => void onSetKnowledgeStatus(item.id, 'dormant')}>排除后续关注</button></> : <button className="secondary-action" type="button" onClick={() => void onSetKnowledgeStatus(item.id, 'active')}>恢复关注</button>}</div></article>)}</div>}
 
-        {tab === 'versions' && <div className="version-records">{versions.length === 0 ? <div className="records-empty"><FileCheck2 size={20} /><strong>暂无计划版本</strong><span>生成或确认计划调整后会在这里保留版本记录。</span></div> : versions.map((version) => <article key={version.version}><span>v{version.version}</span><div><h3>{readableVersionTitle(version.changeSummary, version.version)}</h3><p>{new Date(version.createdAt).toLocaleString('zh-CN')}</p>{version.snapshot?.shortPlan?.length ? <small>涉及：{version.snapshot.shortPlan.map((day) => `第 ${day.dayIndex} 单元`).join('、')}</small> : null}</div></article>)}</div>}
+        {tab === 'versions' && <div className="version-records">{versions.length === 0 ? <div className="records-empty"><FileCheck2 size={20} /><strong>暂无计划版本</strong><span>生成或确认计划调整后会在这里保留版本记录。</span></div> : versions.map((version) => <article key={version.version}><span>v{version.version}</span><div><h3>{readableVersionTitle(version.changeSummary, version.version)}</h3><p>{new Date(version.createdAt).toLocaleString('zh-CN')}</p>{version.snapshot?.shortPlan?.length ? <small>涉及：{version.snapshot.shortPlan.map((item) => `第 ${item.itemIndex} 单元`).join('、')}</small> : null}</div></article>)}</div>}
       </section>
 
       <section className="records-actions">
@@ -122,4 +180,18 @@ export function RecordsPage({ review, todayGuide, learningState, pendingAdjustme
       </section>
     </section>
   );
+}
+
+function evaluationResultLabel(result: string): string {
+  if (result === 'passed') return '通过';
+  if (result === 'partial') return '部分达到';
+  if (result === 'failed') return '未达到';
+  return '需要确认';
+}
+
+function recommendationDecisionLabel(decision: string): string {
+  if (decision === 'accepted') return '已采纳';
+  if (decision === 'declined') return '未采纳';
+  if (decision === 'deferred') return '稍后决定';
+  return '待决定';
 }

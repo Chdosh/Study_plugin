@@ -1,26 +1,30 @@
-import type { DailyGuideAgentOutput } from '../../../shared/schemas';
+import type { DailyGuideAgentOutput, RoadmapAgentOutput, ShortPlanAgentOutput } from '../../../shared/schemas';
+import { localDateIso } from '../../../shared/date';
 import type {
   GenerateRollingPlanResult,
   Id,
+  LayeredPlanResult,
   LearningGoal,
   PlanAdjustmentProposal,
   PlanProposalInput,
   PlanVersionEntry,
-  PrepareCurrentLearningDayResult,
+  PrepareCurrentLearningUnitResult,
   ReviewResult,
   RoadmapStage,
-  ShortPlanDay,
+  NearTermPlanItem,
   StartNextSessionResult
 } from '../../../shared/types';
-import { describeError } from '../../ai/categorized-error';
+import { CategorizedError, describeError } from '../../ai/categorized-error';
 import type { AgentContext, AgentRunAudit, AgentToolName } from '../../agent/agent-types';
 import type { StudyStore } from '../../services/store';
+import type { SettingsService } from '../../services/settings-service';
+import type { LearningTurnModule } from '../learning-turn/learning-turn';
 
 export type PlanningStore = Pick<StudyStore,
   | 'getGoal'
   | 'getActiveGuide'
-  | 'getUsedShortPlanDayIds'
-  | 'activateShortPlanDay'
+  | 'getUsedNearTermPlanItemIds'
+  | 'activateNearTermPlanItem'
   | 'getPreviousCompletedLearningDayContext'
   | 'getGoalBriefForGoal'
   | 'getPromptProfile'
@@ -32,7 +36,7 @@ export type PlanningStore = Pick<StudyStore,
   | 'closeCurrentSession'
   | 'getLatestReview'
   | 'findActiveOrActivateStage'
-  | 'listAvailableShortPlanDaysForStage'
+  | 'listAvailableNearTermPlanItemsForStage'
   | 'getRollingPlanContext'
   | 'saveRollingPlanDays'
   | 'getPlanVersionsForGoal'
@@ -42,10 +46,11 @@ export type PlanningStore = Pick<StudyStore,
   | 'markRoadmapStageReadyForReview'
   | 'confirmRoadmapStageCompletion'
   | 'buildContext'
+  | 'saveLayeredPlan'
 >;
 
-export interface PrepareCurrentLearningDayDeps {
-  runAgentTool: <TInput, TOutput>(params: {
+export interface PrepareCurrentLearningUnitDeps {
+  startAgentTurn: <TInput, TOutput>(params: {
     toolName: AgentToolName;
     input: TInput;
     context: AgentContext;
@@ -56,12 +61,12 @@ export interface PrepareCurrentLearningDayDeps {
   todayIso: () => string;
 }
 
-export interface AdvanceLearningDayDeps extends PrepareCurrentLearningDayDeps {
+export interface AdvanceLearningDayDeps extends PrepareCurrentLearningUnitDeps {
   generateReview: (guideId: Id) => Promise<ReviewResult>;
 }
 
 export interface GenerateRollingPlanDeps {
-  runAgentTool: PrepareCurrentLearningDayDeps['runAgentTool'];
+  startAgentTurn: PrepareCurrentLearningUnitDeps['startAgentTurn'];
   getRuntimeSettings: () => Promise<any>;
   createTraceId: () => string;
   todayIso: () => string;
@@ -69,27 +74,237 @@ export interface GenerateRollingPlanDeps {
 }
 
 export class PlanningModule {
-  private readonly generationLocks = new Map<string, Promise<PrepareCurrentLearningDayResult>>();
+  private readonly generationLocks = new Map<string, Promise<PrepareCurrentLearningUnitResult>>();
 
-  constructor(private readonly store: PlanningStore) {}
+  constructor(
+    private readonly store: PlanningStore,
+    private readonly settings?: SettingsService,
+    private readonly learningTurn?: LearningTurnModule
+  ) {}
 
   isPreparing(goalId: Id): boolean {
     return this.generationLocks.has(`daily_guide:${goalId}`);
   }
 
-  async prepareCurrentLearningDay(
+  async generateLayeredPlan(goalId: Id): Promise<LayeredPlanResult> {
+    if (!this.settings || !this.learningTurn) {
+      throw new Error('PlanningModule 缺少首次计划生成依赖。');
+    }
+    const goal = await this.store.getGoal(goalId);
+    if (!goal) throw new Error('找不到要生成计划的学习目标。');
+    const [brief, profile, runtimeSettings] = await Promise.all([
+      this.store.getGoalBriefForGoal(goalId),
+      this.store.getPromptProfile(),
+      this.settings.getRuntimeSettings()
+    ]);
+    const date = localDateIso();
+    const windows = runtimeSettings.dailyStudyWindows;
+
+    const roadmapContext = await this.store.buildContext('generate_roadmap', {
+      goalUnderstanding: brief,
+      availableTime: windows
+    });
+    const roadmapInput = {
+      goal,
+      brief,
+      context: roadmapContext.context,
+      profile,
+      settings: runtimeSettings,
+      traceId: `ta_${crypto.randomUUID()}`
+    };
+    const roadmapRun = await this.learningTurn.startTool<typeof roadmapInput, RoadmapAgentOutput>({
+      toolName: 'propose_roadmap',
+      input: roadmapInput,
+      context: {
+        kind: 'planning',
+        scopeType: 'goal_plan',
+        scopeId: goalId,
+        goalId,
+        contextVersion: 1
+      },
+      audit: {
+        kind: 'roadmap',
+        provider: 'deepseek',
+        model: runtimeSettings.deepseekModel,
+        promptProfileId: profile.id,
+        promptVersionId: profile.activeVersionId,
+        inputSnapshot: { goalId, brief, contextSourceIds: roadmapContext.contextSourceIds },
+        outputSchemaVersion: 'roadmap.v1'
+      }
+    });
+    const roadmapOutput = roadmapRun.output;
+    const draftRoadmap = roadmapOutput.stages.map<RoadmapStage>((stage, index) => ({
+      id: `draft-roadmap-${index}`,
+      goalId,
+      title: stage.title,
+      objective: stage.objective,
+      direction: stage.direction,
+      successCriteria: stage.successCriteria,
+      targetDate: stage.targetDate,
+      status: 'pending',
+      position: index,
+      createdAt: '',
+      updatedAt: ''
+    }));
+
+    const shortPlanContext = await this.store.buildContext('generate_short_plan', {
+      goalUnderstanding: brief,
+      roadmap: draftRoadmap,
+      availableTime: windows
+    });
+    const shortPlanInput = {
+      mode: 'initial' as const,
+      goal,
+      brief,
+      roadmap: draftRoadmap,
+      context: shortPlanContext.context,
+      profile,
+      settings: runtimeSettings,
+      traceId: `ta_${crypto.randomUUID()}`
+    };
+    const shortPlanRun = await this.learningTurn.startTool<typeof shortPlanInput, ShortPlanAgentOutput>({
+      toolName: 'propose_short_plan',
+      input: shortPlanInput,
+      context: {
+        kind: 'planning',
+        scopeType: 'goal_plan',
+        scopeId: goalId,
+        goalId,
+        contextVersion: 2
+      },
+      audit: {
+        kind: 'short_plan',
+        provider: 'deepseek',
+        model: runtimeSettings.deepseekModel,
+        promptProfileId: profile.id,
+        promptVersionId: profile.activeVersionId,
+        inputSnapshot: {
+          goalId,
+          brief,
+          roadmap: roadmapOutput,
+          contextSourceIds: shortPlanContext.contextSourceIds
+        },
+        outputSchemaVersion: 'short-plan.v1'
+      }
+    });
+    const shortPlanOutput = shortPlanRun.output;
+    const draftPlanItems = shortPlanOutput.items.map<NearTermPlanItem>((item) => ({
+      id: `draft-plan-item-${item.itemIndex}`,
+      goalId,
+      roadmapStageId: null,
+      itemIndex: item.itemIndex,
+      date: null,
+      sessionStatus: 'pending',
+      title: item.title,
+      focus: item.focus,
+      tasks: item.tasks,
+      expectedOutput: item.expectedOutput,
+      successCriteria: item.successCriteria,
+      locked: false,
+      createdAt: ''
+    }));
+    const targetPlanItem = draftPlanItems.find((item) => item.itemIndex === 1);
+    if (!targetPlanItem) {
+      throw new CategorizedError(
+        'schema_violation',
+        '近期计划没有可用于当前 Learning Guide 的首个学习单元。'
+      );
+    }
+    const knowledge = await this.store.getKnowledgeContextForGoal(goalId);
+    const guideContext = await this.store.buildContext('generate_daily_guide', {
+      shortPlanDay: targetPlanItem,
+      availableMinutes: windows
+    });
+    let dailyGuideOutput: DailyGuideAgentOutput;
+    try {
+      const guideInput = {
+        date,
+        windows,
+        goal,
+        brief,
+        roadmap: draftRoadmap,
+        targetDay: targetPlanItem,
+        context: guideContext.context,
+        profile,
+        settings: runtimeSettings,
+        knowledgeItems: knowledge.knowledgeItems,
+        reviewKnowledgeItems: knowledge.reviewKnowledgeItems,
+        traceId: `ta_${crypto.randomUUID()}`
+      };
+      const guideRun = await this.learningTurn.startTool<typeof guideInput, DailyGuideAgentOutput>({
+        toolName: 'prepare_learning_guide',
+        input: guideInput,
+        context: {
+          kind: 'planning',
+          scopeType: 'goal_plan',
+          scopeId: goalId,
+          goalId,
+          contextVersion: 3
+        },
+        audit: {
+          kind: 'daily_guide',
+          date,
+          provider: 'deepseek',
+          model: runtimeSettings.deepseekModel,
+          promptProfileId: profile.id,
+          promptVersionId: profile.activeVersionId,
+          inputSnapshot: {
+            goalId,
+            brief,
+            roadmap: roadmapOutput,
+            shortPlan: shortPlanOutput,
+            contextSourceIds: [
+              ...guideContext.contextSourceIds,
+              ...knowledge.knowledgeItems.map((item) => item.id),
+              ...knowledge.reviewKnowledgeItems.map((item) => item.id)
+            ]
+          },
+          outputSchemaVersion: 'daily-guide.v2'
+        }
+      });
+      dailyGuideOutput = guideRun.output;
+    } catch (error) {
+      if (error instanceof CategorizedError) throw error;
+      if (error instanceof Error && /DeepSeek API Key|API [Kk]ey/i.test(error.message)) {
+        throw new CategorizedError('missing_config', error.message, error);
+      }
+      if (error instanceof Error && /JSON|schema|valid|parse|required|expected/i.test(error.message)) {
+        throw new CategorizedError(
+          'schema_violation',
+          '生成当前 Learning Guide 失败：AI 返回内容格式不完整，已阻止写入。请重试一次，或在设置里调低提示词复杂度。',
+          error
+        );
+      }
+      throw new CategorizedError(
+        'ai_failure',
+        '生成当前 Learning Guide 失败：AI 调用出错，已记录失败。请重试一次。',
+        error instanceof Error ? error : undefined
+      );
+    }
+    return this.store.saveLayeredPlan({
+      goal,
+      brief,
+      date,
+      windows,
+      roadmap: roadmapOutput,
+      shortPlan: shortPlanOutput,
+      dailyGuide: dailyGuideOutput
+    });
+  }
+
+  async prepareCurrentLearningUnit(
     params: { forceRetry?: boolean },
-    deps: PrepareCurrentLearningDayDeps
-  ): Promise<PrepareCurrentLearningDayResult> {
+    deps: PrepareCurrentLearningUnitDeps
+  ): Promise<PrepareCurrentLearningUnitResult> {
     const today = await this.store.getActiveGuide(true);
-    if (!today.goal) return { todayState: 'needs_goal' };
+    if (!today.goal) return { preparationState: 'needs_goal' };
 
     const lockKey = `daily_guide:${today.goal.id}`;
     const existingLock = this.generationLocks.get(lockKey);
     if (existingLock) return existingLock;
 
     if (params.forceRetry) await this.store.releaseGenerationLock(lockKey);
-    if (!await this.store.acquireGenerationLock(lockKey)) return { todayState: 'generating' };
+    if (!await this.store.acquireGenerationLock(lockKey)) return { preparationState: 'generating' };
 
     const promise = this.doPrepareCurrentLearningDay(today.goal, today.roadmap, today.shortPlan, today.guide, deps);
     this.generationLocks.set(lockKey, promise);
@@ -104,38 +319,38 @@ export class PlanningModule {
   private async doPrepareCurrentLearningDay(
     goal: LearningGoal,
     roadmap: RoadmapStage[],
-    shortPlan: ShortPlanDay[],
+    shortPlan: NearTermPlanItem[],
     existingGuide: Awaited<ReturnType<PlanningStore['getActiveGuide']>>['guide'],
-    deps: PrepareCurrentLearningDayDeps
-  ): Promise<PrepareCurrentLearningDayResult> {
+    deps: PrepareCurrentLearningUnitDeps
+  ): Promise<PrepareCurrentLearningUnitResult> {
     const pendingDraft = existingGuide?.sessionStatus === 'draft' && existingGuide.tasks.length === 0;
     if (existingGuide && !pendingDraft) {
-      return { todayState: existingGuide.status === 'completed' ? 'completed' : 'active' };
+      return { preparationState: existingGuide.status === 'completed' ? 'completed' : 'active' };
     }
 
     const traceId = deps.createTraceId();
     const date = deps.todayIso();
     let contextSourceIds: string[] = [];
-    let targetDay: ShortPlanDay | null = null;
+    let targetDay: NearTermPlanItem | null = null;
     let profile: Awaited<ReturnType<PlanningStore['getPromptProfile']>> | undefined;
-    let settings: Awaited<ReturnType<PrepareCurrentLearningDayDeps['getRuntimeSettings']>> | undefined;
+    let settings: Awaited<ReturnType<PrepareCurrentLearningUnitDeps['getRuntimeSettings']>> | undefined;
 
     try {
-      const usedDayIds = await this.store.getUsedShortPlanDayIds(goal.id);
+      const usedDayIds = await this.store.getUsedNearTermPlanItemIds(goal.id);
       const activeStageId = roadmap.find((stage) => stage.status === 'active')?.id ?? null;
       targetDay = pendingDraft
-        ? shortPlan.find((day) => day.id === existingGuide.shortPlanDayId) ?? null
+        ? shortPlan.find((item) => item.id === existingGuide.nearTermPlanItemId) ?? null
         : shortPlan.find((day) => day.roadmapStageId === activeStageId && day.sessionStatus === 'active' && !usedDayIds.has(day.id)) ?? null;
       const isRetry = targetDay !== null;
       if (!targetDay) {
         targetDay = shortPlan
-          .filter((day) => day.roadmapStageId === activeStageId && day.sessionStatus === 'pending' && day.date === null && !usedDayIds.has(day.id))
-          .sort((a, b) => a.dayIndex - b.dayIndex)[0] ?? null;
+          .filter((day) => day.roadmapStageId === activeStageId && day.sessionStatus === 'pending' && !usedDayIds.has(day.id))
+          .sort((a, b) => a.itemIndex - b.itemIndex)[0] ?? null;
       }
-      if (!targetDay) return { todayState: 'plan_exhausted' };
+      if (!targetDay) return { preparationState: 'plan_exhausted' };
 
-      if (!isRetry && !await this.store.activateShortPlanDay(targetDay.id)) {
-        return { todayState: 'generating' };
+      if (!isRetry && !await this.store.activateNearTermPlanItem(targetDay.id)) {
+        return { preparationState: 'generating' };
       }
 
       const previousDayResult = isRetry
@@ -151,7 +366,7 @@ export class PlanningModule {
       settings = loadedSettings;
 
       await this.store.ensureDraftDailyGuide({
-        goal, date, windows: settings.dailyStudyWindows, shortPlanDayId: targetDay.id
+        goal, date, windows: settings.dailyStudyWindows, nearTermPlanItemId: targetDay.id
       });
 
       const boundedContext = await this.store.buildContext('generate_daily_guide', {
@@ -166,7 +381,7 @@ export class PlanningModule {
         previousDayResult, profile, settings, knowledgeItems: knowledge.knowledgeItems,
         reviewKnowledgeItems: knowledge.reviewKnowledgeItems, context: boundedContext.context, traceId
       };
-      const toolRun = await deps.runAgentTool<typeof toolInput, DailyGuideAgentOutput>({
+      const toolRun = await deps.startAgentTurn<typeof toolInput, DailyGuideAgentOutput>({
         toolName: 'prepare_learning_guide',
         input: toolInput,
         context: {
@@ -191,13 +406,13 @@ export class PlanningModule {
 
       const result = await this.store.saveDailyGuideWithTransaction({
         goal, date, windows: settings.dailyStudyWindows,
-        shortPlanDayId: targetDay.id, dailyGuide: output
+        nearTermPlanItemId: targetDay.id, dailyGuide: output
       });
 
-      return { todayState: 'active', result };
+      return { preparationState: 'active', result };
     } catch (error) {
       const described = describeError(error);
-      return { todayState: 'generation_failed', errorMessage: described.message };
+      return { preparationState: 'generation_failed', errorMessage: described.message };
     }
   }
 
@@ -212,8 +427,11 @@ export class PlanningModule {
 
     let review: ReviewResult | null = null;
     if (today.guide?.sessionStatus === 'active') {
-      const allTasksDone = today.guide.tasks.length > 0 && today.guide.tasks.every((task) => task.status === 'done');
-      if (!allTasksDone) throw new Error('当前学习日还有未完成任务，请完成所有任务后再生成下一批任务。');
+      const allTasksTerminal = today.guide.tasks.length > 0
+        && today.guide.tasks.every((task) => task.status === 'done' || task.status === 'skipped');
+      if (!allTasksTerminal) {
+        throw new Error('当前学习单元还有进行中或待处理的 Task，请先结束、暂缓或放弃后再继续。');
+      }
       await this.store.closeCurrentSession(today.guide.id);
       review = await this.generateReviewSafely(today.guide.id, today.guide.date, deps.generateReview);
     } else if (today.guide?.sessionStatus === 'closed') {
@@ -221,11 +439,11 @@ export class PlanningModule {
       if (!review) review = await this.generateReviewSafely(today.guide.id, today.guide.date, deps.generateReview);
     }
 
-    const next = await this.prepareCurrentLearningDay({}, deps);
-    if (next.todayState !== 'plan_exhausted') return { review, ...next };
+    const next = await this.prepareCurrentLearningUnit({}, deps);
+    if (next.preparationState !== 'plan_exhausted') return { review, ...next };
     return {
       review,
-      todayState: 'plan_exhausted',
+      preparationState: 'plan_exhausted',
       errorMessage: '当前批次学习任务已全部完成。请前往复盘页查看总结，复盘后可根据当前学习路径生成下一批任务。'
     };
   }
@@ -233,7 +451,7 @@ export class PlanningModule {
   async closeCompletedLearningDay(): Promise<boolean> {
     const today = await this.store.getActiveGuide();
     if (!today.guide || today.guide.tasks.length === 0) return false;
-    if (!today.guide.tasks.every((task) => task.status === 'done')) return false;
+    if (!today.guide.tasks.every((task) => task.status === 'done' || task.status === 'skipped')) return false;
     await this.store.closeCurrentSession(today.guide.id);
     return true;
   }
@@ -252,7 +470,7 @@ export class PlanningModule {
 
   async generateRollingPlan(params: { goalId: Id }, deps: GenerateRollingPlanDeps): Promise<GenerateRollingPlanResult> {
     const { goalId } = params;
-    const { runAgentTool, getRuntimeSettings, createTraceId, todayIso } = deps;
+    const { startAgentTurn, getRuntimeSettings, createTraceId, todayIso } = deps;
 
     const goal = await this.store.getGoal(goalId);
     if (!goal) throw new Error('找不到要续生计划的学习目标。');
@@ -280,11 +498,11 @@ export class PlanningModule {
     const knowledgeItemsForGuide = knowledgeCtx.knowledgeItems;
     const reviewItemsForGuide = knowledgeCtx.reviewKnowledgeItems;
 
-    const availableStageDays = await this.store.listAvailableShortPlanDaysForStage(goal.id, activeStage.id);
+    const availableStageDays = await this.store.listAvailableNearTermPlanItemsForStage(goal.id, activeStage.id);
     const existingStageDay = availableStageDays[0] ?? null;
 
-    const createGuideForActivatedDay = async (targetDay: ShortPlanDay) => {
-      const activated = await this.store.activateShortPlanDay(targetDay.id);
+    const createGuideForActivatedDay = async (targetDay: NearTermPlanItem) => {
+      const activated = await this.store.activateNearTermPlanItem(targetDay.id);
       if (!activated) throw new Error('激活计划项失败，请重试。');
       const activeGuideState = await this.store.getActiveGuide();
       const boundedContext = await this.store.buildContext('generate_daily_guide', {
@@ -305,7 +523,7 @@ export class PlanningModule {
         reviewKnowledgeItems: reviewItemsForGuide,
         traceId: createTraceId()
       };
-      const guideRun = await runAgentTool<typeof guideInput, DailyGuideAgentOutput>({
+      const guideRun = await startAgentTurn<typeof guideInput, DailyGuideAgentOutput>({
         toolName: 'prepare_learning_guide',
         input: guideInput,
         context: {
@@ -332,7 +550,7 @@ export class PlanningModule {
       });
       const dailyGuideOutput = guideRun.output;
       const saved = await this.store.saveDailyGuideWithTransaction({
-        goal, date: todayIso(), windows: runtimeSettings.dailyStudyWindows, shortPlanDayId: targetDay.id, dailyGuide: dailyGuideOutput
+        goal, date: todayIso(), windows: runtimeSettings.dailyStudyWindows, nearTermPlanItemId: targetDay.id, dailyGuide: dailyGuideOutput
       });
       const fullState = await this.store.getActiveGuide();
       return { goal, roadmap: fullState.roadmap, shortPlan: fullState.shortPlan, guide: saved.guide, activatedStage: activeStage };
@@ -354,7 +572,7 @@ export class PlanningModule {
       mode: 'rolling' as const,
       goal, brief, activeStage, completedSummary: completedContext?.summary ?? '暂无已完成任务', reviewSummary, profile, settings: runtimeSettings, knowledgeItems: knowledgeItemsForGuide, reviewKnowledgeItems: reviewItemsForGuide, context: rollingContext.context, traceId
     };
-    const rollingRun = await runAgentTool<typeof rollingInput, { days: any[]; weekFocus: string }>({
+    const rollingRun = await startAgentTurn<typeof rollingInput, { items: any[]; weekFocus: string }>({
       toolName: 'propose_short_plan',
       input: rollingInput,
       context: {
@@ -380,16 +598,23 @@ export class PlanningModule {
     });
     const rollingOutput = rollingRun.output;
     const expectedStagePosition = activeStage.position + 1;
-    if (rollingOutput.days.some((day: any) => day.roadmapStagePosition !== expectedStagePosition)) {
+    if (rollingOutput.items.some((item: any) => item.roadmapStagePosition !== expectedStagePosition)) {
       throw new Error(`滚动计划必须继续当前第 ${expectedStagePosition} 阶段，不能未经确认推进学习阶段。`);
     }
 
     const newPlanDays = await this.store.saveRollingPlanDays({
       goalId: goal.id, roadmapStageId: activeStage.id,
-      items: rollingOutput.days.map((day: any) => ({ dayIndex: day.dayIndex, title: day.title, focus: day.focus, tasks: day.tasks, expectedOutput: day.expectedOutput, successCriteria: day.successCriteria }))
+      items: rollingOutput.items.map((item: any) => ({
+        itemIndex: item.itemIndex,
+        title: item.title,
+        focus: item.focus,
+        tasks: item.tasks,
+        expectedOutput: item.expectedOutput,
+        successCriteria: item.successCriteria
+      }))
     });
 
-    const firstDay = newPlanDays.sort((a: ShortPlanDay, b: ShortPlanDay) => a.dayIndex - b.dayIndex)[0] ?? null;
+    const firstDay = newPlanDays.sort((a: NearTermPlanItem, b: NearTermPlanItem) => a.itemIndex - b.itemIndex)[0] ?? null;
     if (!firstDay) throw new Error('AI 未返回有效学习任务');
 
     return createGuideForActivatedDay(firstDay);

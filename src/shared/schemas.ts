@@ -1,5 +1,15 @@
 import { z } from 'zod';
 
+const isoCalendarDateSchema = z.string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine((value) => {
+    const [year, month, day] = value.split('-').map(Number);
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+    return parsed.getUTCFullYear() === year
+      && parsed.getUTCMonth() === month - 1
+      && parsed.getUTCDate() === day;
+  }, '日期必须是真实的 YYYY-MM-DD');
+
 const stringArrayFromAiSchema = z.preprocess((value) => {
   if (value == null) return [];
   if (Array.isArray(value)) {
@@ -118,8 +128,8 @@ export const reviewAgentOutputSchema = z.object({
   nextActions: stringArrayFromAiSchema,
   planAdjustments: z.array(
     z.object({
-      dayIndex: z.number().int().min(1),
-     title: z.string().min(1),
+      itemIndex: z.number().int().min(1),
+      title: z.string().min(1),
       focus: z.string().min(1),
       expectedOutput: z.string().min(1),
       successCriteria: z.string().min(1),
@@ -153,16 +163,17 @@ export const roadmapAgentOutputSchema = z.object({
       title: z.string().min(1),
       objective: z.string().min(1),
       direction: z.string().min(1),
-      successCriteria: z.string().min(1)
+      successCriteria: z.string().min(1),
+      targetDate: isoCalendarDateSchema.nullable().default(null)
     })
   ).min(1)
 });
 
 export const shortPlanAgentOutputSchema = z.object({
   weekFocus: z.string().min(1),
-  days: z.array(
+  items: z.array(
     z.object({
-      dayIndex: z.preprocess(
+      itemIndex: z.preprocess(
         (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : v),
         z.number().int().min(1)
       ),
@@ -178,12 +189,12 @@ export const shortPlanAgentOutputSchema = z.object({
     })
   ).min(1).max(5)
 }).superRefine((value, context) => {
-  const ordered = [...value.days].sort((a, b) => a.dayIndex - b.dayIndex);
+  const ordered = [...value.items].sort((a, b) => a.itemIndex - b.itemIndex);
   for (let index = 1; index < ordered.length; index += 1) {
     if (ordered[index].roadmapStagePosition < ordered[index - 1].roadmapStagePosition) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['days', value.days.indexOf(ordered[index]), 'roadmapStagePosition'],
+        path: ['items', value.items.indexOf(ordered[index]), 'roadmapStagePosition'],
         message: '近期计划不能从后续阶段倒退到更早阶段'
       });
     }

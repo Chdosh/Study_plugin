@@ -10,6 +10,7 @@ import {
   ListTree,
   RefreshCw,
   Sparkles,
+  Square,
   SkipForward
 } from 'lucide-react';
 import type {
@@ -18,7 +19,8 @@ import type {
   StudySession,
   SubmissionEvaluationResult,
   TeachStepResult,
-  TodayGuideState
+  LearningOverviewState,
+  TaskClosureKind
 } from '../../../shared/types';
 import { MessageContent } from '../components/ai/MessageContent';
 import { StatePanel } from '../components/shared/StatePanel';
@@ -55,18 +57,23 @@ export function StudyPage({
   onStartSession,
   onPauseSession,
   onResumeSession,
+  onEndSession,
   onTeachStep,
+  onResumeLearningTurn,
+  onCancelLearningTurn,
   onCompleteCurrentAction,
   onSkipCurrentAction,
-  onSkipCurrentTask,
+  onCloseCurrentTask,
   onAskQuestion,
   onResolveQuestion,
   onSubmitResult,
   onRetrySubmissionEvaluation,
+  onDecideRecommendation,
+  onCorrectEvaluation,
   onOpenTeacher,
   onOpenRoadmap
 }: {
-  todayGuide: TodayGuideState | null;
+  todayGuide: LearningOverviewState | null;
   activeSession: StudySession | null;
   learningState: LearningRuntimeSnapshot | null;
   teaching: TeachStepResult | null;
@@ -75,14 +82,32 @@ export function StudyPage({
   onStartSession: (taskId: string) => Promise<void>;
   onPauseSession: () => Promise<void>;
   onResumeSession: () => Promise<void>;
+  onEndSession: () => Promise<void>;
   onTeachStep: () => Promise<void>;
+  onResumeLearningTurn: (
+    pendingInteractionId: string,
+    answer: string,
+    expectedContextVersion: number
+  ) => Promise<void>;
+  onCancelLearningTurn: (pendingInteractionId: string) => Promise<void>;
   onCompleteCurrentAction: () => Promise<void>;
   onSkipCurrentAction: () => Promise<void>;
-  onSkipCurrentTask: () => Promise<void>;
+  onCloseCurrentTask: (input: {
+    taskId: string;
+    closureKind: TaskClosureKind;
+    closureReason?: string;
+    nextStartPoint?: string;
+  }) => Promise<void>;
   onAskQuestion: (question: string) => Promise<void>;
   onResolveQuestion: (threadId: string) => Promise<void>;
   onSubmitResult: (content: string) => Promise<void>;
   onRetrySubmissionEvaluation: (submissionId: string) => Promise<void>;
+  onDecideRecommendation: (
+    evaluationId: string,
+    decision: 'accepted' | 'declined' | 'deferred',
+    reason?: string
+  ) => Promise<void>;
+  onCorrectEvaluation: (evaluationId: string, reason: string) => Promise<void>;
   onOpenTeacher: () => void;
   onOpenRoadmap: () => void;
 }): JSX.Element {
@@ -95,18 +120,31 @@ export function StudyPage({
   const pendingSubmission = learningState?.latestSubmission?.evaluationStatus !== 'completed'
     ? learningState?.latestSubmission ?? null
     : null;
+  const pendingRecommendation =
+    learningState?.latestEvaluation?.recommendationDecision === 'pending'
+    && learningState.latestDecision
+      ? {
+          evaluation: learningState.latestEvaluation,
+          decision: learningState.latestDecision
+        }
+      : null;
+  const recommendsTaskClosure = pendingRecommendation?.decision.taskCompleted === true;
   const allActionsDone = taskActions.length > 0 && taskActions.every((action) => action.status === 'done' || action.status === 'skipped');
   const taskDone = currentTask?.status === 'done';
+  const waitingLearningTurn = teaching?.pendingInteraction?.status === 'open';
   const activeSessionBelongsToCurrent = Boolean(currentTaskId && activeSession?.taskId === currentTaskId);
 
   const isActive = activeSessionBelongsToCurrent && activeSession?.status === 'active';
   const isPaused = activeSessionBelongsToCurrent && activeSession?.status === 'paused';
   const isNotStarted = !taskDone && (!activeSessionBelongsToCurrent || !activeSession || (activeSession.status !== 'active' && activeSession.status !== 'paused'));
-  const allTasksDone = guide ? guide.tasks.length > 0 && guide.tasks.every((t) => t.status === 'done') : false;
+  const allTasksDone = guide
+    ? guide.tasks.length > 0
+      && guide.tasks.every((task) => task.status === 'done' || task.status === 'skipped')
+    : false;
   const nextPlannedTask = taskDone && currentTask
     ? guide!.tasks.find((t) => t.status === 'planned' || t.status === 'active') ?? null
     : null;
-  const taskTitle = toCompactTitle(currentTask?.title ?? (allTasksDone ? '今日学习' : '当前任务'));
+  const taskTitle = toCompactTitle(currentTask?.title ?? (allTasksDone ? '当前学习单元' : '当前任务'));
   const currentAction = taskActions.find((a) => a.status !== 'done' && a.status !== 'skipped') ?? null;
   const learningStatus = currentTask ? deriveLearningTaskStatus(currentTask, learningState?.latestSubmission ? {
     evaluationStatus: learningState.latestSubmission.evaluationStatus,
@@ -115,7 +153,7 @@ export function StudyPage({
   const taskObjective = currentTask?.objective ?? '';
   const completedActionCount = taskActions.filter((action) => action.status === 'done' || action.status === 'skipped').length;
   const stepTitle = allTasksDone && !currentTask
-    ? '今日任务已全部完成'
+    ? '当前任务已全部结束'
     : pendingSubmission
       ? pendingSubmission.evaluationStatus === 'failed' ? '等待重新评价' : '评价中'
     : taskDone
@@ -154,7 +192,7 @@ export function StudyPage({
   // const [elapsedSeconds, setElapsedSeconds] = useState(0);
   // const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const commandPolicy = computeCommandPolicy(learningState, currentTask ? {
+  const commandPolicy = computeCommandPolicy(learningState, currentTask?.guideId ? {
     guideId: currentTask.guideId,
     taskId: currentTask.id,
     taskStatus: currentTask.status
@@ -162,6 +200,13 @@ export function StudyPage({
 
   const [feedback, setFeedback] = useState<{ message: string; kind: FeedbackKind } | null>(null);
   const [submissionContent, setSubmissionContent] = useState('');
+  const [turnAnswer, setTurnAnswer] = useState('');
+  const [recommendationReason, setRecommendationReason] = useState('');
+  const [evaluationCorrection, setEvaluationCorrection] = useState('');
+  const [closingTask, setClosingTask] = useState(false);
+  const [closureKind, setClosureKind] = useState<TaskClosureKind>('completed');
+  const [closureReason, setClosureReason] = useState('');
+  const [nextStartPoint, setNextStartPoint] = useState('');
   const submissionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -210,7 +255,7 @@ export function StudyPage({
     return (
       <section className="study-layout">
         <div className="study-main">
-          <StatePanel type="empty" title="还没有执行稿" text="请先在总览页完成目标确认和今日执行稿生成。" />
+          <StatePanel type="empty" title="还没有执行稿" text="请先在总览页完成目标确认并生成当前 Learning Guide。" />
         </div>
       </section>
     );
@@ -228,6 +273,11 @@ export function StudyPage({
           {isActive && commandPolicy.canPause ? (
             <button className="session-pause-button" type="button" onClick={() => void onPauseSession()}><Pause size={14} />暂停</button>
           ) : null}
+          {(isActive || isPaused) ? (
+            <button className="secondary-action" type="button" onClick={() => void onEndSession()}>
+              <Square size={14} />结束 Session
+            </button>
+          ) : null}
           <button className="secondary-action" type="button" onClick={onOpenRoadmap}><ListTree size={15} />学习路径</button>
           <button className="secondary-action study-teacher-drawer-trigger" type="button" onClick={onOpenTeacher}><MessageCircle size={15} />向导师提问</button>
         </div>
@@ -240,7 +290,7 @@ export function StudyPage({
               <span className="focus-eyebrow">当前步骤</span>
               <h2>{stepTitle}</h2>
             </div>
-            {!taskDone && !allActionsDone && <button className="secondary-action" type="button" disabled={!isActive} title={!isActive ? '开始或继续学习后可展开当前步骤' : undefined} onClick={() => void onTeachStep()}><Sparkles size={15} />展开步骤</button>}
+            {!taskDone && !allActionsDone && <button className="secondary-action" type="button" disabled={!isActive || waitingLearningTurn} title={!isActive ? '开始或继续学习后可展开当前步骤' : waitingLearningTurn ? '请先回答或取消导师当前问题' : undefined} onClick={() => void onTeachStep()}><Sparkles size={15} />展开步骤</button>}
           </div>
           <div className="focus-work-list">
             {taskObjective && (
@@ -259,6 +309,49 @@ export function StudyPage({
                 <MessageContent content={stepCriteria} />
               </article>
             )}
+            {learningState?.latestSubmission && (
+              <article className="focus-work-item">
+                <strong>最新成果 · 第 {learningState.submissionAttempts.length} 次尝试</strong>
+                <MessageContent content={learningState.latestSubmission.content} />
+                {learningState.latestEvaluation && (
+                  <small>
+                    {learningState.latestEvaluation.source === 'user_correction'
+                      ? '用户已追加评价纠正'
+                      : learningState.latestEvaluation.result === 'passed'
+                        ? '本次评价：通过'
+                        : learningState.latestEvaluation.result === 'partial'
+                          ? '本次评价：部分达到'
+                          : learningState.latestEvaluation.result === 'failed'
+                            ? '本次评价：未达到'
+                            : '本次评价：需要确认'}
+                  </small>
+                )}
+              </article>
+            )}
+            {learningState?.latestEvaluation?.source === 'ai' && (
+              <article className="focus-work-item">
+                <strong>评价有事实错误？</strong>
+                <textarea
+                  value={evaluationCorrection}
+                  onChange={(event) => setEvaluationCorrection(event.target.value)}
+                  placeholder="写明哪项判断不准确；原评价会保留，纠正会作为新事实追加。"
+                />
+                <button
+                  className="secondary-action"
+                  type="button"
+                  disabled={!evaluationCorrection.trim()}
+                  onClick={() => void onCorrectEvaluation(
+                    learningState.latestEvaluation!.id,
+                    evaluationCorrection
+                  ).then(() => {
+                    setEvaluationCorrection('');
+                    showFeedback('已追加评价纠正');
+                  })}
+                >
+                  记录纠正
+                </button>
+              </article>
+            )}
             {currentTask?.deliverable && (
               <article className="focus-work-item"><strong>预期产出</strong><MessageContent content={currentTask.deliverable} /></article>
             )}
@@ -275,8 +368,55 @@ export function StudyPage({
           )}
           {teaching && (
             <div className="assistant-message assistant-message-system">
-              <strong>AI 展开：</strong>
-              <MessageContent content={`${teaching.explanation}\n\n${teaching.userAction}`} />
+              {teaching.artifacts.map((artifact, index) => (
+                <div key={`${artifact.kind}-${index}`} className="learning-turn-artifact">
+                  <strong>{artifact.kind === 'quiz'
+                    ? '理解检查'
+                    : artifact.kind === 'practice'
+                      ? '练习'
+                      : artifact.kind === 'evaluation'
+                        ? '即时反馈'
+                        : artifact.kind === 'question'
+                          ? '导师追问'
+                          : 'AI 展开'}</strong>
+                  <MessageContent content={[artifact.explanation, artifact.userAction].filter(Boolean).join('\n\n')} />
+                </div>
+              ))}
+              {teaching.pendingInteraction?.status === 'open' && (
+                <div className="submission-composer">
+                  <label htmlFor="learning-turn-answer">补充信息</label>
+                  <textarea
+                    id="learning-turn-answer"
+                    value={turnAnswer}
+                    onChange={(event) => setTurnAnswer(event.target.value)}
+                    placeholder="回答后会继续同一个 Learning Turn"
+                  />
+                  <div className="submission-actions">
+                    <button
+                      className="primary-action"
+                      type="button"
+                      disabled={!turnAnswer.trim()}
+                      onClick={() => {
+                        const pending = teaching.pendingInteraction!;
+                        void onResumeLearningTurn(
+                          pending.id,
+                          turnAnswer,
+                          pending.expectedContextVersion
+                        ).then(() => setTurnAnswer(''));
+                      }}
+                    >
+                      继续本轮学习
+                    </button>
+                    <button
+                      className="secondary-action"
+                      type="button"
+                      onClick={() => void onCancelLearningTurn(teaching.pendingInteraction!.id)}
+                    >
+                      取消询问
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -305,7 +445,13 @@ export function StudyPage({
           )}
         </div>
         <div className="bar-right">
-          {pendingSubmission ? (
+          {waitingLearningTurn ? (
+            <div className="bar-right-group">
+              <span className="micro-hint" style={{ margin: 0 }}>
+                导师正在等待你的回答；回答或取消后再推进当前步骤。
+              </span>
+            </div>
+          ) : pendingSubmission ? (
             <div className="bar-right-group">
               <span className="micro-hint" style={{ margin: 0 }}>
                 提交已保存，评价未完成。
@@ -315,11 +461,93 @@ export function StudyPage({
                 重新评价
               </button>
             </div>
+          ) : pendingRecommendation ? (
+            <div className="bar-right-group">
+              <span className="micro-hint" style={{ margin: 0 }}>
+                {pendingRecommendation.decision.reason}
+                {recommendsTaskClosure && activeSessionBelongsToCurrent
+                  && (activeSession?.status === 'active' || activeSession?.status === 'paused')
+                  ? '；采纳后只关闭 Task，当前 Session 会保持未结束，请按需要单独结束。'
+                  : recommendsTaskClosure && !allActionsDone
+                    ? '；当前仍有未处理 Action，关闭 Task 不会自动修改这些 Action。'
+                    : ''}
+              </span>
+              <input
+                aria-label="建议决定原因"
+                value={recommendationReason}
+                onChange={(event) => setRecommendationReason(event.target.value)}
+                placeholder="可选：记录采纳、暂缓或拒绝原因"
+              />
+              <button className="primary-action" type="button" onClick={() => {
+                void onDecideRecommendation(
+                  pendingRecommendation.evaluation.id,
+                  'accepted',
+                  recommendationReason
+                ).then(() => {
+                  setRecommendationReason('');
+                  showFeedback('已采纳评价建议');
+                });
+              }}>
+                <CheckCircle2 size={16} />
+                {recommendsTaskClosure && activeSessionBelongsToCurrent
+                  && (activeSession?.status === 'active' || activeSession?.status === 'paused')
+                  ? '关闭 Task（保留 Session）'
+                  : '采纳建议'}
+              </button>
+              <button className="secondary-action" type="button" onClick={() => {
+                void onDecideRecommendation(
+                  pendingRecommendation.evaluation.id,
+                  'deferred',
+                  recommendationReason
+                ).then(() => {
+                  setRecommendationReason('');
+                  showFeedback('已保留建议，稍后决定');
+                });
+              }}>
+                稍后决定
+              </button>
+              <button className="secondary-action" type="button" onClick={() => {
+                void onDecideRecommendation(
+                  pendingRecommendation.evaluation.id,
+                  'declined',
+                  recommendationReason
+                ).then(() => {
+                  setRecommendationReason('');
+                  showFeedback('已记录不采纳');
+                });
+              }}>
+                不采纳
+              </button>
+              <div className="study-submit-inline">
+                <textarea
+                  ref={submissionInputRef}
+                  value={submissionContent}
+                  onChange={(event) => setSubmissionContent(event.target.value)}
+                  placeholder="也可以先提交修改后的新版本；原尝试和评价会保留"
+                  aria-label="新版本学习结果"
+                />
+                <button
+                  className="secondary-action"
+                  type="button"
+                  disabled={!submissionContent.trim()}
+                  onClick={() => {
+                    const content = submissionContent.trim();
+                    if (!content) return;
+                    void onSubmitResult(content).then(() => {
+                      setSubmissionContent('');
+                      showFeedback('新版本已提交，旧评价仍保留');
+                    });
+                  }}
+                >
+                  提交新版本
+                </button>
+              </div>
+            </div>
           ) : allTasksDone ? (
             <div className="bar-right-group">
               <span className="micro-hint" style={{ margin: 0 }}>
                 <CheckCircle2 size={14} />
-                当前批次任务已全部完成，请前往复盘页查看总结。
+                当前学习单元中的 Task 均已结束，请前往记录页查看复盘和下一步。
               </span>
             </div>
           ) : (
@@ -362,23 +590,70 @@ export function StudyPage({
                   继续学习
                 </button>
               ) : null}
-              {allActionsDone && commandPolicy.canSubmit ? (
+              {commandPolicy.canSubmit ? (
                 <div className="study-submit-inline">
                   <textarea ref={submissionInputRef} value={submissionContent} onChange={(event) => setSubmissionContent(event.target.value)} placeholder={currentTask?.deliverable ? `提交结果：${currentTask.deliverable}` : '说明你完成了什么，并粘贴必要的运行结果或验证证据'} aria-label="学习结果" />
-                  <button className="primary-action" type="button" disabled={!submissionContent.trim()} title={!submissionContent.trim() ? '请先填写学习结果或验证证据' : undefined} onClick={() => {
+                  <button className={allActionsDone ? 'primary-action' : 'secondary-action'} type="button" disabled={!submissionContent.trim()} title={!submissionContent.trim() ? '请先填写学习结果或验证证据' : undefined} onClick={() => {
                     const content = submissionContent.trim();
                     if (!content) return;
                     void onSubmitResult(content).then(() => { setSubmissionContent(''); showFeedback('学习结果已提交'); });
                   }}><CheckCircle2 size={16} />提交结果</button>
                 </div>
               ) : null}
-              {!taskDone && commandPolicy.canSkipTask ? (
-                <button className="secondary-action" type="button" onClick={() => {
-                  void onSkipCurrentTask().then(() => showFeedback('已跳过此任务'));
-                }}>
-                  <SkipForward size={16} />
-                  跳过此任务
-                </button>
+              {!taskDone && commandPolicy.canCloseTask && currentTask ? (
+                closingTask ? (
+                  <div className="task-closure-panel" role="group" aria-label="收口当前 Task">
+                    <select
+                      aria-label="Task 收口结果"
+                      value={closureKind}
+                      onChange={(event) => setClosureKind(event.target.value as TaskClosureKind)}
+                    >
+                      <option value="completed">已完成</option>
+                      <option value="partial">部分完成</option>
+                      <option value="abandoned">放弃</option>
+                      <option value="replaced">被其他 Task 替代</option>
+                    </select>
+                    <input
+                      aria-label="Task 收口原因"
+                      value={closureReason}
+                      onChange={(event) => setClosureReason(event.target.value)}
+                      placeholder="可选：记录收口原因"
+                    />
+                    <input
+                      aria-label="下次继续位置"
+                      value={nextStartPoint}
+                      onChange={(event) => setNextStartPoint(event.target.value)}
+                      placeholder="可选：下次从哪里继续"
+                    />
+                    <span className="micro-hint">
+                      未完成 Action 会原样保留；收口 Task 不会结束当前 Session。
+                    </span>
+                    <button className="primary-action" type="button" onClick={() => {
+                      void onCloseCurrentTask({
+                        taskId: currentTask.id,
+                        closureKind,
+                        closureReason: closureReason.trim() || undefined,
+                        nextStartPoint: nextStartPoint.trim() || undefined
+                      }).then(() => {
+                        setClosingTask(false);
+                        setClosureReason('');
+                        setNextStartPoint('');
+                        showFeedback('Task 已收口，Session 状态保持不变');
+                      });
+                    }}>
+                      <CheckCircle2 size={16} />
+                      确认收口
+                    </button>
+                    <button className="secondary-action" type="button" onClick={() => setClosingTask(false)}>
+                      取消
+                    </button>
+                  </div>
+                ) : (
+                  <button className="secondary-action" type="button" onClick={() => setClosingTask(true)}>
+                    <CheckCircle2 size={16} />
+                    收口 Task
+                  </button>
+                )
               ) : null}
             </div>
           )}

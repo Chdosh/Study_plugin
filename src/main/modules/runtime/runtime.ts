@@ -1,4 +1,4 @@
-import type { Id, LearningRuntimeSnapshot, StudySession } from '../../../shared/types';
+import type { CloseTaskInput, Id, LearningRuntimeSnapshot, StudySession } from '../../../shared/types';
 
 export interface RuntimeStore {
   getSnapshot(): Promise<LearningRuntimeSnapshot>;
@@ -8,13 +8,18 @@ export interface RuntimeStore {
   listSessions(): Promise<StudySession[]>;
   completeCurrentAction(): Promise<LearningRuntimeSnapshot>;
   skipCurrentAction(): Promise<LearningRuntimeSnapshot>;
-  skipCurrentTask(): Promise<LearningRuntimeSnapshot>;
+  closeTask(
+    taskId: Id,
+    closureKind: CloseTaskInput['closureKind'],
+    closureReason?: string,
+    nextStartPoint?: string
+  ): Promise<void>;
 }
 
 export type RuntimeCommand =
   | { type: 'completeCurrentAction' }
   | { type: 'skipCurrentAction' }
-  | { type: 'skipCurrentTask' }
+  | { type: 'closeCurrentTask'; input: CloseTaskInput }
   | { type: 'endCurrentSession' };
 
 export class LearningRuntimeModule {
@@ -42,12 +47,24 @@ export class LearningRuntimeModule {
         return this.store.completeCurrentAction();
       case 'skipCurrentAction':
         return this.store.skipCurrentAction();
-      case 'skipCurrentTask':
-        return this.store.skipCurrentTask();
+      case 'closeCurrentTask': {
+        const current = await this.store.getSnapshot();
+        if (current.dailyGuideTask?.id !== command.input.taskId) {
+          throw new Error('当前 Task 已经变化，请确认最新状态后再收口。');
+        }
+        await this.store.closeTask(
+          command.input.taskId,
+          command.input.closureKind,
+          command.input.closureReason,
+          command.input.nextStartPoint
+        );
+        return this.store.getSnapshot();
+      }
       case 'endCurrentSession': {
-        const activeSession = (await this.store.listSessions()).find((session) => session.status === 'active');
-        if (activeSession) {
-          await this.store.pauseSession(activeSession.id);
+        const unfinished = (await this.store.listSessions())
+          .find((session) => session.status === 'active' || session.status === 'paused');
+        if (unfinished) {
+          await this.store.completeSession(unfinished.id);
         }
         return this.store.getSnapshot();
       }

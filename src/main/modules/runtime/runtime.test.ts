@@ -16,19 +16,19 @@ describe('LearningRuntimeModule', () => {
     expect(store.completeCurrentAction).toHaveBeenCalledOnce();
   });
 
-  it('结束本次学习时暂停持久化 active Session 并保留学习快照', async () => {
+  it('结束本次学习时显式结束 active Session 并保留学习快照', async () => {
     const activeSession = session('session-1', 'active');
     const expected = snapshot('action-1');
     const store = createStore({
       listSessions: vi.fn().mockResolvedValue([activeSession]),
-      pauseSession: vi.fn().mockResolvedValue({ ...activeSession, status: 'paused' }),
+      completeSession: vi.fn().mockResolvedValue({ ...activeSession, status: 'completed' }),
       getSnapshot: vi.fn().mockResolvedValue(expected)
     });
     const runtime = new LearningRuntimeModule(store);
 
     const result = await runtime.dispatch({ type: 'endCurrentSession' });
 
-    expect(store.pauseSession).toHaveBeenCalledWith(activeSession.id);
+    expect(store.completeSession).toHaveBeenCalledWith(activeSession.id);
     expect(result).toBe(expected);
   });
 });
@@ -44,7 +44,7 @@ function createStore(overrides: Partial<RuntimeStore> = {}): RuntimeStore {
     listSessions: vi.fn().mockResolvedValue([]),
     completeCurrentAction: vi.fn().mockResolvedValue(current),
     skipCurrentAction: vi.fn().mockResolvedValue(current),
-    skipCurrentTask: vi.fn().mockResolvedValue(current),
+    closeTask: vi.fn().mockResolvedValue(undefined),
     ...overrides
   };
 }
@@ -72,6 +72,7 @@ function snapshot(activeStepId: string | null): LearningRuntimeSnapshot {
     latestSubmission: null,
     latestEvaluation: null,
     latestDecision: null,
+    submissionAttempts: [],
     pendingAdjustment: null
   };
 }
@@ -80,7 +81,6 @@ function session(id: string, status: StudySession['status']): StudySession {
   return {
     id,
     taskId: 'task-1',
-    taskItemsId: null,
     startedAt: '2026-07-11T00:00:00.000Z',
     endedAt: status === 'active' ? null : '2026-07-11T00:10:00.000Z',
     durationMinutes: status === 'active' ? null : 10,

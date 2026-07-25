@@ -8,7 +8,7 @@ export interface CommandPolicy {
   canResume: boolean;
   canCompleteAction: boolean;
   canSkipAction: boolean;
-  canSkipTask: boolean;
+  canCloseTask: boolean;
   canAskQuestion: boolean;
   canSubmit: boolean;
   canTerminate: boolean;
@@ -34,7 +34,7 @@ export function computeCommandPolicy(
     canResume: false,
     canCompleteAction: false,
     canSkipAction: false,
-    canSkipTask: false,
+    canCloseTask: false,
     canAskQuestion: false,
     canSubmit: false,
     canTerminate: false,
@@ -85,9 +85,11 @@ export function computeCommandPolicy(
     return { ...blank, reasons, sessionStatus };
   }
 
-  const allTasksDone = dailyGuide.tasks.every((t) => t.status === 'done');
-  if (allTasksDone) {
-    reasons.canStart = '所有任务已完成';
+  const allTasksTerminal = dailyGuide.tasks.every((task) =>
+    task.status === 'done' || task.status === 'skipped'
+  );
+  if (allTasksTerminal) {
+    reasons.canStart = '当前学习单元中的 Task 均已结束';
     return {
       ...blank,
       canAskQuestion: false,
@@ -97,28 +99,25 @@ export function computeCommandPolicy(
     };
   }
 
-  const taskDone = dailyGuideTask.status === 'done';
+  const taskTerminal = dailyGuideTask.status === 'done' || dailyGuideTask.status === 'skipped';
   const actionDone = !dailyGuideAction || dailyGuideAction.status !== 'planned';
   const allActionsTerminal = dailyGuideTask.actions.length > 0
     && dailyGuideTask.actions.every((action) => action.status === 'done' || action.status === 'skipped');
 
-  const canStart = !allTasksDone && sessionStatus !== 'active';
+  const canStart = !allTasksTerminal && sessionStatus !== 'active';
   const canPause = sessionStatus === 'active';
   const canResume = sessionStatus === 'paused';
-  const canCompleteAction = sessionStatus === 'active' && !taskDone && !actionDone;
-  const canSkipAction = sessionStatus === 'active' && !taskDone && !actionDone;
-  const canSkipTask = sessionStatus === 'active' && !taskDone && !allActionsTerminal;
+  const canCompleteAction = sessionStatus === 'active' && !taskTerminal && !actionDone;
+  const canSkipAction = sessionStatus === 'active' && !taskTerminal && !actionDone;
+  const canCloseTask = !taskTerminal;
   const canAskQuestion = sessionStatus === 'active' || sessionStatus === 'paused';
-  const canSubmit = (sessionStatus === 'active' || sessionStatus === 'paused') && !taskDone && allActionsTerminal;
+  const canSubmit = !taskTerminal;
   const canTerminate = sessionStatus === 'paused' || sessionStatus === 'active';
 
-  if (!canStart && !taskDone && sessionStatus === 'active') {
+  if (!canStart && !taskTerminal && sessionStatus === 'active') {
     reasons.canStart = '已有进行中的会话';
   }
-  if (!canSubmit && !taskDone) {
-    reasons.canSubmit = allActionsTerminal ? '请先开始或恢复学习会话' : '请先完成当前任务的全部步骤';
-  }
-  if (!canCompleteAction && !canSkipAction && actionDone && !taskDone) {
+  if (!canCompleteAction && !canSkipAction && actionDone && !taskTerminal) {
     reasons.canCompleteAction = '当前没有可执行的操作';
   }
 
@@ -128,7 +127,7 @@ export function computeCommandPolicy(
     canResume,
     canCompleteAction,
     canSkipAction,
-    canSkipTask,
+    canCloseTask,
     canAskQuestion,
     canSubmit,
     canTerminate: canTerminate || false,

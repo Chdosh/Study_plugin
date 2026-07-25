@@ -39,7 +39,7 @@ export function SettingsPage({
 
   async function refreshLearnerFacts(): Promise<void> {
     if (!window.studyApp?.learnerContext) return;
-    const today = await window.studyApp.guides.listToday();
+    const today = await window.studyApp.guides.getOverview();
     const currentGoalId = today.goal?.id ?? null;
     setGoalId(currentGoalId);
     if (!currentGoalId) {
@@ -221,7 +221,7 @@ export function SettingsPage({
             className="secondary-action full"
             type="button"
             onClick={async () => {
-              const today = await window.studyApp.guides.listToday();
+              const today = await window.studyApp.guides.getOverview();
               const id = today.goal?.id;
               if (!id) return;
               const data = await window.studyApp.data.exportGoal(id);

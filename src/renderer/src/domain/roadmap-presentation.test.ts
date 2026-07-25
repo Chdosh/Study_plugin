@@ -10,6 +10,7 @@ function stage(id: string, status: RoadmapStageStatus): RoadmapStage {
     objective: '',
     direction: '',
     successCriteria: '',
+    targetDate: null,
     status,
     position: 0,
     createdAt: '',

@@ -7,18 +7,18 @@ import {
   Lock,
   TrendingUp
 } from 'lucide-react';
-import type { KnowledgeItem, RoadmapStage, ShortPlanDay } from '../../../../shared/types';
+import type { KnowledgeItem, NearTermPlanItem, RoadmapStage } from '../../../../shared/types';
 
 export function RoadmapTree({
   stages,
-  shortPlanDays,
+  nearTermPlanItems,
   knowledgeItems,
   collapsed,
   onToggleCollapse,
   onSelectTask
 }: {
   stages: RoadmapStage[];
-  shortPlanDays: ShortPlanDay[];
+  nearTermPlanItems: NearTermPlanItem[];
   knowledgeItems: KnowledgeItem[];
   collapsed: boolean;
   onToggleCollapse: () => void;
@@ -39,10 +39,10 @@ export function RoadmapTree({
 
   if (collapsed) return <></>;
 
-  function getDayStatus(days: ShortPlanDay[]): 'done' | 'active' | 'pending' | 'locked' {
-    if (days.length === 0) return 'pending';
-    if (days.every((d) => d.sessionStatus === 'completed')) return 'done';
-    if (days.some((d) => d.sessionStatus === 'active')) return 'active';
+  function getPlanStatus(items: NearTermPlanItem[]): 'done' | 'active' | 'pending' | 'locked' {
+    if (items.length === 0) return 'pending';
+    if (items.every((item) => item.sessionStatus === 'completed')) return 'done';
+    if (items.some((item) => item.sessionStatus === 'active')) return 'active';
     return 'pending';
   }
 
@@ -62,9 +62,9 @@ export function RoadmapTree({
       </div>
       <div className="roadmap-tree">
         {stages.map((stage) => {
-          const days = shortPlanDays.filter((d) => d.roadmapStageId === stage.id);
+          const items = nearTermPlanItems.filter((item) => item.roadmapStageId === stage.id);
           const isExpanded = expandedStages.has(stage.id);
-          const status = getDayStatus(days);
+          const status = getPlanStatus(items);
           return (
             <div key={stage.id}>
               <div
@@ -77,16 +77,16 @@ export function RoadmapTree({
               </div>
               {isExpanded && (
                 <div className="tree-children">
-                  {days.map((day) => (
+                  {items.map((item) => (
                     <div
-                      key={day.id}
+                      key={item.id}
                       className={`tree-node ${onSelectTask ? 'is-interactive' : ''}`}
-                      onClick={onSelectTask ? () => onSelectTask(day.id) : undefined}
-                      title={day.title}
+                      onClick={onSelectTask ? () => onSelectTask(item.id) : undefined}
+                      title={item.title}
                     >
-                      <span className={`dot ${day.sessionStatus === 'completed' ? 'done' : day.sessionStatus === 'active' ? 'active' : 'pending'}`} />
-                      <span className="label">{day.title}</span>
-                      {day.locked && <Lock size={10} style={{ color: 'var(--color-text-subtle)', opacity: 0.5 }} />}
+                      <span className={`dot ${item.sessionStatus === 'completed' ? 'done' : item.sessionStatus === 'active' ? 'active' : 'pending'}`} />
+                      <span className="label">{item.title}</span>
+                      {item.locked && <Lock size={10} style={{ color: 'var(--color-text-subtle)', opacity: 0.5 }} />}
                     </div>
                   ))}
                 </div>

@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PlanningModule, type PlanningStore, type PrepareCurrentLearningDayDeps } from './planning';
+import { PlanningModule, type PlanningStore, type PrepareCurrentLearningUnitDeps } from './planning';
 
 function fixture(overrides: Partial<PlanningStore> = {}) {
   const goal = { id: 'goal-1' } as any;
   const day = {
-    id: 'day-1', roadmapStageId: 'stage-1', dayIndex: 1, title: '第一天', sessionStatus: 'pending', date: null
+    id: 'day-1', roadmapStageId: 'stage-1', itemIndex: 1, title: '第一天', sessionStatus: 'pending', date: null
   } as any;
   const store = {
     getActiveGuide: vi.fn().mockResolvedValue({ goal, roadmap: [{ id: 'stage-1', status: 'active' }], shortPlan: [day], guide: null }),
-    getUsedShortPlanDayIds: vi.fn().mockResolvedValue(new Set<string>()),
-    activateShortPlanDay: vi.fn().mockResolvedValue(day),
+    getUsedNearTermPlanItemIds: vi.fn().mockResolvedValue(new Set<string>()),
+    activateNearTermPlanItem: vi.fn().mockResolvedValue(day),
     getPreviousCompletedLearningDayContext: vi.fn().mockResolvedValue(null),
     getGoalBriefForGoal: vi.fn().mockResolvedValue({}),
     getPromptProfile: vi.fn().mockResolvedValue({ id: 'profile-1', activeVersionId: 'version-1' }),
@@ -24,14 +24,14 @@ function fixture(overrides: Partial<PlanningStore> = {}) {
     ...overrides
   } as unknown as PlanningStore;
   const deps = {
-    runAgentTool: vi.fn().mockResolvedValue({
+    startAgentTurn: vi.fn().mockResolvedValue({
       runReviewId: 'run-1',
       output: { tasks: [] }
     }),
     getRuntimeSettings: vi.fn().mockResolvedValue({ dailyStudyWindows: [], deepseekModel: 'test-model' }),
     createTraceId: () => 'trace-1',
     todayIso: () => '2026-07-11'
-  } as unknown as PrepareCurrentLearningDayDeps;
+  } as unknown as PrepareCurrentLearningUnitDeps;
   return { store, deps };
 }
 
@@ -41,21 +41,21 @@ describe('PlanningModule', () => {
       getActiveGuide: vi.fn().mockResolvedValue({ goal: { id: 'goal-1' }, roadmap: [], shortPlan: [], guide: null })
     });
 
-    const result = await new PlanningModule(store).prepareCurrentLearningDay({}, deps);
+    const result = await new PlanningModule(store).prepareCurrentLearningUnit({}, deps);
 
-    expect(result.todayState).toBe('plan_exhausted');
-    expect(deps.runAgentTool).not.toHaveBeenCalled();
+    expect(result.preparationState).toBe('plan_exhausted');
+    expect(deps.startAgentTurn).not.toHaveBeenCalled();
   });
 
   it('AI 失败时保留已激活计划日并允许后续重试', async () => {
     const { store, deps } = fixture();
-    vi.mocked(deps.runAgentTool).mockRejectedValue(new Error('模型超时'));
+    vi.mocked(deps.startAgentTurn).mockRejectedValue(new Error('模型超时'));
 
-    const result = await new PlanningModule(store).prepareCurrentLearningDay({}, deps);
+    const result = await new PlanningModule(store).prepareCurrentLearningUnit({}, deps);
 
-    expect(result).toEqual({ todayState: 'generation_failed', errorMessage: '模型超时' });
-    expect(store.activateShortPlanDay).toHaveBeenCalledWith('day-1');
-    expect(store.ensureDraftDailyGuide).toHaveBeenCalledWith(expect.objectContaining({ shortPlanDayId: 'day-1' }));
+    expect(result).toEqual({ preparationState: 'generation_failed', errorMessage: '模型超时' });
+    expect(store.activateNearTermPlanItem).toHaveBeenCalledWith('day-1');
+    expect(store.ensureDraftDailyGuide).toHaveBeenCalledWith(expect.objectContaining({ nearTermPlanItemId: 'day-1' }));
     expect(store.saveDailyGuideWithTransaction).not.toHaveBeenCalled();
     expect(store.releaseGenerationLock).toHaveBeenCalledWith('daily_guide:goal-1');
   });
@@ -65,20 +65,20 @@ describe('PlanningModule', () => {
       ensureDraftDailyGuide: vi.fn().mockRejectedValue(new Error('草稿写入失败'))
     });
 
-    const result = await new PlanningModule(store).prepareCurrentLearningDay({}, deps);
+    const result = await new PlanningModule(store).prepareCurrentLearningUnit({}, deps);
 
-    expect(result).toEqual({ todayState: 'generation_failed', errorMessage: '草稿写入失败' });
-    expect(deps.runAgentTool).not.toHaveBeenCalled();
+    expect(result).toEqual({ preparationState: 'generation_failed', errorMessage: '草稿写入失败' });
+    expect(deps.startAgentTurn).not.toHaveBeenCalled();
   });
 
   it('运行设置读取失败时仍返回可重试结果，不依赖已加载模型信息', async () => {
     const { store, deps } = fixture();
     vi.mocked(deps.getRuntimeSettings).mockRejectedValue(new Error('设置读取失败'));
 
-    const result = await new PlanningModule(store).prepareCurrentLearningDay({}, deps);
+    const result = await new PlanningModule(store).prepareCurrentLearningUnit({}, deps);
 
-    expect(result).toEqual({ todayState: 'generation_failed', errorMessage: '设置读取失败' });
-    expect(deps.runAgentTool).not.toHaveBeenCalled();
+    expect(result).toEqual({ preparationState: 'generation_failed', errorMessage: '设置读取失败' });
+    expect(deps.startAgentTurn).not.toHaveBeenCalled();
   });
 
   it('AI 输出保存失败时保留草稿并返回可重试结果', async () => {
@@ -86,25 +86,25 @@ describe('PlanningModule', () => {
       saveDailyGuideWithTransaction: vi.fn().mockRejectedValue(new Error('执行稿保存失败'))
     });
 
-    const result = await new PlanningModule(store).prepareCurrentLearningDay({}, deps);
+    const result = await new PlanningModule(store).prepareCurrentLearningUnit({}, deps);
 
-    expect(result).toEqual({ todayState: 'generation_failed', errorMessage: '执行稿保存失败' });
-    expect(deps.runAgentTool).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ preparationState: 'generation_failed', errorMessage: '执行稿保存失败' });
+    expect(deps.startAgentTurn).toHaveBeenCalledTimes(1);
   });
 
   it('同一目标的并发准备共享一次生成任务', async () => {
     const { store, deps } = fixture();
     let resolve!: (value: any) => void;
-    vi.mocked(deps.runAgentTool).mockImplementation(() => new Promise((done) => { resolve = done; }));
+    vi.mocked(deps.startAgentTurn).mockImplementation(() => new Promise((done) => { resolve = done; }));
     const planning = new PlanningModule(store);
 
-    const first = planning.prepareCurrentLearningDay({}, deps);
-    await vi.waitFor(() => expect(deps.runAgentTool).toHaveBeenCalledTimes(1));
-    const second = planning.prepareCurrentLearningDay({}, deps);
+    const first = planning.prepareCurrentLearningUnit({}, deps);
+    await vi.waitFor(() => expect(deps.startAgentTurn).toHaveBeenCalledTimes(1));
+    const second = planning.prepareCurrentLearningUnit({}, deps);
     resolve({ runReviewId: 'run-1', output: { tasks: [] } });
 
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
-    expect(deps.runAgentTool).toHaveBeenCalledTimes(1);
+    expect(deps.startAgentTurn).toHaveBeenCalledTimes(1);
     expect(store.acquireGenerationLock).toHaveBeenCalledTimes(1);
   });
 
@@ -118,7 +118,7 @@ describe('PlanningModule', () => {
 
     await expect(new PlanningModule(store).advanceLearningDay({}, {
       ...deps, generateReview: vi.fn()
-    })).rejects.toThrow('当前学习日还有未完成任务');
+    })).rejects.toThrow('还有进行中或待处理的 Task');
     expect(store.closeCurrentSession).not.toHaveBeenCalled();
   });
 
@@ -136,7 +136,7 @@ describe('PlanningModule', () => {
     });
 
     expect(store.closeCurrentSession).toHaveBeenCalledWith('guide-1');
-    expect(result.todayState).toBe('plan_exhausted');
+    expect(result.preparationState).toBe('plan_exhausted');
     expect(result.review).toBeNull();
   });
 
@@ -157,11 +157,11 @@ describe('PlanningModule', () => {
     expect(generateReview).not.toHaveBeenCalled();
   });
 
-  it('只有全部主任务完成时才关闭学习日', async () => {
+  it('所有 Task 已完成或放弃时都可以关闭学习单元', async () => {
     const { store } = fixture({
       getActiveGuide: vi.fn()
         .mockResolvedValueOnce({ guide: { id: 'guide-1', tasks: [{ status: 'active' }] } })
-        .mockResolvedValueOnce({ guide: { id: 'guide-1', tasks: [{ status: 'done' }] } })
+        .mockResolvedValueOnce({ guide: { id: 'guide-1', tasks: [{ status: 'done' }, { status: 'skipped' }] } })
     });
     const planning = new PlanningModule(store);
 

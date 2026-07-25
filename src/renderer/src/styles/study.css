@@ -174,3 +174,26 @@
   .study-current-step-panel { min-height: 0; padding: 22px 20px; }
   .study-submit-inline { align-items: stretch; flex-direction: column; }
 }
+.task-closure-panel {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.7fr) minmax(180px, 1fr) minmax(180px, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  max-width: min(100%, 980px);
+}
+
+.task-closure-panel select,
+.task-closure-panel input {
+  min-width: 0;
+}
+
+.task-closure-panel .micro-hint {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 900px) {
+  .task-closure-panel {
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+}

@@ -18,22 +18,22 @@ export function registerIpcHandlers(appService: AppService): void {
   ipcMain.handle(ipcChannels.guidesGenerateLayeredPlan, (_event, payload) =>
     appService.generateLayeredPlan(payload.goalId)
   );
-  ipcMain.handle(ipcChannels.guidesConfirmDailyGuide, (_event, payload) =>
-    appService.confirmDailyGuide(payload.guideId)
+  ipcMain.handle(ipcChannels.guidesConfirmLearningGuide, (_event, payload) =>
+    appService.confirmLearningGuide(payload.guideId)
   );
-  ipcMain.handle(ipcChannels.guidesArchiveTodayAndRestart, () => appService.archiveTodayAndRestart());
-  ipcMain.handle(ipcChannels.guidesPrepareCurrentLearningDay, (_event, payload) =>
-    appService.prepareCurrentLearningDay(payload?.forceRetry)
+  ipcMain.handle(ipcChannels.guidesResetLearningWorkspace, () => appService.resetLearningWorkspace());
+  ipcMain.handle(ipcChannels.guidesPrepareCurrentLearningUnit, (_event, payload) =>
+    appService.prepareCurrentLearningUnit(payload?.forceRetry)
   );
   ipcMain.handle(ipcChannels.guidesStartNextSession, (_event, payload) => appService.startNextSession(payload?.goalId));
   ipcMain.handle(ipcChannels.guidesGenerateRollingPlan, (_event, payload) =>
     appService.generateRollingPlan(payload.goalId)
   );
-  ipcMain.handle(ipcChannels.guidesGetTodayState, () => appService.getTodayState());
-  ipcMain.handle(ipcChannels.guidesListToday, () => appService.listTodayGuide());
+  ipcMain.handle(ipcChannels.guidesGetPreparationState, () => appService.getPreparationState());
+  ipcMain.handle(ipcChannels.guidesGetOverview, () => appService.getOverview());
   ipcMain.handle(ipcChannels.sessionsStart, (_event, payload) => appService.startSession(payload.taskId));
   ipcMain.handle(ipcChannels.sessionsPause, (_event, payload) => appService.pauseSession(payload.sessionId));
-  ipcMain.handle(ipcChannels.sessionsSkip, () => appService.skipCurrentTask());
+  ipcMain.handle(ipcChannels.sessionsEnd, (_event, payload) => appService.endSession(payload.sessionId));
   ipcMain.handle(ipcChannels.sessionsGetAccumulated, (_event, payload) =>
     appService.getAccumulatedSeconds(payload.blockId, payload.excludeSessionId)
   );
@@ -41,12 +41,39 @@ export function registerIpcHandlers(appService: AppService): void {
   ipcMain.handle(ipcChannels.learningTeachCurrentStep, (_event, payload) =>
     appService.teachCurrentStep(payload?.promptProfileId)
   );
+  ipcMain.handle(ipcChannels.learningResumeTurn, (_event, payload) =>
+    appService.resumeLearningTurn(
+      payload.pendingInteractionId,
+      payload.answer,
+      payload.expectedContextVersion
+    )
+  );
+  ipcMain.handle(ipcChannels.learningCancelTurn, (_event, payload) =>
+    appService.cancelLearningTurn(payload.pendingInteractionId)
+  );
   ipcMain.handle(ipcChannels.learningCompleteCurrentAction, () => appService.completeCurrentAction());
   ipcMain.handle(ipcChannels.learningSkipCurrentAction, () => appService.skipCurrentAction());
-  ipcMain.handle(ipcChannels.learningSkipCurrentTask, () => appService.skipCurrentTask());
+  ipcMain.handle(ipcChannels.learningCloseCurrentTask, (_event, payload) =>
+    appService.closeCurrentTask(payload)
+  );
   ipcMain.handle(ipcChannels.learningTerminateLearning, () => appService.terminateLearning());
   ipcMain.handle(ipcChannels.learningAskQuestion, (_event, payload) =>
     appService.askStepQuestion(payload.question, payload?.promptProfileId)
+  );
+  ipcMain.handle(ipcChannels.learningAskTemporaryQuestion, (_event, payload) =>
+    appService.askTemporaryQuestion(payload.question, payload?.promptProfileId, payload?.threadId)
+  );
+  ipcMain.handle(ipcChannels.learningGetLatestTemporaryQuestion, () =>
+    appService.getLatestTemporaryQuestion()
+  );
+  ipcMain.handle(ipcChannels.learningLinkTemporaryQuestionToGoal, (_event, payload) =>
+    appService.linkTemporaryQuestionToGoal(payload.threadId, payload.goalId)
+  );
+  ipcMain.handle(ipcChannels.learningKeepTemporaryQuestion, (_event, payload) =>
+    appService.keepTemporaryQuestion(payload.threadId)
+  );
+  ipcMain.handle(ipcChannels.learningConvertTemporaryQuestionToTask, (_event, payload) =>
+    appService.convertTemporaryQuestionToTask(payload.threadId, payload.goalId)
   );
   ipcMain.handle(ipcChannels.learningResolveQuestion, (_event, payload) =>
     appService.resolveQuestion(payload.threadId, payload?.summary)
@@ -57,12 +84,21 @@ export function registerIpcHandlers(appService: AppService): void {
   ipcMain.handle(ipcChannels.learningRetrySubmissionEvaluation, (_event, payload) =>
     appService.retrySubmissionEvaluation(payload.submissionId, payload?.promptProfileId)
   );
+  ipcMain.handle(ipcChannels.learningDecideRecommendation, (_event, payload) =>
+    appService.decideEvaluationRecommendation(payload.evaluationId, payload.decision, payload.reason)
+  );
+  ipcMain.handle(ipcChannels.learningCorrectEvaluation, (_event, payload) =>
+    appService.recordEvaluationCorrection(payload.evaluationId, payload.reason)
+  );
   ipcMain.handle(ipcChannels.learningDecideAdjustment, (_event, payload) =>
     appService.decidePlanAdjustment(payload.proposalId, payload.status)
   );
   ipcMain.handle(ipcChannels.reviewsGenerate, (_event, payload) => appService.generateReview(payload.date));
   ipcMain.handle(ipcChannels.reviewsGetLatest, (_event, payload) => appService.getLatestReview(payload?.date));
   ipcMain.handle(ipcChannels.knowledgeListForGoal, (_event, payload) => appService.getKnowledgeItemsForGoal(payload));
+  ipcMain.handle(ipcChannels.knowledgeSetStatus, (_event, payload) =>
+    appService.setKnowledgeItemStatus(payload.itemId, payload.status)
+  );
   ipcMain.handle(ipcChannels.learnerContextProposeFact, (_event, payload) => appService.proposeLearnerFact(payload.goalId, payload.fact));
   ipcMain.handle(ipcChannels.learnerContextListForGoal, (_event, payload) => appService.listLearnerFacts(payload.goalId, payload?.scope));
   ipcMain.handle(ipcChannels.learnerContextConfirmFact, (_event, payload) => appService.confirmLearnerFact(payload.goalId, payload.key, payload.scope, payload.taskId));
@@ -79,6 +115,7 @@ export function registerIpcHandlers(appService: AppService): void {
     appService.resolveLearningUnit(payload.guideId, payload.decision)
   );
   ipcMain.handle(ipcChannels.dataExportGoal, (_event, payload) => appService.exportGoalData(payload.goalId));
+  ipcMain.handle(ipcChannels.dataListGoals, () => appService.listGoals());
   ipcMain.handle(ipcChannels.dataGetPlanVersions, (_event, payload) => appService.getPlanVersionsForGoal(payload.goalId));
   ipcMain.handle(ipcChannels.dataCreatePlanProposal, (_event, payload) => appService.createPlanProposal(payload.goalId, payload.proposal));
   ipcMain.handle(ipcChannels.dataConfirmPlanProposal, (_event, payload) => appService.confirmPlanProposal(payload.proposalId));
