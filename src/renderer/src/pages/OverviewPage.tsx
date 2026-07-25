@@ -412,22 +412,6 @@ export function OverviewPage({
             历史会话
           </button>
         </aside>}
-
-        {showHistory && (
-          <HistoryPanel
-            list={historyList}
-            pending={historyPending}
-            selected={selectedHistoryIntake}
-            onSelect={(item) => { void loadHistoryIntake(item.intake.id); }}
-            onRegenerate={async (item) => {
-              if (item.intake.goalId) {
-                setShowHistory(false);
-                await onGenerateLayeredPlan(item.intake.goalId);
-              }
-            }}
-            onClose={() => { setShowHistory(false); setSelectedHistoryIntake(null); }}
-          />
-        )}
       </section>
     );
   }

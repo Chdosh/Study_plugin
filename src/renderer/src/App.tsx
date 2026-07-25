@@ -122,6 +122,16 @@ export default function App(): JSX.Element {
     }
   }
 
+  const handleAskQuestion = (question: string) => runAction('回答问题', async () => {
+    const result = await window.studyApp.learning.askQuestion(question);
+    setQuestionAnswer(result);
+    setLearningState(await window.studyApp.learning.getState());
+  });
+
+  const handleResolveQuestion = (threadId: string) => runAction('结束问题分支', async () => {
+    setLearningState(await window.studyApp.learning.resolveQuestion(threadId));
+  });
+
   async function submitResultAndSyncSession(content: string): Promise<void> {
     try {
       const result = await window.studyApp.learning.submitResult(content);
@@ -428,14 +438,8 @@ export default function App(): JSX.Element {
                   await syncActiveSession();
                   setTeaching(null);
                 })}
-                onAskQuestion={(question) => runAction('回答提问', async () => {
-                  const result = await window.studyApp.learning.askQuestion(question);
-                  setQuestionAnswer(result);
-                  setLearningState(await window.studyApp.learning.getState());
-                })}
-                onResolveQuestion={(threadId) => runAction('结束问题分支', async () => {
-                  setLearningState(await window.studyApp.learning.resolveQuestion(threadId));
-                })}
+                onAskQuestion={handleAskQuestion}
+                onResolveQuestion={handleResolveQuestion}
                 onSubmitResult={(content) => runAction('提交学习结果', async () => {
                   await submitResultAndSyncSession(content);
                 })}
@@ -521,20 +525,16 @@ export default function App(): JSX.Element {
           </div>
         </main>
       }
-      teacher={view === 'study' ? (
+      teacher={view === 'study' && !teacherDrawerOpen ? (
         <TeacherSidebar
           knowledgeItems={knowledgeItems}
           collapsed={teacherCollapsed}
           onToggleCollapse={() => setTeacherCollapsed((c) => !c)}
-          onAskQuestion={(question) => runAction('回答问题', async () => {
-            const result = await window.studyApp.learning.askQuestion(question);
-            setQuestionAnswer(result);
-            setLearningState(await window.studyApp.learning.getState());
-          })}
+          onAskQuestion={handleAskQuestion}
           contextSummary={learningState?.dailyGuideAction?.title ?? learningState?.dailyGuideTask?.title}
           questionAnswer={questionAnswer}
           activeThreadId={learningState?.questionThread?.id ?? null}
-          onResolveQuestion={(threadId) => void runAction('结束问题分支', async () => { setLearningState(await window.studyApp.learning.resolveQuestion(threadId)); })}
+          onResolveQuestion={handleResolveQuestion}
         />
       ) : undefined}
     />
@@ -542,11 +542,7 @@ export default function App(): JSX.Element {
         <RoadmapTree stages={todayGuide?.roadmap ?? []} nearTermPlanItems={todayGuide?.shortPlan ?? []} knowledgeItems={knowledgeItems} collapsed={false} onToggleCollapse={() => setRoadmapDrawerOpen(false)} />
       </Drawer>
       <Drawer open={teacherDrawerOpen} title="AI 导师" onClose={() => setTeacherDrawerOpen(false)}>
-        <TeacherSidebar knowledgeItems={knowledgeItems} collapsed={false} onToggleCollapse={() => setTeacherDrawerOpen(false)} contextSummary={learningState?.dailyGuideAction?.title ?? learningState?.dailyGuideTask?.title} questionAnswer={questionAnswer} activeThreadId={learningState?.questionThread?.id ?? null} onResolveQuestion={(threadId) => void runAction('结束问题分支', async () => { setLearningState(await window.studyApp.learning.resolveQuestion(threadId)); })} onAskQuestion={(question) => runAction('回答问题', async () => {
-          const result = await window.studyApp.learning.askQuestion(question);
-          setQuestionAnswer(result);
-          setLearningState(await window.studyApp.learning.getState());
-        })} />
+        <TeacherSidebar knowledgeItems={knowledgeItems} collapsed={false} onToggleCollapse={() => setTeacherDrawerOpen(false)} contextSummary={learningState?.dailyGuideAction?.title ?? learningState?.dailyGuideTask?.title} questionAnswer={questionAnswer} activeThreadId={learningState?.questionThread?.id ?? null} onResolveQuestion={handleResolveQuestion} onAskQuestion={handleAskQuestion} />
     </Drawer>
     </>
   );
