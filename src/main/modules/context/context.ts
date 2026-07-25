@@ -17,8 +17,14 @@ export interface ProcessEvaluationParams {
   submissionId: string;
   evaluationId: string;
   evaluationOutput: SubmissionEvaluationAgentOutput;
-  taskDoneWhen?: string[];
-  taskTitle?: string;
+}
+
+export interface ProcessConversationEvaluationParams {
+  goalId: string;
+  taskId?: string;
+  sourceId: string;
+  correctParts: string[];
+  misconceptions: string[];
 }
 
 export class LearnerContextModule {
@@ -57,33 +63,66 @@ export class LearnerContextModule {
   }
 
   async processEvaluationResult(params: ProcessEvaluationParams): Promise<void> {
-    const { goalId, taskId, submissionId, evaluationId, evaluationOutput, taskDoneWhen, taskTitle } = params;
+    const { goalId, taskId, submissionId, evaluationId, evaluationOutput } = params;
 
-    if (evaluationOutput.misconceptions.length > 0 || evaluationOutput.missingRequirements.length > 0) {
+    if (
+      evaluationOutput.correctParts.length > 0
+      || evaluationOutput.misconceptions.length > 0
+      || evaluationOutput.missingRequirements.length > 0
+    ) {
       await this.store.recordKnowledgeItems({
         goalId,
         items: [
+          ...evaluationOutput.correctParts.map((part) => ({
+            key: part.slice(0, 50),
+            summary: part,
+            sourceType: 'insight' as const,
+            sourceId: `${submissionId}:correct:${part.slice(0, 24)}`,
+            evidence: { submissionId, evaluationId, taskId }
+          })),
           ...evaluationOutput.misconceptions.map((m) => ({
             key: m.slice(0, 50),
             summary: m,
             sourceType: 'misconception' as const,
-            sourceId: submissionId
+            sourceId: `${submissionId}:misconception:${m.slice(0, 24)}`,
+            evidence: { submissionId, evaluationId, taskId }
           })),
           ...evaluationOutput.missingRequirements.map((m) => ({
             key: m.slice(0, 50),
             summary: m,
             sourceType: 'weakness' as const,
-            sourceId: submissionId
+            sourceId: `${submissionId}:weakness:${m.slice(0, 24)}`,
+            evidence: { submissionId, evaluationId, taskId }
           }))
         ]
       });
     }
+  }
 
-    if (evaluationOutput.result === 'passed' && evaluationOutput.misconceptions.length === 0 && evaluationOutput.missingRequirements.length === 0) {
-      const resolveKeys = [...(taskDoneWhen ?? []), taskTitle].filter(Boolean) as string[];
-      if (resolveKeys.length > 0) {
-        await this.store.resolveKnowledgeItems(goalId, resolveKeys);
-      }
+  async processConversationEvaluation(
+    params: ProcessConversationEvaluationParams
+  ): Promise<void> {
+    const items = [
+      ...params.misconceptions.slice(0, 3).map((summary) => ({
+        key: summary.slice(0, 50),
+        summary,
+        sourceType: 'misconception' as const,
+        sourceId: params.sourceId,
+        evidence: { taskId: params.taskId }
+      })),
+      ...params.correctParts.slice(0, 3).map((summary) => ({
+        key: summary.slice(0, 50),
+        summary,
+        sourceType: 'insight' as const,
+        sourceId: params.sourceId,
+        evidence: { taskId: params.taskId }
+      }))
+    ];
+    if (items.length > 0) {
+      await this.store.recordKnowledgeItems({
+        goalId: params.goalId,
+        items
+      });
     }
   }
 }
