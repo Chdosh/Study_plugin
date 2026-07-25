@@ -21,6 +21,7 @@
   "include": [
     "electron.vite.config.ts",
     "src/main/**/*.ts",
+    "src/migration-v1-v2/**/*.ts",
     "src/preload/**/*.ts",
     "src/shared/**/*.ts",
     "scripts/**/*.mjs",

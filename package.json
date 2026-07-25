@@ -29,7 +29,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "db:upgrade-v2": "vite-node src/migration-v1-v2/cli.ts",
+    "db:restore-v1": "vite-node src/migration-v1-v2/cli.ts restore"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",

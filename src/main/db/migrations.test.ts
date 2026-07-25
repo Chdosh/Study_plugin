@@ -1,27 +1,213 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createClient } from '@libsql/client';
+import { afterEach, describe, expect, it } from 'vitest';
 import { createDatabase } from './client';
 import { databaseMigrations, runDatabaseMigrations } from './migrations';
 
 const tempPaths: string[] = [];
 
-function tempDatabasePath(): string {
-  const path = mkdtempSync(join(tmpdir(), 'study-migration-test-'));
+describe('V2 database bootstrap', () => {
+  afterEach(async () => {
+    for (const path of tempPaths.splice(0)) await removeTempDir(path);
+  });
+
+  it('creates a clean V2 database without legacy tables', async () => {
+    const created = await createDatabase(tempPath());
+    try {
+      const version = await created.client.execute(
+        `SELECT value FROM app_settings WHERE key = 'schemaVersion'`
+      );
+      const legacy = await created.client.execute(`
+        SELECT name FROM sqlite_master
+        WHERE type = 'table'
+          AND name IN (
+            'task_items', 'daily_plans', 'daily_plan_blocks', 'daily_guide_blocks',
+            'learning_steps', 'next_step_decisions', 'plan_adjustment_proposals'
+          )
+      `);
+      const foreignKeys = await created.client.execute('PRAGMA foreign_key_check');
+      expect(version.rows[0]?.value).toBe('study-v2');
+      expect(legacy.rows).toHaveLength(0);
+      expect(foreignKeys.rows).toHaveLength(0);
+    } finally {
+      created.client.close();
+    }
+  });
+
+  it('keeps V2 bootstrap idempotent and preserves facts', async () => {
+    const path = tempPath();
+    const first = await createDatabase(path);
+    await first.client.execute({
+      sql: `INSERT INTO goals (
+        id, title, description, status, priority, due_date, created_at, updated_at
+      ) VALUES (?, ?, NULL, 'active', 3, NULL, ?, ?)`,
+      args: ['goal-preserved', '保留目标', '2026-07-23T00:00:00.000Z', '2026-07-23T00:00:00.000Z']
+    });
+    first.client.close();
+
+    const second = await createDatabase(path);
+    try {
+      const goal = await second.client.execute(
+        `SELECT title FROM goals WHERE id = 'goal-preserved'`
+      );
+      expect(goal.rows[0]?.title).toBe('保留目标');
+    } finally {
+      second.client.close();
+    }
+  });
+
+  it('requires rollback SQL for every future V2 migration', () => {
+    for (const migration of databaseMigrations) {
+      expect(migration.rollbackSql.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it('adds and rolls back the single Task closure reason field', async () => {
+    const created = await createDatabase(tempPath());
+    try {
+      const migration = databaseMigrations.find((item) =>
+        item.id === '2026-07-24-task-closure-reason'
+      )!;
+      let columns = await created.client.execute('PRAGMA table_info(learning_tasks)');
+      expect(columns.rows.map((row) => row.name)).toContain('closure_reason');
+
+      await created.client.executeMultiple(migration.rollbackSql);
+      columns = await created.client.execute('PRAGMA table_info(learning_tasks)');
+      expect(columns.rows.map((row) => row.name)).not.toContain('closure_reason');
+
+      await runDatabaseMigrations(created.client);
+      columns = await created.client.execute('PRAGMA table_info(learning_tasks)');
+      expect(columns.rows.map((row) => row.name)).toContain('closure_reason');
+    } finally {
+      created.client.close();
+    }
+  });
+
+  it('rolls back the Guide supplement columns explicitly', async () => {
+    const created = await createDatabase(tempPath());
+    try {
+      const migration = databaseMigrations.find((item) =>
+        item.id === '2026-07-24-learning-action-agent-supplement'
+      )!;
+      await created.client.executeMultiple(migration.rollbackSql);
+      const columns = await created.client.execute('PRAGMA table_info(learning_actions)');
+      const names = columns.rows.map((row) => row.name);
+      expect(names).not.toContain('origin');
+      expect(names).not.toContain('source_ai_review_id');
+
+      await runDatabaseMigrations(created.client);
+      const reappliedColumns = await created.client.execute('PRAGMA table_info(learning_actions)');
+      const reappliedNames = reappliedColumns.rows.map((row) => row.name);
+      expect(reappliedNames).toContain('origin');
+      expect(reappliedNames).toContain('source_ai_review_id');
+    } finally {
+      created.client.close();
+    }
+  });
+
+  it('migrates and rolls back Roadmap checkpoint dates without touching stages', async () => {
+    const created = await createDatabase(tempPath());
+    try {
+      await created.client.execute({
+        sql: `INSERT INTO goals (
+          id, title, description, status, priority, due_date, created_at, updated_at
+        ) VALUES (?, ?, NULL, 'active', 3, ?, ?, ?)`,
+        args: [
+          'goal-checkpoint',
+          '一个月目标',
+          '2026-08-24',
+          '2026-07-24T00:00:00.000Z',
+          '2026-07-24T00:00:00.000Z'
+        ]
+      });
+      await created.client.execute({
+        sql: `INSERT INTO roadmap_stages (
+          id, goal_id, title, objective, direction, success_criteria,
+          target_date, status, position, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 0, ?, ?)`,
+        args: [
+          'stage-checkpoint',
+          'goal-checkpoint',
+          '基础',
+          '完成基础',
+          '从练习开始',
+          '能独立完成练习',
+          '2026-08-01',
+          '2026-07-24T00:00:00.000Z',
+          '2026-07-24T00:00:00.000Z'
+        ]
+      });
+      const migration = databaseMigrations.find((item) =>
+        item.id === '2026-07-24-roadmap-stage-target-date'
+      )!;
+      await created.client.executeMultiple(migration.rollbackSql);
+      const afterRollback = await created.client.execute('PRAGMA table_info(roadmap_stages)');
+      expect(afterRollback.rows.map((row) => row.name)).not.toContain('target_date');
+      expect((await created.client.execute(
+        `SELECT COUNT(*) AS count FROM roadmap_stages WHERE id = 'stage-checkpoint'`
+      )).rows[0]?.count).toBe(1);
+
+      await runDatabaseMigrations(created.client);
+      const afterReapply = await created.client.execute('PRAGMA table_info(roadmap_stages)');
+      expect(afterReapply.rows.map((row) => row.name)).toContain('target_date');
+      expect((await created.client.execute(
+        `SELECT target_date FROM roadmap_stages WHERE id = 'stage-checkpoint'`
+      )).rows[0]?.target_date).toBeNull();
+    } finally {
+      created.client.close();
+    }
+  });
+
+  it('migrates and rolls back append-only evaluation correction metadata', async () => {
+    const created = await createDatabase(tempPath());
+    try {
+      const migration = databaseMigrations.find((item) =>
+        item.id === '2026-07-24-evaluation-correction-metadata'
+      )!;
+      let columns = await created.client.execute('PRAGMA table_info(learning_evaluations)');
+      expect(columns.rows.map((row) => row.name)).toEqual(expect.arrayContaining([
+        'recommendation_decision_reason',
+        'source',
+        'supersedes_evaluation_id',
+        'correction_reason'
+      ]));
+
+      await created.client.executeMultiple(migration.rollbackSql);
+      columns = await created.client.execute('PRAGMA table_info(learning_evaluations)');
+      expect(columns.rows.map((row) => row.name)).not.toContain('correction_reason');
+
+      await runDatabaseMigrations(created.client);
+      columns = await created.client.execute('PRAGMA table_info(learning_evaluations)');
+      expect(columns.rows.map((row) => row.name)).toContain('correction_reason');
+    } finally {
+      created.client.close();
+    }
+  });
+
+  it('refuses to open an unverified file as the formal V2 database', async () => {
+    const path = tempPath();
+    const raw = createClient({ url: `file:${join(path, 'study-supervisor-v2.db')}` });
+    await raw.execute('CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)');
+    await raw.execute({
+      sql: `INSERT INTO app_settings (key, value, updated_at) VALUES ('schemaVersion', 'unknown', ?)`,
+      args: ['2026-07-23T00:00:00.000Z']
+    });
+    raw.close();
+
+    await expect(createDatabase(path)).rejects.toThrow('Runtime 拒绝加载');
+  });
+});
+
+function tempPath(): string {
+  const path = mkdtempSync(join(tmpdir(), 'study-v2-db-test-'));
   tempPaths.push(path);
   return path;
 }
 
-afterEach(async () => {
-  vi.restoreAllMocks();
-  for (const path of tempPaths.splice(0)) {
-    await removeTempDir(path);
-  }
-});
-
 async function removeTempDir(path: string): Promise<void> {
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
       rmSync(path, { recursive: true, force: true });
       return;
@@ -31,142 +217,3 @@ async function removeTempDir(path: string): Promise<void> {
     }
   }
 }
-
-describe('database migration matrix', () => {
-  it('全新空库建立当前 schema，并登记全部 migration 且无跳过日志', async () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-    const created = await createDatabase(tempDatabasePath());
-    try {
-      const applied = await created.client.execute('SELECT id FROM schema_migrations ORDER BY id');
-      const foreignKeys = await created.client.execute('PRAGMA foreign_key_check');
-
-      expect(applied.rows.map((row) => row.id)).toEqual(databaseMigrations.map(({ id }) => id).sort());
-      expect(foreignKeys.rows).toHaveLength(0);
-      expect(log).not.toHaveBeenCalled();
-    } finally {
-      created.client.close();
-    }
-  });
-
-  it('已升级库重复启动保持幂等并保留正式数据', async () => {
-    const path = tempDatabasePath();
-    const first = await createDatabase(path);
-    await first.client.execute({
-      sql: `INSERT INTO goals (id, title, description, status, priority, created_at, updated_at)
-            VALUES (?, ?, ?, 'active', 3, ?, ?)`,
-      args: ['goal-preserved', '保留目标', '迁移重复启动测试', '2026-07-11T00:00:00.000Z', '2026-07-11T00:00:00.000Z']
-    });
-    first.client.close();
-
-    const second = await createDatabase(path);
-    try {
-      const goal = await second.client.execute({ sql: 'SELECT title FROM goals WHERE id = ?', args: ['goal-preserved'] });
-      const applied = await second.client.execute('SELECT id FROM schema_migrations');
-
-      expect(goal.rows[0]?.title).toBe('保留目标');
-      expect(applied.rows).toHaveLength(databaseMigrations.length);
-    } finally {
-      second.client.close();
-    }
-  });
-
-  it('典型旧库补跑缺失 migration，不改已有用户记录', async () => {
-    const path = tempDatabasePath();
-    const old = await createDatabase(path);
-    await old.client.execute({
-      sql: `INSERT INTO goals (id, title, description, status, priority, created_at, updated_at)
-            VALUES (?, ?, ?, 'active', 3, ?, ?)`,
-      args: ['legacy-goal', '旧库目标', '升级测试', '2026-07-10T00:00:00.000Z', '2026-07-10T00:00:00.000Z']
-    });
-    await old.client.execute('DROP TABLE knowledge_item_evidence');
-    await old.client.execute({
-      sql: 'DELETE FROM schema_migrations WHERE id = ?',
-      args: ['202607100001_knowledge_item_evidence']
-    });
-    old.client.close();
-
-    const upgraded = await createDatabase(path);
-    try {
-      const table = await upgraded.client.execute(
-        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_item_evidence'`
-      );
-      const goal = await upgraded.client.execute({ sql: 'SELECT title FROM goals WHERE id = ?', args: ['legacy-goal'] });
-      const foreignKeys = await upgraded.client.execute('PRAGMA foreign_key_check');
-
-      expect(table.rows).toHaveLength(1);
-      expect(goal.rows[0]?.title).toBe('旧库目标');
-      expect(foreignKeys.rows).toHaveLength(0);
-    } finally {
-      upgraded.client.close();
-    }
-  });
-
-  it('统一 Agent Loop 迁移可回滚并再次前向迁移，保留 AI 审计内容', async () => {
-    const path = tempDatabasePath();
-    const created = await createDatabase(path);
-    const migration = databaseMigrations.find(({ id }) => id === '202607230001_unified_agent_loop');
-    expect(migration?.rollbackSql).toBeTruthy();
-    try {
-      await created.client.execute(`
-        INSERT INTO ai_reviews (
-          id, kind, provider, model, input_snapshot_json, output_json,
-          output_schema_version, status, record_type, conversation_scope,
-          conversation_ref_id, started_at, created_at
-        ) VALUES (
-          'run-waiting', 'goal_intake', 'test', 'test', '{}', '{"reply":"请补充时间"}',
-          'goal-intake.v1', 'waiting_user', 'run', 'goal_intake',
-          'intake-1', '2026-07-23T00:00:00.000Z', '2026-07-23T00:00:00.000Z'
-        )
-      `);
-      await created.client.execute(`
-        INSERT INTO ai_reviews (
-          id, kind, provider, model, input_snapshot_json, output_json,
-          output_schema_version, status, record_type, parent_review_id,
-          tool_name, tool_sequence, created_at
-        ) VALUES (
-          'tool-ask', 'tool_call', 'local', 'control', '{}', '{"question":"请补充时间"}',
-          'ask-user.v1', 'waiting_user', 'tool_call', 'run-waiting',
-          'ask_user', 1, '2026-07-23T00:00:00.000Z'
-        )
-      `);
-      await created.client.execute(`
-        INSERT INTO pending_interactions (
-          id, run_review_id, tool_review_id, scope_type, scope_id, question,
-          reason, answer_mode, options_json, can_skip, intent,
-          expected_context_version, status, created_at
-        ) VALUES (
-          'pending-1', 'run-waiting', 'tool-ask', 'goal_intake', 'intake-1',
-          '请补充时间', '缺少约束', 'free_text', '[]', 1,
-          'continue_goal_intake', 2, 'open', '2026-07-23T00:00:00.000Z'
-        )
-      `);
-
-      await created.client.executeMultiple(migration!.rollbackSql!);
-
-      const pendingAfterRollback = await created.client.execute(
-        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pending_interactions'`
-      );
-      const reviewsAfterRollback = await created.client.execute(
-        `SELECT id, status, output_json FROM ai_reviews ORDER BY id`
-      );
-      const columnsAfterRollback = await created.client.execute(`PRAGMA table_info(ai_reviews)`);
-      expect(pendingAfterRollback.rows).toHaveLength(0);
-      expect(reviewsAfterRollback.rows).toHaveLength(2);
-      expect(reviewsAfterRollback.rows.every((row) => row.status === 'failed')).toBe(true);
-      expect(columnsAfterRollback.rows.some((row) => row.name === 'record_type')).toBe(false);
-
-      await runDatabaseMigrations(created.client);
-
-      const pendingAfterForward = await created.client.execute(
-        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pending_interactions'`
-      );
-      const columnsAfterForward = await created.client.execute(`PRAGMA table_info(ai_reviews)`);
-      const reviewsAfterForward = await created.client.execute(`SELECT id FROM ai_reviews`);
-      expect(pendingAfterForward.rows).toHaveLength(1);
-      expect(columnsAfterForward.rows.some((row) => row.name === 'record_type')).toBe(true);
-      expect(reviewsAfterForward.rows).toHaveLength(2);
-    } finally {
-      created.client.close();
-    }
-  });
-});
