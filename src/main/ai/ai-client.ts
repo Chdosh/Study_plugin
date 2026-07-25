@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { z } from 'zod';
-import { CategorizedError } from './categorized-error';
+import { CategorizedError, categorizeThrownError } from './categorized-error';
 
 export interface AiJsonRequest<TSchema extends z.ZodTypeAny> {
   apiKey: string | null;
@@ -174,24 +174,4 @@ function nowMs(): number {
   return Date.now();
 }
 
-function categorizeThrownError(error: unknown): CategorizedError {
-  if (error instanceof CategorizedError) return error;
-  if (error instanceof z.ZodError) {
-    return new CategorizedError(
-      'schema_violation',
-      'AI 返回的内容结构不完整，已阻止写入正式计划。',
-      error
-    );
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  if (/JSON|parse|valid|schema|required|expected|type/i.test(message)) {
-    return new CategorizedError('schema_violation', message, error instanceof Error ? error : undefined);
-  }
-  if (/timeout|ECONNRESET|ETIMEDOUT|network|fetch failed|timed out/i.test(message)) {
-    return new CategorizedError('ai_failure', message, error instanceof Error ? error : undefined);
-  }
-  if (/missing|缺少|API [Kk]ey/i.test(message)) {
-    return new CategorizedError('missing_config', message, error instanceof Error ? error : undefined);
-  }
-  return new CategorizedError('ai_failure', message, error instanceof Error ? error : undefined);
-}
+

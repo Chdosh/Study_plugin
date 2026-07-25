@@ -3,7 +3,6 @@ import type {
   DailyGuideAction,
   DailyGuideBlock,
   DailyGuideTask,
-  DailyPlanBlock,
   GoalBrief,
   GoalIntake,
   GoalIntakeMessage,
@@ -293,33 +292,6 @@ export function mapPromptProfile(
   content: string
 ): PromptProfile {
   return { ...row, version, content };
-}
-
-// The UI still accepts block-shaped DTOs. V2 never persists them.
-export function mapPlanBlock(row: Record<string, unknown>): DailyPlanBlock {
-  return row as unknown as DailyPlanBlock;
-}
-
-export function mapDailyGuideBlock(
-  row: Record<string, unknown>,
-  planBlock: DailyPlanBlock
-): DailyGuideBlock {
-  return {
-    id: String(row.id ?? planBlock.id),
-    guideId: String(row.guideId ?? ''),
-    planBlockId: planBlock.id,
-    title: String(row.title ?? planBlock.objective),
-    startTime: planBlock.startTime,
-    endTime: planBlock.endTime,
-    durationMinutes: planBlock.durationMinutes,
-    objective: planBlock.objective,
-    action: planBlock.action,
-    expectedOutput: planBlock.expectedOutput,
-    successCriteria: planBlock.successCheck,
-    fallback: planBlock.fallback,
-    status: planBlock.status,
-    position: planBlock.position
-  };
 }
 
 export function mapPlanAdjustmentProposal(row: typeof learningEvaluations.$inferSelect): PlanAdjustmentProposal {

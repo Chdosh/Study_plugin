@@ -52,11 +52,6 @@ export class AppService {
   async initialize(): Promise<void> {
     await this.agentLoop.recoverInterruptedRuns();
     this.startupRuntimeAudit = await this.runRuntimeAudit();
-    const recovery = await this.store.recoverPendingEvaluationProgress();
-    if (recovery.recovered > 0) {
-      // eslint-disable-next-line no-console
-      console.log(`[P2] recoverPendingEvaluationProgress: recovered=${recovery.recovered}`);
-    }
   }
 
   private coalesce<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -131,7 +126,7 @@ export class AppService {
   async resetLearningWorkspace() {
     const active = await this.getActiveSession();
     if (active?.session.status === 'active') {
-      const paused = await this.modules.runtime.pauseSession(active.session.id);
+      const paused = await this.store.getRuntimePersistence().pauseSession(active.session.id);
       await this.pushSessionState(paused);
     }
     return this.store.archiveActiveGoalsAndRestart();
@@ -293,16 +288,13 @@ export class AppService {
 
   private async runRuntimeAudit(): Promise<RuntimeAuditResult> {
     const result = await this.store.auditRuntimeConsistency();
-    const [guideChoices, learningUnitChoices] = await Promise.all([
-      this.store.listCurrentGuideChoices(),
-      this.store.listAmbiguousLearningUnits()
-    ]);
+    const guideChoices = await this.store.listCurrentGuideChoices();
     return {
       ...result,
       checkedAt: new Date().toISOString(),
       requiresUserAction: result.conflicts.length > 0,
       guideChoices,
-      learningUnitChoices
+      learningUnitChoices: []
     };
   }
 
@@ -347,14 +339,14 @@ export class AppService {
   }
 
   async startSession(taskId: Id) {
-    const session = await this.modules.runtime.startSession(taskId);
+    const session = await this.store.getRuntimePersistence().startSession(taskId);
     this.getMainWindow()?.flashFrame(true);
     await this.pushSessionState(session);
     return session;
   }
 
   async pauseSession(sessionId: Id) {
-    const session = await this.modules.runtime.pauseSession(sessionId);
+    const session = await this.store.getRuntimePersistence().pauseSession(sessionId);
     await this.pushSessionState(session);
     return session;
   }
@@ -376,11 +368,11 @@ export class AppService {
   }
 
   getLearningState() {
-    return this.modules.runtime.getSnapshot();
+    return this.store.getRuntimePersistence().getSnapshot();
   }
 
   async teachCurrentStep(promptProfileId?: Id) {
-    const snapshot = await this.modules.runtime.getSnapshot();
+    const snapshot = await this.store.getRuntimePersistence().getSnapshot();
     const action = snapshot.dailyGuideAction;
     if (!action) {
       throw new CategorizedError(
@@ -410,7 +402,7 @@ export class AppService {
     if (!trimmed) {
       throw new CategorizedError('user_input_error', '回答不能为空。');
     }
-    const snapshot = await this.modules.runtime.getSnapshot();
+    const snapshot = await this.store.getRuntimePersistence().getSnapshot();
     const action = snapshot.dailyGuideAction;
     if (!action) {
       throw new CategorizedError(
@@ -438,15 +430,25 @@ export class AppService {
   }
 
   completeCurrentAction() {
-    return this.modules.runtime.dispatch({ type: 'completeCurrentAction' });
+    return this.store.getRuntimePersistence().completeCurrentAction();
   }
 
   skipCurrentAction() {
-    return this.modules.runtime.dispatch({ type: 'skipCurrentAction' });
+    return this.store.getRuntimePersistence().skipCurrentAction();
   }
 
   async closeCurrentTask(input: CloseTaskInput) {
-    let snapshot = await this.modules.runtime.dispatch({ type: 'closeCurrentTask', input });
+    const current = await this.store.getRuntimePersistence().getSnapshot();
+    if (current.dailyGuideTask?.id !== input.taskId) {
+      throw new Error('当前 Task 已经变化，请确认最新状态后再收口。');
+    }
+    await this.store.getRuntimePersistence().closeTask(
+      input.taskId,
+      input.closureKind,
+      input.closureReason,
+      input.nextStartPoint
+    );
+    let snapshot = await this.store.getRuntimePersistence().getSnapshot();
     if (!snapshot.dailyGuideTask) {
       const prepared = await this.modules.planning.advanceLearningDay(
         {},
@@ -465,7 +467,7 @@ export class AppService {
       );
       if (prepared.preparationState === 'active') {
         await this.store.auditRuntimeConsistency();
-        snapshot = await this.modules.runtime.getSnapshot();
+        snapshot = await this.store.getRuntimePersistence().getSnapshot();
       } else if (prepared.preparationState === 'generation_failed') {
         throw new CategorizedError(
           'validation_error',
@@ -479,8 +481,13 @@ export class AppService {
   }
 
   async terminateLearning() {
-    const snapshot = await this.modules.runtime.dispatch({ type: 'endCurrentSession' });
-    return snapshot;
+    const runtime = this.store.getRuntimePersistence();
+    const unfinished = (await runtime.listSessions())
+      .find((session) => session.status === 'active' || session.status === 'paused');
+    if (unfinished) {
+      await runtime.completeSession(unfinished.id);
+    }
+    return runtime.getSnapshot();
   }
 
   askStepQuestion(question: string, promptProfileId?: Id) {
@@ -580,7 +587,7 @@ export class AppService {
   }
 
   async endSession(sessionId: Id) {
-    const session = await this.modules.runtime.completeSession(sessionId);
+    const session = await this.store.getRuntimePersistence().completeSession(sessionId);
     return session;
   }
 

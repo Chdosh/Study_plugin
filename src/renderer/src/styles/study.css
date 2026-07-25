@@ -39,10 +39,10 @@
 .study-header-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 
 .focus-state-pill {
-  min-height: 26px;
+  min-height: var(--badge-height);
   display: inline-flex;
   align-items: center;
-  padding: 0 10px;
+  padding: var(--badge-padding);
   border-radius: var(--radius-sm);
   background: var(--color-bg-surface-muted);
   color: var(--color-text-subtle);
@@ -55,12 +55,12 @@
 .focus-state-pill.completed { color: var(--color-success); background: var(--color-success-light); }
 
 .session-pause-button {
-  min-height: 34px;
+  min-height: var(--control-height-md);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  padding: 0 13px;
+  gap: var(--space-2);
+  padding: var(--button-padding-sm);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   background: var(--color-bg-surface);
@@ -156,7 +156,7 @@
 .bar-right-group { display: flex; align-items: center; gap: 10px; }
 .bar-right { margin-left: auto; }
 .study-submit-inline { width: min(760px, 100%); display: flex; align-items: flex-end; gap: 12px; }
-.study-submit-inline textarea { flex: 1; min-height: 64px; max-height: 140px; resize: vertical; padding: 10px 12px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); background: var(--color-bg-surface); color: var(--color-text-primary); font: inherit; }
+.study-submit-inline textarea { flex: 1; min-height: 64px; max-height: 140px; resize: vertical; padding: var(--input-padding-y) var(--input-padding-x); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); background: var(--color-bg-surface); color: var(--color-text-primary); font: inherit; }
 .study-teacher-drawer-trigger { display: none; }
 .follow-up-actions ol { margin: 12px 0 0; padding-left: 22px; color: var(--color-text-secondary); }
 

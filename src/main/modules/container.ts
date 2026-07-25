@@ -1,5 +1,4 @@
 import { PlanningModule } from './planning/planning';
-import { LearningRuntimeModule } from './runtime/runtime';
 import { LearnerContextModule } from './context/context';
 import { LearningBranchModule } from './branch/branch';
 import type { StudyStore } from '../services/store';
@@ -12,7 +11,6 @@ import { LearningEvaluationModule } from './evaluation/evaluation';
 
 export class LearningModules {
   readonly planning: PlanningModule;
-  readonly runtime: LearningRuntimeModule;
   readonly context: LearnerContextModule;
   readonly branch: LearningBranchModule;
   readonly learningTurn: LearningTurnModule;
@@ -21,7 +19,6 @@ export class LearningModules {
   readonly evaluation: LearningEvaluationModule;
 
   constructor(store: StudyStore, settings: SettingsService, agentLoop: AgentLoop) {
-    this.runtime = new LearningRuntimeModule(store.getRuntimePersistence());
     this.context = new LearnerContextModule(store);
     this.branch = new LearningBranchModule(store);
     this.learningTurn = new LearningTurnModule(store, settings, this.context, agentLoop);

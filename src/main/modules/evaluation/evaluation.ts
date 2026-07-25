@@ -50,7 +50,6 @@ export class LearningEvaluationModule {
     }
 
     try {
-      await this.store.markSubmissionEvaluation(submission.id, 'evaluating');
       const guideTask = before.dailyGuideTask;
       const activeGuide = await this.store.getActiveGuide(true);
       const goalId = activeGuide.goal?.id;
@@ -103,7 +102,6 @@ export class LearningEvaluationModule {
           evaluationOutput = run.output;
           evaluationAiReviewId = run.runReviewId;
         } catch (error) {
-          await this.store.markSubmissionEvaluation(submission.id, 'failed');
           if (error instanceof CategorizedError) throw error;
           throw new CategorizedError(
             'ai_failure',

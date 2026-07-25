@@ -61,8 +61,8 @@
 }
 
 .chat-header-close {
-  width: 26px;
-  height: 26px;
+  width: var(--control-height-xs);
+  height: var(--control-height-xs);
   border-radius: 50%;
   border: none;
   background: transparent;
@@ -210,14 +210,18 @@
 }
 
 .chat-action-btn {
-  padding: 6px 14px;
+  min-height: var(--control-height-xs);
+  padding: var(--button-padding-xs) var(--button-padding-sm);
   border-radius: var(--radius-md);
   border: none;
   background: var(--color-bg-surface);
   color: var(--color-text-secondary);
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 
 .chat-action-btn:hover:not(:disabled) {
@@ -241,10 +245,10 @@
 .chat-inline-textarea {
   width: 100%;
   min-height: 60px;
-  padding: 8px 10px;
+  padding: var(--input-padding-y) var(--input-padding-x);
   border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
-  font-size: 12px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
   resize: vertical;
   background: var(--color-bg-surface);
   color: var(--color-text-primary);
@@ -253,10 +257,11 @@
 
 .chat-inline-input {
   width: 100%;
-  padding: 8px 10px;
+  min-height: var(--control-height-xs);
+  padding: var(--input-padding-y) var(--input-padding-x);
   border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
-  font-size: 12px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
   background: var(--color-bg-surface);
   color: var(--color-text-primary);
   font-family: inherit;
@@ -274,14 +279,15 @@
 .chat-input-action {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px 10px;
+  gap: var(--space-1);
+  min-height: var(--control-height-xs);
+  padding: var(--button-padding-xs) var(--button-padding-sm);
   border-radius: var(--radius-md);
   border: none;
   background: var(--color-bg-surface-muted);
   color: var(--color-text-secondary);
-  font-size: 11px;
-  font-weight: 500;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
   white-space: nowrap;
   cursor: pointer;
   flex-shrink: 0;
@@ -298,10 +304,11 @@
 
 .chat-input {
   flex: 1;
-  padding: 9px 14px;
+  min-height: var(--control-height-sm);
+  padding: var(--input-padding-y) var(--button-padding-sm);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-pill);
-  font-size: 13px;
+  font-size: var(--font-size-sm);
   background: var(--color-bg-page);
   color: var(--color-text-primary);
   outline: none;
@@ -313,8 +320,8 @@
 }
 
 .chat-send-btn {
-  width: 32px;
-  height: 32px;
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
   border-radius: 50%;
   border: none;
   background: var(--color-primary);

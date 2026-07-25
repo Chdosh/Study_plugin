@@ -69,11 +69,15 @@
 
   --shadow-soft: 0 8px 24px rgba(42, 38, 36, 0.045);
 
-  --control-height-sm: 30px;
+  --control-height-xs: 28px;
+  --control-height-sm: 32px;
   --control-height-md: 36px;
   --control-height-lg: 42px;
   --button-padding-md: 0 20px;
   --button-padding-sm: 0 14px;
+  --button-padding-xs: 0 10px;
+  --input-padding-x: 12px;
+  --input-padding-y: 8px;
   --badge-height: 24px;
   --badge-padding: 0 10px;
   --textarea-min-height: 100px;

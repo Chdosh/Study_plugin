@@ -19,21 +19,6 @@ export interface StudyWindow {
   end: string;
 }
 
-export interface TaskItem {
-  id: Id;
-  goalId: Id | null;
-  sourceImportId: Id | null;
-  title: string;
-  description: string | null;
-  status: 'backlog' | 'planned' | 'in_progress' | 'done' | 'skipped';
-  priority: number;
-  difficulty: 'foundation' | 'standard' | 'advanced' | 'exam';
-  estimateMinutes: number;
-  acceptanceCriteria: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface LearningGoal {
   id: Id;
   sourceImportId: Id | null;
@@ -350,20 +335,6 @@ export interface StartNextSessionResult extends PrepareCurrentLearningUnitResult
   review: ReviewResult | null;
 }
 
-export interface PlanStage {
-  id: Id;
-  goalId: Id;
-  title: string;
-  objective: string;
-  prerequisites: string | null;
-  successCriteria: string;
-  status: 'proposed' | 'confirmed' | 'active' | 'completed' | 'skipped';
-  position: number;
-  summary: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface DailyPlanBlock {
   id: Id;
   planId: Id;
@@ -393,13 +364,7 @@ export interface StudySession {
   notes: string | null;
 }
 
-export type LearningStepStatus =
-  | 'planned'
-  | 'active'
-  | 'waiting_for_submission'
-  | 'completed'
-  | 'needs_revision'
-  | 'skipped';
+
 
 export type NextStepDecision =
   | 'advance'
@@ -409,25 +374,6 @@ export type NextStepDecision =
   | 'simplify'
   | 'complete_task'
   | 'request_user_decision';
-
-export interface LearningStep {
-  id: Id;
-  goalId: Id | null;
-  stageId: Id | null;
-  taskId: Id | null;
-  blockId: Id | null;
-  title: string;
-  objective: string;
-  instruction: string;
-  expectedOutput: string;
-  successCriteria: string;
-  status: LearningStepStatus;
-  attempt: number;
-  position: number;
-  summary: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
 
 export interface LearningRuntimeState {
   id: 'default';
@@ -536,15 +482,6 @@ export interface StoredNextStepDecision {
   } | null;
   carryForward: string | null;
   aiReviewId: Id | null;
-  createdAt: string;
-}
-
-export interface LearningSummary {
-  id: Id;
-  kind: 'question' | 'step' | 'task' | 'day' | 'stage';
-  refId: Id;
-  status: 'pending' | 'ready' | 'failed';
-  summary: unknown;
   createdAt: string;
 }
 

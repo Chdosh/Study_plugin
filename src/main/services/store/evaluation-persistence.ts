@@ -64,16 +64,6 @@ export class EvaluationPersistence {
     return readSubmission(this.db, submissionId);
   }
 
-  async markSubmissionEvaluation(
-    submissionId: string,
-    _status: 'evaluating' | 'completed' | 'failed'
-  ): Promise<void> {
-    const exists = await this.db.select({ id: learningSubmissions.id }).from(learningSubmissions)
-      .where(eq(learningSubmissions.id, submissionId)).limit(1);
-    if (!exists[0]) throw new Error(`Submission not found: ${submissionId}`);
-    // Transient evaluation progress belongs to ai_reviews, not the durable submission fact.
-  }
-
   async saveEvaluationAndDecision(params: {
     submission: LearningSubmission;
     evaluationOutput: SubmissionEvaluationAgentOutput;
@@ -198,11 +188,6 @@ export class EvaluationPersistence {
       goalId: original.goalId,
       submissionId: original.submissionId
     };
-  }
-
-  async recoverPendingEvaluationProgress(): Promise<{ recovered: number; conflicts: string[] }> {
-    // V2 never treats historical accepted recommendations as executable commands on startup.
-    return { recovered: 0, conflicts: [] };
   }
 
   async getPendingEvaluationIdsForGoal(goalId: string): Promise<string[]> {

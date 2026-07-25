@@ -1,6 +1,5 @@
 import { and, asc, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import type {
-  DailyPlanBlock,
   DailyGuide,
   DailyGuideAction,
   DailyGuideTask,
@@ -255,9 +254,7 @@ export class StudyStore extends KnowledgeStore {
     return this.currentLearningContext.listGuideChoices();
   }
 
-  listAmbiguousLearningUnits() {
-    return this.currentLearningContext.listAmbiguousLearningUnits();
-  }
+
 
   selectCurrentGuide(guideId: string): Promise<void> {
     return this.currentLearningContext.selectCurrentGuide(guideId);
@@ -523,10 +520,7 @@ export class StudyStore extends KnowledgeStore {
     return this.runtime.getAccumulatedSeconds(blockId, excludeSessionId);
   }
 
-  async getBlock(blockId: string): Promise<DailyPlanBlock | null> {
-    void blockId;
-    return null;
-  }
+
 
   async getLearningRuntimeSnapshot(): Promise<LearningRuntimeSnapshot> {
     return this.runtime.getSnapshot();
@@ -599,12 +593,7 @@ export class StudyStore extends KnowledgeStore {
     return this.evaluations.getSubmissionById(submissionId);
   }
 
-  async markSubmissionEvaluation(
-    submissionId: string,
-    status: 'evaluating' | 'completed' | 'failed'
-  ): Promise<void> {
-    await this.evaluations.markSubmissionEvaluation(submissionId, status);
-  }
+
 
   async acquireGenerationLock(lockKey: string, ttlMs: number = 120_000): Promise<boolean> {
     return this.ops.acquireGenerationLock(lockKey, ttlMs);
@@ -658,9 +647,7 @@ export class StudyStore extends KnowledgeStore {
    * 崩溃恢复：查找 evaluation 已保存（taskCompleted=true）但 task 未完成的 submission，幂等推进。
    * 在 AppService.initialize() 启动时调用。
    */
-  async recoverPendingEvaluationProgress(): Promise<{ recovered: number; conflicts: string[] }> {
-    return this.evaluations.recoverPendingEvaluationProgress();
-  }
+
 
   async getPlanAdjustmentProposal(proposalId: string): Promise<PlanAdjustmentProposal | null> {
     return this.planChanges.getPlanAdjustmentProposal(proposalId);

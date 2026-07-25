@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 export type AppErrorCategory =
   | 'user_input_error'
   | 'ai_failure'
@@ -26,17 +28,30 @@ export function describeError(error: unknown): {
     return { category: error.category, message: error.message };
   }
   const message = error instanceof Error ? error.message : String(error);
-  if (/DeepSeek API Key|API [Kk]ey|api.key|missing.*key/i.test(message)) {
+  if (/missing|缺少|API [Kk]ey/i.test(message)) {
     return { category: 'missing_config', message };
   }
-  if (/JSON|schema|valid|parse|required|expected|ZodError/i.test(message)) {
+  if (/JSON|parse|valid|schema|required|expected|type/i.test(message)) {
     return { category: 'schema_violation', message };
   }
-  if (/timeout|ECONNRESET|ETIMEDOUT|network|fetch failed/i.test(message)) {
+  if (/timeout|ECONNRESET|ETIMEDOUT|network|fetch failed|timed out/i.test(message)) {
     return { category: 'ai_failure', message };
   }
   if (/cannot be empty|不能为空|必须填写/i.test(message)) {
     return { category: 'user_input_error', message };
   }
   return { category: 'ai_failure', message };
+}
+
+export function categorizeThrownError(error: unknown): CategorizedError {
+  if (error instanceof CategorizedError) return error;
+  if (error instanceof z.ZodError) {
+    return new CategorizedError(
+      'schema_violation',
+      'AI 返回的内容结构不完整，已阻止写入正式计划。',
+      error
+    );
+  }
+  const described = describeError(error);
+  return new CategorizedError(described.category, described.message, error instanceof Error ? error : undefined);
 }

@@ -2,8 +2,8 @@
 
 .icon-button {
   position: relative;
-  width: 32px;
-  height: 32px;
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
   display: inline-grid;
   place-items: center;
   border: 0;
@@ -62,7 +62,7 @@
 }
 
 .text-action {
-  min-height: 30px;
+  min-height: var(--control-height-xs);
   background: transparent;
   color: var(--color-text-secondary);
   padding: 0 var(--space-1);
@@ -71,6 +71,12 @@
 
 .text-action:hover:not(:disabled) {
   color: var(--color-text-primary);
+}
+
+.secondary-action.small {
+  min-height: var(--control-height-xs);
+  padding: var(--button-padding-xs);
+  font-size: var(--font-size-xs);
 }
 
 .primary-action:disabled,
@@ -122,6 +128,35 @@
 
 /* ── Inputs ── */
 
+.input,
+.input-textarea {
+  width: 100%;
+  padding: var(--input-padding-y) var(--input-padding-x);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  line-height: var(--line-height-relaxed);
+  transition: border-color .15s, box-shadow .15s;
+}
+
+.input {
+  min-height: var(--control-height-md);
+}
+
+.input-textarea {
+  min-height: var(--textarea-min-height);
+  resize: vertical;
+}
+
+.input:focus,
+.input-textarea:focus {
+  border-color: var(--color-primary);
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--color-primary-surface);
+}
+
 .assistant-field {
   display: flex;
   flex-direction: column;
@@ -135,8 +170,8 @@
 .settings-card textarea,
 .review-note-card textarea {
   width: 100%;
-  min-height: 104px;
-  padding: 10px 14px;
+  min-height: var(--textarea-min-height);
+  padding: var(--input-padding-y) var(--input-padding-x);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   background: var(--color-bg-surface);
@@ -144,6 +179,15 @@
   font: inherit;
   resize: vertical;
   line-height: var(--line-height-relaxed);
+  transition: border-color .15s, box-shadow .15s;
+}
+
+.assistant-field textarea:focus,
+.settings-card textarea:focus,
+.review-note-card textarea:focus {
+  border-color: var(--color-primary);
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--color-primary-surface);
 }
 
 .assistant-field small {

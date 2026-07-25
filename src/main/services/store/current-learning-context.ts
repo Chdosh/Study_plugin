@@ -3,7 +3,6 @@ import type {
   CurrentGuideChoice,
   LearningRuntimeState,
   LearningStageConflict,
-  LearningUnitRecoveryChoice,
   StudySession
 } from '../../../shared/types';
 import type { Database } from '../../db/client';
@@ -189,10 +188,6 @@ export class CurrentLearningContextPersistence {
 
   async selectCurrentGuide(guideId: string): Promise<void> {
     await this.makeGuideCurrent(guideId);
-  }
-
-  async listAmbiguousLearningUnits(): Promise<LearningUnitRecoveryChoice[]> {
-    return [];
   }
 
   async resolveAmbiguousLearningUnit(guideId: string, decision: 'restore' | 'skip'): Promise<void> {
