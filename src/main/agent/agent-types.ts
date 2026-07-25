@@ -1,5 +1,6 @@
 import type { AiCallMetrics } from '../ai/ai-client';
 import type { PendingAgentInteraction } from '../../shared/types';
+import type { z } from 'zod';
 export type { PendingAgentInteraction } from '../../shared/types';
 
 export type AgentToolName =
@@ -13,7 +14,8 @@ export type AgentToolName =
   | 'practice'
   | 'evaluate'
   | 'search_kb'
-  | 'ask_user';
+  | 'ask_user'
+  | 'insert_guide_supplement';
 
 export type AgentContextKind =
   | 'goal_intake'
@@ -39,6 +41,12 @@ export interface AgentContext {
   contextVersion: number;
 }
 
+export interface AgentToolExecutionContext extends AgentContext {
+  runReviewId?: string;
+  toolReviewId?: string;
+  toolSequence?: number;
+}
+
 export interface AskUserRequest {
   question: string;
   reason: string;
@@ -52,13 +60,82 @@ export interface AgentToolExecution<TOutput = unknown> {
   output: TOutput;
   metrics?: AiCallMetrics;
   requestUser?: AskUserRequest;
+  continuation?: AgentToolContinuation;
 }
+
+export type AgentToolEffect =
+  | 'read'
+  | 'content'
+  | 'proposal'
+  | 'authorized_write'
+  | 'pause';
+
+export type AgentToolContinuation = 'continue' | 'complete' | 'pause';
 
 export interface AgentToolDefinition<TInput = unknown, TOutput = unknown> {
   name: AgentToolName;
   description: string;
   contexts: AgentContextKind[];
-  execute: (input: TInput, context: AgentContext) => Promise<AgentToolExecution<TOutput>>;
+  inputSchema?: z.ZodType<TInput>;
+  outputSchema?: z.ZodType<TOutput>;
+  inputDescription?: string;
+  effect?: AgentToolEffect;
+  continuation?: AgentToolContinuation;
+  execute: (
+    input: TInput,
+    context: AgentToolExecutionContext
+  ) => Promise<AgentToolExecution<TOutput>>;
+}
+
+export interface MountedAgentTool {
+  name: AgentToolName;
+  description: string;
+  inputDescription: string;
+  effect: AgentToolEffect;
+}
+
+export interface AgentTurnToolResult {
+  toolName: AgentToolName;
+  toolReviewId?: string;
+  input: unknown;
+  output: unknown;
+}
+
+export interface AgentTurnModelRequest {
+  intent: string;
+  userInput?: string;
+  boundedContext: unknown;
+  previousToolResults: AgentTurnToolResult[];
+  tools: MountedAgentTool[];
+  modelConfig: {
+    apiKey: string | null;
+    baseUrl: string;
+    model: string;
+    system: string;
+    timeoutMs?: number;
+    traceId?: string;
+  };
+}
+
+export interface AgentTurnDecision {
+  toolName: AgentToolName;
+  input: unknown;
+  metrics?: AiCallMetrics;
+}
+
+export interface AgentTurnModel {
+  selectNext(request: AgentTurnModelRequest): Promise<AgentTurnDecision>;
+}
+
+export interface AgentTurnInput {
+  intent: string;
+  userInput?: string;
+  boundedContext: unknown;
+  context: AgentContext;
+  audit: AgentRunAudit;
+  modelConfig: AgentTurnModelRequest['modelConfig'];
+  allowedTools?: readonly AgentToolName[];
+  maxToolCalls?: number;
 }
 
 export interface AgentRunAudit {
@@ -77,6 +154,7 @@ export interface AgentLoopResult<TOutput> {
   runReviewId: string;
   status: 'completed' | 'waiting_user';
   output: TOutput;
+  toolResults: AgentTurnToolResult[];
   pendingInteraction?: PendingAgentInteraction;
 }
 
@@ -127,6 +205,11 @@ export interface CreatePendingInteractionInput {
 export interface AgentLoopPersistencePort {
   saveAiReview(params: SaveAiReviewInput): Promise<string>;
   updateAiReview(id: string, patch: UpdateAiReviewInput): Promise<void>;
+  getAgentRunState(id: string): Promise<{
+    id: string;
+    status: AgentRunStatus;
+    output: unknown;
+  } | null>;
   getActiveAgentRun(scopeType: string, scopeId: string): Promise<{ id: string; status: AgentRunStatus } | null>;
   getNextAgentToolSequence(runReviewId: string): Promise<number>;
   createPendingInteraction(params: CreatePendingInteractionInput): Promise<PendingAgentInteraction>;

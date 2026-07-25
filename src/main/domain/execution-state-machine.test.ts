@@ -251,6 +251,8 @@ function task(
     submissionPolicy: 'once_after_task',
     carryoverAllowed: true,
     status: options.status ?? 'planned',
+    closureKind: null,
+    closureReason: null,
     progressPercent: actions.length > 0 ? Math.round((completedActions.length / actions.length) * 100) : 0,
     completedActions,
     remainingActions,
@@ -275,9 +277,12 @@ function action(
     title: id,
     instruction: `${id} instruction`,
     checkpoint: `${id} checkpoint`,
+    requirement: 'optional',
     status,
     progressNote: null,
     completedAt: status === 'done' ? '2026-07-05T00:00:00.000Z' : null,
+    origin: 'guide_generated',
+    sourceAiReviewId: null,
     position
   };
 }

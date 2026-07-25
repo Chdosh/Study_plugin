@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import {
   answerStepQuestionAgentOutputSchema,
   dailyGuideAgentOutputSchema,
@@ -5,87 +6,109 @@ import {
   roadmapAgentOutputSchema,
   reviewAgentOutputSchema,
   shortPlanAgentOutputSchema,
-  submissionEvaluationAgentOutputSchema,
-  teachStepAgentOutputSchema
+  submissionEvaluationAgentOutputSchema
 } from '../../../shared/schemas';
+import type { DailyGuideAction, KnowledgeItem } from '../../../shared/types';
 import type {
-  AppSettings,
-  GoalBrief,
-  GoalIntakeMessage,
-  KnowledgeItem,
-  PromptProfile,
-  RoadmapStage,
-  ShortPlanDay,
-  StudyWindow
-} from '../../../shared/types';
-import { AiClient, type AiCallMetrics } from '../../ai/ai-client';
-import { systemPromptFor } from '../agent-system-prompt';
-import type { AgentContextKind, AgentToolName, AskUserRequest } from '../agent-types';
+  AgentContextKind,
+  AgentToolEffect,
+  AgentToolName,
+  AskUserRequest
+} from '../agent-types';
 import { ToolRegistry } from '../tool-registry';
 
-export interface AgentRuntimeSettings extends AppSettings {
-  deepseekApiKey: string | null;
-}
+const teachingArtifactSchema = z.object({
+  explanation: z.string().min(1),
+  userAction: z.string().min(1),
+  requiresSubmission: z.boolean()
+});
 
-type JsonToolInput = {
-  settings: AgentRuntimeSettings;
-  profile: PromptProfile;
-  traceId?: string;
-};
+const quizArtifactSchema = z.object({
+  explanation: z.string().min(1),
+  questions: z.array(z.object({
+    prompt: z.string().min(1),
+    answerFormat: z.string().min(1),
+    hint: z.string().optional()
+  })).min(1).max(5),
+  userAction: z.string().min(1),
+  requiresSubmission: z.boolean()
+});
+
+const practiceArtifactSchema = z.object({
+  explanation: z.string().min(1),
+  exercise: z.string().min(1),
+  successCriteria: z.string().min(1),
+  userAction: z.string().min(1),
+  requiresSubmission: z.boolean()
+});
+
+const conversationEvaluationArtifactSchema = z.object({
+  mode: z.literal('conversation_response'),
+  feedback: z.string().min(1),
+  correctParts: z.array(z.string()).default([]),
+  misconceptions: z.array(z.string()).default([]),
+  nextPrompt: z.string().min(1),
+  requiresSubmission: z.boolean()
+});
+
+const askUserRequestSchema = z.object({
+  question: z.string().min(1),
+  reason: z.string().min(1),
+  answerMode: z.enum(['free_text', 'single_choice']),
+  options: z.array(z.string().min(1)).optional(),
+  canSkip: z.boolean(),
+  intent: z.string().min(1)
+});
 
 export function createBuiltinToolRegistry(
-  ai: AiClient,
-  searchKnowledge: (params: { goalId: string; query?: string; limit?: number }) => Promise<KnowledgeItem[]>
+  searchKnowledge: (params: {
+    goalId: string;
+    query?: string;
+    limit?: number;
+  }) => Promise<KnowledgeItem[]>,
+  insertGuideSupplement: (params: {
+    title: string;
+    instruction: string;
+    checkpoint: string;
+    sourceAiReviewId: string;
+    expectedContextVersion: number;
+  }) => Promise<DailyGuideAction>
 ): ToolRegistry {
   const registry = new ToolRegistry();
 
-  const registerJsonTool = <TInput extends JsonToolInput, TOutput>(params: {
+  const registerOutputTool = (params: {
     name: AgentToolName;
     description: string;
     contexts: AgentContextKind[];
-    role: string;
-    schema: any;
-    schemaVersion: string;
-    timeoutMs?: number;
-    buildPrompt: (input: TInput) => string;
-    requestUser?: (output: TOutput) => AskUserRequest | undefined;
+    schema: z.ZodTypeAny;
+    inputDescription: string;
+    effect: AgentToolEffect;
+    continuation?: 'continue' | 'complete' | 'pause';
+    requestUser?: (output: any) => AskUserRequest | undefined;
   }) => {
-    registry.register<TInput, TOutput>({
+    registry.register({
       name: params.name,
       description: params.description,
       contexts: params.contexts,
-      execute: async (input) => {
-        let metrics: AiCallMetrics | undefined;
-        const output = await ai.generateJson({
-          apiKey: input.settings.deepseekApiKey,
-          baseUrl: input.settings.deepseekBaseUrl,
-          model: input.settings.deepseekModel,
-          schema: params.schema,
-          timeoutMs: params.timeoutMs,
-          system: systemPromptFor(params.role),
-          user: params.buildPrompt(input),
-          traceId: input.traceId,
-          onMetrics: (value) => {
-            metrics = value;
-          }
-        }) as TOutput;
-        return {
-          output,
-          metrics,
-          requestUser: params.requestUser?.(output)
-        };
-      }
+      inputSchema: params.schema,
+      outputSchema: params.schema,
+      inputDescription: params.inputDescription,
+      effect: params.effect,
+      continuation: params.continuation ?? 'complete',
+      execute: async (input) => ({
+        output: input,
+        requestUser: params.requestUser?.(input)
+      })
     });
   };
 
-  registerJsonTool<any, any>({
+  registerOutputTool({
     name: 'propose_goal',
     description: '澄清并形成用户学习目标。',
     contexts: ['goal_intake'],
-    role: '目标澄清与访谈',
     schema: goalIntakeAgentOutputSchema,
-    schemaVersion: 'goal-intake.v1',
-    buildPrompt: (input) => buildGoalIntakePrompt(input),
+    inputDescription: '{"status":"need_more_info|ready","reply":"中文回复","brief":null 或目标简报对象}',
+    effect: 'proposal',
     requestUser: (output) => output.status === 'need_more_info'
       ? {
           question: output.reply,
@@ -96,439 +119,193 @@ export function createBuiltinToolRegistry(
         }
       : undefined
   });
-
-  registerJsonTool<any, any>({
+  registerOutputTool({
     name: 'propose_roadmap',
-    description: '根据已确认目标提出阶段学习路径。',
+    description: '根据已确认目标提出阶段学习路径；有截止日期时只为阶段设置少量检查点日期。',
     contexts: ['planning'],
-    role: '长期学习路径规划',
     schema: roadmapAgentOutputSchema,
-    schemaVersion: 'roadmap.v1',
-    buildPrompt: (input) => buildRoadmapPrompt(input)
+    inputDescription: '{"goalSummary":"目标摘要","stages":[{"title":"阶段","objective":"目标","direction":"方向","successCriteria":"标准","targetDate":"YYYY-MM-DD 或 null"}]}',
+    effect: 'proposal'
   });
-
-  registerJsonTool<any, any>({
+  registerOutputTool({
     name: 'propose_short_plan',
-    description: '生成初始或滚动的近期学习单元。',
+    description: '生成初始或滚动的近期学习安排。',
     contexts: ['planning'],
-    role: '近期滚动学习规划',
     schema: shortPlanAgentOutputSchema,
-    schemaVersion: 'short-plan.v1',
-    buildPrompt: (input) => input.mode === 'rolling'
-      ? buildRollingPlanPrompt(input)
-      : buildShortPlanPrompt(input)
+    inputDescription: '{"weekFocus":"近期重点","items":[{"itemIndex":1,"roadmapStagePosition":1,"title":"单元","focus":"重点","tasks":["任务"],"expectedOutput":"产出","successCriteria":"标准"}]}',
+    effect: 'proposal'
   });
-
-  registerJsonTool<any, any>({
+  registerOutputTool({
     name: 'prepare_learning_guide',
     description: '把近期学习单元展开为当前可执行内容。',
     contexts: ['planning', 'study'],
-    role: '当前学习内容准备',
     schema: dailyGuideAgentOutputSchema,
-    schemaVersion: 'daily-guide.v2',
-    timeoutMs: 120_000,
-    buildPrompt: (input) => buildDailyGuidePrompt(input)
+    inputDescription: '{"date":"日期","todayGoal":"目标","deliverables":["产出"],"boundaries":["边界"],"acceptanceCriteria":["标准"],"tomorrowActions":["后续"],"tasks":[{"title":"Task","objective":"目标","scope":"范围","estimatedMinutes":{"min":5,"target":20,"max":30},"actions":[{"title":"Action","instruction":"说明","checkpoint":"检查点"}],"deliverable":"产出","doneWhen":["标准"],"quickHint":"提示","evaluationMode":"ai","submissionPolicy":"once_after_task","carryoverAllowed":true}]}',
+    effect: 'proposal'
   });
-
-  registerJsonTool<any, any>({
+  registerOutputTool({
     name: 'reflect',
-    description: '根据学习事实生成阶段性复盘。',
+    description: '根据已保存学习事实生成阶段复盘。',
     contexts: ['review'],
-    role: '学习复盘',
     schema: reviewAgentOutputSchema,
-    schemaVersion: 'review.v1',
-    buildPrompt: (input) => buildReviewPrompt(input)
+    inputDescription: '{"completionScore":0到100,"focusScore":0到100,"summary":"复盘","nextActions":["下一步"],"planAdjustments":[]}',
+    effect: 'content'
   });
 
-  registry.register<any, any>({
+  registry.register({
     name: 'explain',
     description: '讲解当前内容或回答当前学习问题。',
     contexts: ['study'],
-    execute: async (input) => {
-      let metrics: AiCallMetrics | undefined;
-      const isQuestion = input.mode === 'question';
-      const output = await ai.generateJson({
-        apiKey: input.settings.deepseekApiKey,
-        baseUrl: input.settings.deepseekBaseUrl,
-        model: input.settings.deepseekModel,
-        schema: isQuestion ? answerStepQuestionAgentOutputSchema : teachStepAgentOutputSchema,
-        system: systemPromptFor(isQuestion ? '学习问题答疑' : '渐进式概念讲解'),
-        user: isQuestion
-          ? buildAnswerStepQuestionPrompt(input)
-          : buildTeachStepPrompt(input),
-        traceId: input.traceId,
-        onMetrics: (value) => {
-          metrics = value;
-        }
-      });
-      return { output, metrics };
-    }
-  });
-
-  for (const name of ['quiz', 'practice'] as const) {
-    registry.register<any, any>({
-      name,
-      description: name === 'quiz' ? '生成用于检查理解的小测。' : '生成当前知识点的练习。',
-      contexts: ['study'],
-      execute: async (input) => {
-        let metrics: AiCallMetrics | undefined;
-        const instruction = name === 'quiz'
-          ? '生成一个简短小测来检查理解，给出清晰作答要求。'
-          : '生成一个与当前上下文直接相关的练习，给出清晰完成要求。';
-        const output = await ai.generateJson({
-          apiKey: input.settings.deepseekApiKey,
-          baseUrl: input.settings.deepseekBaseUrl,
-          model: input.settings.deepseekModel,
-          schema: teachStepAgentOutputSchema,
-          system: systemPromptFor(name === 'quiz' ? '理解检查' : '练习设计'),
-          user: [
-            input.profile.content,
-            instruction,
-            '输出字段：explanation、userAction、requiresSubmission。所有自然语言内容使用中文。',
-            `学习上下文：${JSON.stringify(input.context ?? {})}`
-          ].join('\n'),
-          traceId: input.traceId,
-          onMetrics: (value) => {
-            metrics = value;
-          }
-        });
-        return { output, metrics };
+    inputSchema: z.union([teachingArtifactSchema, answerStepQuestionAgentOutputSchema]),
+    inputDescription: JSON.stringify({
+      teaching: {
+        explanation: '结合当前 Action 和已查询知识给出的中文讲解',
+        userAction: '用户接下来可执行的一步',
+        requiresSubmission: '是否建议提交成果'
+      },
+      questionAnswer: {
+        answer: '问题答案',
+        relationToCurrentStep: '与当前 Action 的关系',
+        example: '示例，可为空字符串',
+        resolved: '是否已经解决',
+        returnToStepInstruction: '返回主线的动作',
+        resolutionSummary: '解决摘要，可为空字符串'
       }
-    });
-  }
-
-  registerJsonTool<any, any>({
-    name: 'evaluate',
-    description: '评价用户保存后的学习成果。',
-    contexts: ['evaluation'],
-    role: '成果评价',
-    schema: submissionEvaluationAgentOutputSchema,
-    schemaVersion: 'submission-evaluation.v1',
-    buildPrompt: (input) => buildEvaluateSubmissionPrompt(input)
-  });
-
-  registry.register<{ goalId: string; query?: string; limit?: number }, KnowledgeItem[]>({
-    name: 'search_kb',
-    description: '查询与当前目标相关的个人知识记录。',
-    contexts: ['goal_intake', 'planning', 'study', 'evaluation', 'review', 'knowledge'],
+    }),
+    effect: 'content',
+    continuation: 'complete',
     execute: async (input) => ({
-      output: await searchKnowledge(input)
+      output: 'answer' in input
+        ? answerStepQuestionAgentOutputSchema.parse(input)
+        : teachingArtifactSchema.parse(input)
     })
   });
 
-  registry.register<AskUserRequest, AskUserRequest>({
-    name: 'ask_user',
-    description: '暂停当前 Run，向用户询问继续所需的信息。',
+  registerOutputTool({
+    name: 'quiz',
+    description: '生成用于检查理解的小测。',
+    contexts: ['study'],
+    schema: quizArtifactSchema,
+    inputDescription: '{"explanation":"检查目的","questions":[{"prompt":"题目","answerFormat":"作答格式","hint":"可选提示"}],"userAction":"如何作答","requiresSubmission":false}',
+    effect: 'content',
+    continuation: 'continue'
+  });
+  registerOutputTool({
+    name: 'practice',
+    description: '生成当前知识点的可执行练习。',
+    contexts: ['study'],
+    schema: practiceArtifactSchema,
+    inputDescription: '{"explanation":"练习目的","exercise":"练习内容","successCriteria":"完成标准","userAction":"下一步","requiresSubmission":true}',
+    effect: 'content'
+  });
+
+  registry.register({
+    name: 'evaluate',
+    description: '评价已保存成果或当前对话中的学习回答。',
+    contexts: ['study', 'evaluation'],
+    inputSchema: z.union([
+      conversationEvaluationArtifactSchema,
+      submissionEvaluationAgentOutputSchema
+    ]),
+    inputDescription: JSON.stringify({
+      conversation: {
+        mode: 'conversation_response',
+        feedback: '即时反馈',
+        correctParts: ['正确之处'],
+        misconceptions: ['需要纠正之处'],
+        nextPrompt: '返回主线的下一步',
+        requiresSubmission: false
+      },
+      submission: {
+        result: 'passed|partial|failed|unclear',
+        mastery: '0 到 100',
+        evidence: ['证据'],
+        correctParts: ['正确之处'],
+        misconceptions: ['误区'],
+        missingRequirements: ['缺失项'],
+        feedback: '反馈',
+        recommendedAction: '建议动作',
+        decision: 'advance|stay|remediate|replan'
+      }
+    }),
+    effect: 'content',
+    continuation: 'complete',
+    execute: async (input) => ({
+      output: 'mode' in input && input.mode === 'conversation_response'
+        ? conversationEvaluationArtifactSchema.parse(input)
+        : submissionEvaluationAgentOutputSchema.parse(input)
+    })
+  });
+
+  registry.register({
+    name: 'search_kb',
+    description: '查询与当前目标相关的个人知识记录。',
     contexts: ['goal_intake', 'planning', 'study', 'evaluation', 'review', 'knowledge'],
+    inputSchema: z.object({
+      query: z.string().min(1).optional(),
+      limit: z.number().int().min(1).max(20).optional()
+    }),
+    inputDescription: '{"query":"可选关键词","limit":"可选，1 到 20"}；不要提供 Goal ID。',
+    effect: 'read',
+    continuation: 'continue',
+    execute: async (input, context) => ({
+      output: context.goalId
+        ? await searchKnowledge({
+            goalId: context.goalId,
+            query: input.query,
+            limit: input.limit
+          })
+        : []
+    })
+  });
+
+  registry.register({
+    name: 'ask_user',
+    description: '暂停当前 Run，向用户询问继续所必需的信息。',
+    contexts: ['goal_intake', 'planning', 'study', 'evaluation', 'review', 'knowledge'],
+    inputSchema: askUserRequestSchema,
+    outputSchema: askUserRequestSchema,
+    inputDescription: '{"question":"一个必要问题","reason":"询问原因","answerMode":"free_text|single_choice","options":["单选项"],"canSkip":true,"intent":"恢复意图"}',
+    effect: 'pause',
+    continuation: 'pause',
     execute: async (input) => ({ output: input })
+  });
+
+  registry.register({
+    name: 'insert_guide_supplement',
+    description: '把临时解释、示例、微练习或复习插入当前 Guide；不创建正式 Task。',
+    contexts: ['study'],
+    inputSchema: z.object({
+      kind: z.enum(['explanation', 'example', 'micro_practice', 'review']),
+      title: z.string().min(1).max(80),
+      instruction: z.string().min(1),
+      checkpoint: z.string().min(1),
+      reason: z.string().min(1)
+    }),
+    inputDescription: '{"kind":"explanation|example|micro_practice|review","title":"标题","instruction":"补充内容","checkpoint":"检查点","reason":"插入原因"}；不要提供任何数据库 ID。',
+    effect: 'authorized_write',
+    continuation: 'complete',
+    execute: async (input, context) => {
+      if (!context.toolReviewId) {
+        throw new Error('临时补充工具缺少可信的 toolReviewId。');
+      }
+      const action = await insertGuideSupplement({
+        title: input.title,
+        instruction: input.instruction,
+        checkpoint: input.checkpoint,
+        sourceAiReviewId: context.toolReviewId,
+        expectedContextVersion: context.contextVersion
+      });
+      return {
+        output: {
+          action,
+          explanation: input.reason,
+          userAction: input.instruction,
+          requiresSubmission: false
+        }
+      };
+    }
   });
 
   return registry;
 }
-
-export function buildReviewPrompt(params: {
-  date: string;
-  snapshot: unknown;
-  context?: unknown;
-  profile: PromptProfile;
-}): string {
-  return [
-    params.profile.content,
-    '',
-    `复盘 ${params.date} 的学习执行情况。`,
-    '完成度和专注度都按 0 到 100 打分。',
-    '用务实的语言解释今天的问题，并给出简洁的下一步动作。',
-    '不要羞辱学习者，重点放在纠偏和重建计划。',
-    '如果今天的学习暴露了问题（基础不牢、进度偏慢、内容太难），可以在 planAdjustments 中给出对尚未执行的近期学习单元的调整建议。',
-    'planAdjustments 只应包含对未来尚未开始的单元的修改建议，不要修改已执行或正在执行的单元。',
-    '每个调整建议包含：dayIndex（要修改的单元序号）、title、focus、expectedOutput、successCriteria、reason（为什么这样调整）。',
-    '如果今天一切正常，planAdjustments 可以为空数组。',
-    '所有自然语言内容使用中文。',
-    '',
-    `Snapshot: ${JSON.stringify(params.snapshot)}`,
-    `有界学习上下文：${JSON.stringify(params.context ?? {})}`
-  ].join('\n');
-}
-
-export function buildGoalIntakePrompt(params: {
-  messages: GoalIntakeMessage[];
-  context?: unknown;
-  profile: PromptProfile;
-}): string {
-  return [
-    params.profile.content,
-    '',
-    '你正在为一个本地优先 AI 学习系统进行首次主动访谈。目标不是让用户填表，而是用自然对话把目标问清楚。',
-    '你需要了解：用户想学什么、最终想达到什么结果、当前基础、每天/每周可用时间、截止时间、现实限制、什么算成功。',
-    '如果信息不足，只问 1 到 3 个最关键的问题。不要一次抛出长问卷。',
-    '如果用户表达“直接开始”“先生成计划”“别问了”等意思，使用已有信息生成 best-effort 目标理解。',
-    '当信息基本足够时，输出简短“目标理解”，让用户确认或直接修改。',
-    '输出 JSON 字段：status、reply、brief、missingInfo、shouldForceStart。',
-    'status 只能是 need_more_info 或 ready。',
-    'brief 在 ready 时必须包含 title、targetOutcome、currentLevel、availableTime、deadline、constraints、successCriteria。',
-    '所有自然语言内容使用中文。',
-    '',
-    `历史访谈：${JSON.stringify(params.messages)}`,
-    `有界学习上下文：${JSON.stringify(params.context ?? {})}`
-  ].join('\n');
-}
-
-export function buildRoadmapPrompt(params: {
-  goal: unknown;
-  brief: GoalBrief | null;
-  context?: unknown;
-  profile: PromptProfile;
-}): string {
-  return [
-    params.profile.content,
-    '',
-    '根据已确认目标生成长期大纲。只展示阶段和方向，不要展开很多天的细节。',
-    '输出 JSON 字段：goalSummary、stages。',
-    '每个 stage 包含 title、objective、direction、successCriteria。',
-    '阶段数量保持克制，优先 3 到 5 个阶段。',
-    '所有自然语言内容使用中文。',
-    '',
-    `目标：${JSON.stringify(params.goal)}`,
-    `目标理解：${JSON.stringify(params.brief)}`,
-    `有界学习上下文：${JSON.stringify(params.context ?? {})}`
-  ].join('\n');
-}
-
-export function buildShortPlanPrompt(params: {
-  goal: unknown;
-  brief: GoalBrief | null;
-  roadmap: RoadmapStage[];
-  context?: unknown;
-  profile: PromptProfile;
-}): string {
-  return [
-    params.profile.content,
-    '',
-    '根据目标、长期大纲和当前 learning stage，生成下一批近期学习任务。这不是固定三天的计划，而是滚动式的学习单元。',
-    '默认生成 3-5 个学习单元，每个单元是一个可独立完成的任务，不是按天切分的。用户可以一天完成多个单元，也可以多天完成一个单元。',
-    '输出 JSON 字段：weekFocus、days。',
-    'days 数组包含学习单元，每个单元包含 dayIndex（顺序编号，从 1 开始）、roadmapStagePosition（所属长期阶段序号，从 1 开始）、title、focus、tasks、expectedOutput、successCriteria。',
-    'roadmapStagePosition 必须引用长期大纲中真实存在的阶段，并随 dayIndex 保持不倒退。可以规划后续阶段内容，但这不代表阶段已自动推进。',
-    '任务要具体到打开电脑就能做，按复杂度和依赖关系排列，而不是按天展开。',
-    '所有自然语言内容使用中文。',
-    '',
-    `目标：${JSON.stringify(params.goal)}`,
-    `目标理解：${JSON.stringify(params.brief)}`,
-    `长期大纲：${JSON.stringify(params.roadmap)}`,
-    `有界学习上下文：${JSON.stringify(params.context ?? {})}`
-  ].join('\n');
-}
-
-export function buildRollingPlanPrompt(params: {
-  goal: unknown;
-  brief: GoalBrief | null;
-  activeStage: RoadmapStage;
-  completedSummary: string;
-  reviewSummary?: string;
-  profile: PromptProfile;
-  knowledgeItems?: KnowledgeItem[];
-  reviewKnowledgeItems?: KnowledgeItem[];
-  context?: unknown;
-}): string {
-  const reviewCtx = params.reviewSummary
-    ? [`最近复盘摘要：${params.reviewSummary}`, ''].join('\n')
-    : '';
-  const knowledgeCtx = (params.knowledgeItems && params.knowledgeItems.length > 0)
-    ? ['', '学习者当前的已知薄弱点和错误记录：',
-      ...params.knowledgeItems.filter((k) => k.status === 'active').slice(0, 5).map((k) => `- [${k.key}] ${k.summary}${k.occurrenceCount > 1 ? `（出现 ${k.occurrenceCount} 次）` : ''}`),
-      '请在设计学习单元时考虑这些薄弱点，帮助用户巩固或避免重复错误。'
-    ].join('\n')
-    : '';
-  const reviewQueueCtx = (params.reviewKnowledgeItems && params.reviewKnowledgeItems.length > 0)
-    ? ['', '以下知识点已经多次出错（>=2次），强烈建议在后续学习单元中安排复习：',
-      ...params.reviewKnowledgeItems.map((k) => `- [${k.key}] ${k.summary}（已出现 ${k.occurrenceCount} 次）`),
-      '请在滚动计划中适当安排复习任务，帮助学习者巩固这些易错点。'
-    ].join('\n')
-    : '';
-  return [
-    params.profile.content,
-    '',
-    '你正在为一个已经进行中的学习计划生成下一批学习任务。这不是全新计划，而是基于当前进度滚动续生。',
-    '禁止重新生成完整长期计划。禁止从头开始目标访谈。只生成当前阶段下的下一批学习单元。',
-    `默认生成 3-5 个学习单元，每个单元是一个可独立完成的任务，不是按天切分的。`,
-    '输出 JSON 字段：weekFocus、days。',
-    'days 数组包含学习单元，每个单元包含 dayIndex（顺序编号，从 1 开始）、roadmapStagePosition（必须等于当前阶段序号）、title、focus、tasks、expectedOutput、successCriteria。',
-    '任务必须与当前 active stage 的 objective 对齐，要具体到打开电脑就能做。',
-    '所有自然语言内容使用中文。',
-    '',
-    `目标：${JSON.stringify(params.goal)}`,
-    `目标理解：${JSON.stringify(params.brief)}`,
-    `当前学习阶段：title="${params.activeStage.title}" objective="${params.activeStage.objective}" direction="${params.activeStage.direction}" successCriteria="${params.activeStage.successCriteria}"`,
-    `已完成学习摘要：${params.completedSummary}`,
-    reviewCtx,
-    knowledgeCtx,
-    reviewQueueCtx,
-    `有界学习上下文：${JSON.stringify(params.context ?? {})}`
-  ].filter(Boolean).join('\n');
-}
-
-export function buildDailyGuidePrompt(params: {
-  date: string;
-  windows: StudyWindow[];
-  blockMinutes: number;
-  goal: unknown;
-  brief: GoalBrief | null;
-  roadmap: RoadmapStage[];
-  targetDay: ShortPlanDay;
-  previousDayResult?: {
-    completedTasks: string[];
-    evaluationSummary: string;
-    reviewSummary?: string;
-  };
-  profile: PromptProfile;
-  knowledgeItems?: KnowledgeItem[];
-  reviewKnowledgeItems?: KnowledgeItem[];
-  context?: unknown;
-}): string {
-  const totalMinutes = params.windows.reduce((sum, window) => sum + clockWindowMinutes(window), 0);
-  const relevantStages = params.roadmap.slice(0, 2);
-  const briefSummary = params.brief
-    ? {
-        title: params.brief.title,
-        targetOutcome: params.brief.targetOutcome,
-        currentLevel: params.brief.currentLevel,
-        availableTime: params.brief.availableTime,
-        deadline: params.brief.deadline,
-        constraints: params.brief.constraints,
-        successCriteria: params.brief.successCriteria
-      }
-    : null;
-
-  const previousContext = params.previousDayResult ? [
-    '',
-    `前一天完成情况：`,
-    `已完成任务：${params.previousDayResult.completedTasks.join('；')}`,
-    `评价摘要：${params.previousDayResult.evaluationSummary}`,
-    params.previousDayResult.reviewSummary ? `复盘摘要：${params.previousDayResult.reviewSummary}` : ''
-  ].filter(Boolean).join('\n') : '';
-
-  const knowledgeCtx = (params.knowledgeItems && params.knowledgeItems.length > 0)
-    ? ['', '学习者当前的已知薄弱点和错误记录：',
-      ...params.knowledgeItems.filter((k) => k.status === 'active').slice(0, 3).map((k) => `- [${k.key}] ${k.summary}${k.occurrenceCount > 1 ? `（出现 ${k.occurrenceCount} 次）` : ''}`),
-      '请在设计学习任务和步骤时主动考虑这些薄弱点。'
-    ].join('\n')
-    : '';
-
-  const reviewCtx = (params.reviewKnowledgeItems && params.reviewKnowledgeItems.length > 0)
-    ? ['', '以下知识点已经多次出错（>=2次），强烈建议在今天的学习中安排 5-10 分钟复习：',
-      ...params.reviewKnowledgeItems.map((k) => `- [${k.key}] ${k.summary}（已出现 ${k.occurrenceCount} 次）`),
-      '请在今日任务中增加一个Review任务（约5-10分钟），帮助学习者巩固该知识点。'
-    ].join('\n')
-    : '';
-
-  return [
-    params.profile.content,
-    '',
-    `为 ${params.date} 生成当前学习单元执行稿（${params.targetDay.title}；内部顺序编号 ${params.targetDay.dayIndex}）。核心原则：任务决定时长，不要先生成固定 ${params.blockMinutes} 分钟时间块。`,
-    `今日可用学习时间约 ${totalMinutes} 分钟。`,
-    `本日重点：${params.targetDay.focus}`,
-    `预期产出：${params.targetDay.expectedOutput}`,
-    `成功标准：${params.targetDay.successCriteria}`,
-    `主题任务：${params.targetDay.tasks.join('；')}`,
-    '输出 JSON 字段：date、todayGoal、deliverables、boundaries、acceptanceCriteria、tomorrowActions、tasks。',
-    'tasks 是今日主任务，不是时间块。根据可用时间动态决定数量：30-60 分钟 1-2 个；60-120 分钟 2-3 个；120-180 分钟 2-4 个；180 分钟以上通常不超过 4 个。',
-    '每日计划必须预留约 10%-15% 缓冲时间。如果时间不足，减少任务数量或缩小任务范围，不要压缩合理执行时间来塞入更多任务。',
-    '每个 task 必须包含 title、objective、scope、estimatedMinutes、actions、deliverable、doneWhen、quickHint、evaluationMode、submissionPolicy、carryoverAllowed。',
-    'estimatedMinutes 必须包含 min、target、max，且满足 min <= target <= max。target 是合理完成时间，不是固定倒计时。',
-    '每个 task 内部 actions 建议 3 到 6 个，最少 1 个；每个 action 必须包含 title、instruction、checkpoint 三个字段。Action 只作为执行引导和本地检查点，不作为独立提交或 AI 评估单位。',
-    'submissionPolicy 默认且只能是 once_after_task。主任务最终提交一次；evaluationMode 可为 local 或 ai。',
-    '主任务必须覆盖完整且有意义的学习或产出结果，不能写"学习某知识""完善项目"这种模糊任务。',
-    '不要生成复杂知识图谱、账号系统、云同步等偏离目标的内容。',
-    '所有自然语言内容使用中文。',
-    '',
-    '输出示例：',
-    '{"date":"2026-07-04","todayGoal":"拿到今日核心产物","deliverables":["产物1"],"boundaries":["不做XXX"],"acceptanceCriteria":["能说明XXX"],"tomorrowActions":["明天先做YYY"],"tasks":[{"title":"完成核心任务","objective":"明确今天产出","scope":"只覆盖必要范围","estimatedMinutes":{"min":25,"target":35,"max":50},"actions":[{"title":"准备环境","instruction":"打开项目并确认可运行","checkpoint":"项目能启动"},{"title":"执行主路径","instruction":"按目标完成核心动作","checkpoint":"有可见产出"}],"deliverable":"可验收的产出","doneWhen":["产物可展示"],"quickHint":"卡住时先记录问题","evaluationMode":"ai","submissionPolicy":"once_after_task","carryoverAllowed":true}]}',
-    previousContext,
-    knowledgeCtx,
-    reviewCtx,
-    `可用学习时间段：${JSON.stringify(params.windows)}`,
-    `目标：${JSON.stringify(params.goal)}`,
-    `目标理解：${JSON.stringify(briefSummary)}`,
-    `相关长期大纲（当前及下一阶段）：${JSON.stringify(relevantStages)}`,
-    `有界学习上下文：${JSON.stringify(params.context ?? {})}`
-  ].filter((line) => line !== '').join('\n');
-}
-
-function clockWindowMinutes(window: StudyWindow): number {
-  const [startHour, startMinute] = window.start.split(':').map(Number);
-  const [endHour, endMinute] = window.end.split(':').map(Number);
-  if (Number.isNaN(startHour) || Number.isNaN(startMinute) || Number.isNaN(endHour) || Number.isNaN(endMinute)) {
-    return 0;
-  }
-  return (endHour * 60 + endMinute) - (startHour * 60 + startMinute);
-}
-
-export function buildTeachStepPrompt(params: { context: unknown; profile: PromptProfile }): string {
-  return [
-    params.profile.content,
-    '',
-    '展开当前学习步骤。一次只处理当前步骤，不要提前生成后续步骤。',
-    '输出 JSON 字段：title、objective、instruction、explanation、userAction、expectedOutput、successCriteria、requiresSubmission。',
-    '必须让用户知道现在该做什么，以及什么算完成。',
-    '不得宣布步骤已经完成。',
-    '除 JSON 字段名和枚举值外，所有自然语言内容使用中文。',
-    '',
-    `工作上下文：${JSON.stringify(params.context)}`
-  ].join('\n');
-}
-
-export function buildAnswerStepQuestionPrompt(params: {
-  question: string;
-  context: unknown;
-  profile: PromptProfile;
-}): string {
-  return [
-    params.profile.content,
-    '',
-    '回答当前学习步骤中的问题分支。问题分支不能替代主线步骤，也不能改变 activeStepId。',
-    '输出 JSON 字段：answer、relationToCurrentStep、example、resolved、returnToStepInstruction、resolutionSummary。',
-    '如果问题已解决，returnToStepInstruction 要明确提醒用户回到当前步骤。',
-    '除 JSON 字段名外，所有自然语言内容使用中文。',
-    '',
-    `用户问题：${params.question}`,
-    `工作上下文：${JSON.stringify(params.context)}`
-  ].join('\n');
-}
-
-export function buildEvaluateSubmissionPrompt(params: {
-  submission: string;
-  context: unknown;
-  profile: PromptProfile;
-  knowledgeItems?: KnowledgeItem[];
-  reviewKnowledgeItems?: KnowledgeItem[];
-}): string {
-  const knowledgeCtx = (params.knowledgeItems && params.knowledgeItems.length > 0)
-    ? ['',
-      '学习者历史上的相关错误和薄弱点：',
-      ...params.knowledgeItems.slice(0, 3).map((k) => `- [${k.key}] ${k.summary}${k.occurrenceCount > 1 ? `（已出现 ${k.occurrenceCount} 次）` : ''}`),
-      '如果本次提交暴露了上述问题，请在 feedback 中明确指出并关联。'
-    ].join('\n')
-    : '';
-  const reviewCtx = (params.reviewKnowledgeItems && params.reviewKnowledgeItems.length > 0)
-    ? ['',
-      '以下知识点已经多次出错，如果本次提交仍涉及，请在 feedback 中明确指出你已多次提醒：',
-      ...params.reviewKnowledgeItems.slice(0, 3).map((k) => `- [${k.key}] ${k.summary}（已出现 ${k.occurrenceCount} 次）`)
-    ].join('\n')
-    : '';
-  return [
-    params.profile.content,
-    '',
-    '评估用户对当前步骤的提交。必须先根据完成标准评估，再建议下一步动作。',
-    '输出 JSON 字段：result、mastery、evidence、correctParts、misconceptions、missingRequirements、feedback、recommendedAction。',
-    'result 只能是 passed、partial、failed、unclear。',
-    'recommendedAction 只能是 advance、explain_again、remediate、practice、simplify、complete_task、request_user_decision。',
-    '不得直接标记任务完成，只返回结构化评估。',
-    '除 JSON 字段名和枚举值外，所有自然语言内容使用中文。',
-    '',
-    `用户提交：${params.submission}`,
-    `工作上下文：${JSON.stringify(params.context)}`,
-    knowledgeCtx,
-    reviewCtx
-  ].filter(Boolean).join('\n');
-}
-

@@ -1,111 +1,127 @@
-import { describe, expect, it } from 'vitest';
-import { buildDailyGuidePrompt, buildEvaluateSubmissionPrompt, buildRollingPlanPrompt } from './builtin-tools';
-import type { KnowledgeItem } from '../../../shared/types';
+import { describe, expect, it, vi } from 'vitest';
+import { createBuiltinToolRegistry } from './builtin-tools';
 
-const makeProfile = () => ({
-  id: 'p1',
-  key: 'foundation' as const,
-  name: '基础档位',
-  description: '基础',
-  content: '你是一个学习管家。',
-  version: 1,
-  activeVersionId: 'v1',
-  createdAt: '',
-  updatedAt: ''
-});
-
-const sampleKnowledge: KnowledgeItem = {
-  id: 'k1',
-  goalId: 'g1',
-  key: 'hooks',
-  summary: 'React Hooks 概念混淆',
-  detail: null,
-  sourceType: 'misconception',
-  sourceId: null,
-  occurrenceCount: 3,
-  lastSeenAt: '2026-07-08',
-  status: 'active',
-  createdAt: '2026-07-07',
-  updatedAt: '2026-07-08'
+const studyContext = {
+  kind: 'study' as const,
+  scopeType: 'learning_action',
+  scopeId: 'action-1',
+  goalId: 'trusted-goal',
+  contextVersion: 8,
+  runReviewId: 'run-1',
+  toolReviewId: 'tool-1',
+  toolSequence: 1
 };
 
+function createRegistry() {
+  return createBuiltinToolRegistry(
+    vi.fn().mockResolvedValue([]),
+    vi.fn().mockResolvedValue({
+      id: 'supplement-1',
+      taskId: 'task-1',
+      title: '补充示例',
+      instruction: '运行示例',
+      checkpoint: '说明结果',
+      requirement: 'optional',
+      status: 'planned',
+      progressNote: null,
+      completedAt: null,
+      origin: 'agent_supplement',
+      sourceAiReviewId: 'tool-1',
+      position: 0
+    })
+  );
+}
+
 describe('built-in Agent Loop tools', () => {
-  it('buildDailyGuidePrompt includes review items text when reviewKnowledgeItems provided', () => {
-    const prompt = buildDailyGuidePrompt({
-      date: '2026-07-08',
-      windows: [{ start: '20:00', end: '22:00' }],
-      blockMinutes: 10,
-      goal: { title: '学 React' },
-      brief: null,
-      roadmap: [{ id: 'r1', goalId: 'g1', title: '基础', objective: '掌握基础', direction: '从零开始', successCriteria: '能写组件', status: 'active', position: 0, createdAt: '', updatedAt: '' }],
-      targetDay: { id: 'sp1', goalId: 'g1', roadmapStageId: null, dayIndex: 1, date: null, sessionStatus: 'pending', title: '入门', focus: 'JSX', tasks: ['写组件'], expectedOutput: '一个组件', successCriteria: '能渲染', locked: false, createdAt: '' },
-      profile: makeProfile(),
-      reviewKnowledgeItems: [sampleKnowledge]
-    });
-    expect(prompt).toContain('多次出错');
-    expect(prompt).toContain('hooks');
-    expect(prompt).toContain('3 次');
-    expect(prompt).toContain('5-10 分钟复习');
+  it('在 study 上下文挂载完整教学能力，但不挂载规划提案', () => {
+    const mounted = createRegistry().listForContext('study');
+    expect(mounted).toEqual(expect.arrayContaining([
+      'explain',
+      'quiz',
+      'practice',
+      'evaluate',
+      'search_kb',
+      'ask_user',
+      'insert_guide_supplement'
+    ]));
+    expect(mounted).not.toContain('propose_roadmap');
   });
 
-  it('buildEvaluateSubmissionPrompt includes review items when provided', () => {
-    const prompt = buildEvaluateSubmissionPrompt({
-      submission: 'my submission',
-      context: {},
-      profile: makeProfile(),
-      knowledgeItems: [sampleKnowledge],
-      reviewKnowledgeItems: [{ ...sampleKnowledge, occurrenceCount: 3 }]
+  it('search_kb 只使用可信上下文中的 Goal ID', async () => {
+    const search = vi.fn().mockResolvedValue([]);
+    const registry = createBuiltinToolRegistry(search, vi.fn());
+    await registry.execute(
+      'search_kb',
+      { goalId: 'model-injected-goal', query: '闭包', limit: 3 },
+      studyContext
+    );
+    expect(search).toHaveBeenCalledWith({
+      goalId: 'trusted-goal',
+      query: '闭包',
+      limit: 3
     });
-    expect(prompt).toContain('多次出错');
-    expect(prompt).toContain('hooks');
-    expect(prompt).toContain('3 次');
-    expect(prompt).toContain('多次提醒');
   });
 
-  it('buildRollingPlanPrompt includes review queue text when reviewKnowledgeItems provided', () => {
-    const prompt = buildRollingPlanPrompt({
-      goal: { title: '学 React' },
-      brief: null,
-      activeStage: { id: 'r1', goalId: 'g1', title: '基础', objective: '掌握基础', direction: '从零开始', successCriteria: '能写组件', status: 'active', position: 0, createdAt: '', updatedAt: '' },
-      completedSummary: '已完成任务',
-      profile: makeProfile(),
-      reviewKnowledgeItems: [sampleKnowledge]
-    });
-    expect(prompt).toContain('多次出错');
-    expect(prompt).toContain('hooks');
-    expect(prompt).toContain('复习');
-    expect(prompt).toContain('滚动计划中适当安排');
+  it('为 quiz 和 planning 输出执行独立 schema 校验', async () => {
+    const registry = createRegistry();
+    expect(registry.get('quiz')?.continuation).toBe('continue');
+    await expect(registry.execute('quiz', {
+      explanation: '检查理解',
+      questions: [],
+      userAction: '作答',
+      requiresSubmission: false
+    }, studyContext)).rejects.toThrow();
+
+    await expect(registry.execute('propose_roadmap', {
+      goalSummary: '缺少阶段',
+      stages: []
+    }, {
+      ...studyContext,
+      kind: 'planning'
+    })).rejects.toThrow();
   });
 
-  it('buildDailyGuidePrompt omits review section when no review items', () => {
-    const prompt = buildDailyGuidePrompt({
-      date: '2026-07-08',
-      windows: [{ start: '20:00', end: '22:00' }],
-      blockMinutes: 10,
-      goal: { title: '学 React' },
-      brief: null,
-      roadmap: [],
-      targetDay: { id: 'sp1', goalId: 'g1', roadmapStageId: null, dayIndex: 1, date: null, sessionStatus: 'pending', title: '入门', focus: 'JSX', tasks: ['写组件'], expectedOutput: '一个组件', successCriteria: '能渲染', locked: false, createdAt: '' },
-      profile: makeProfile()
+  it('临时补充写入只接收 Registry 注入的 toolReviewId 和 contextVersion', async () => {
+    const insert = vi.fn().mockResolvedValue({
+      id: 'supplement-1',
+      taskId: 'task-1',
+      title: '补充示例',
+      instruction: '运行示例',
+      checkpoint: '说明结果',
+      requirement: 'optional',
+      status: 'planned',
+      progressNote: null,
+      completedAt: null,
+      origin: 'agent_supplement',
+      sourceAiReviewId: 'tool-1',
+      position: 0
     });
-    expect(prompt).not.toContain('5-10 分钟复习');
+    const registry = createBuiltinToolRegistry(vi.fn(), insert);
+    await registry.execute('insert_guide_supplement', {
+      kind: 'example',
+      title: '补充示例',
+      instruction: '运行示例',
+      checkpoint: '说明结果',
+      reason: '当前概念仍然抽象',
+      sourceAiReviewId: 'model-injected-review'
+    }, studyContext);
+
+    expect(insert).toHaveBeenCalledWith({
+      title: '补充示例',
+      instruction: '运行示例',
+      checkpoint: '说明结果',
+      sourceAiReviewId: 'tool-1',
+      expectedContextVersion: 8
+    });
   });
 
-  it('buildDailyGuidePrompt carries confirmed bounded learner context into planning', () => {
-    const prompt = buildDailyGuidePrompt({
-      date: '2026-07-12',
-      windows: [{ start: '20:00', end: '21:00' }],
-      blockMinutes: 30,
-      goal: { title: '学习 AI API' },
-      brief: null,
-      roadmap: [],
-      targetDay: { id: 'sp2', goalId: 'g1', roadmapStageId: null, dayIndex: 2, date: null, sessionStatus: 'pending', title: '调用模型', focus: 'API', tasks: ['完成调用'], expectedOutput: '运行结果', successCriteria: '调用成功', locked: false, createdAt: '' },
-      profile: makeProfile(),
-      context: { learnerFacts: [{ key: 'os', value: 'Windows', scope: 'goal' }, { key: 'provider', value: 'DeepSeek', scope: 'goal' }] }
-    });
-
-    expect(prompt).toContain('有界学习上下文');
-    expect(prompt).toContain('Windows');
-    expect(prompt).toContain('DeepSeek');
+  it('ask_user 输出必须包含可恢复的结构化意图', async () => {
+    const registry = createRegistry();
+    await expect(registry.execute('ask_user', {
+      question: '你更熟悉哪种语言？',
+      reason: '选择示例',
+      answerMode: 'free_text',
+      canSkip: true
+    }, studyContext)).rejects.toThrow();
   });
 });
