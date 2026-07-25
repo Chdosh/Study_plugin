@@ -1,8 +1,7 @@
-import { and, asc, desc, eq, inArray, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, ne, sql } from 'drizzle-orm';
 import type {
   DailyGuide,
   DailyGuideAction,
-  DailyGuideBlock,
   DailyGuideTask,
   LearningEvaluation,
   LearningGoal,
@@ -14,47 +13,39 @@ import type {
   QuestionThread,
   RoadmapStage,
   StoredNextStepDecision,
-  StudySession
+  StudySession,
+  SubmissionAttemptHistory
 } from '../../../shared/types';
-import { completeAction, skipAction, skipTask, type ExecutionState } from '../../domain/execution-state-machine';
 import type { Database } from '../../db/client';
 import {
-  dailyGuideActions,
-  dailyGuideBlocks,
-  dailyGuideTasks,
-  dailyGuides,
-  dailyPlanBlocks,
-  focusEvents,
+  conversationMessages,
+  conversationThreads,
+  focusSessions,
   goals,
+  learningActions,
   learningEvaluations,
-  learningRuntimeStates,
+  learningGuides,
   learningSubmissions,
-  nextStepDecisions,
-  planAdjustmentProposals,
-  questionMessages,
-  questionThreads,
-  roadmapStages,
-  studySessions
+  learningTasks,
+  roadmapStages
 } from '../../db/schema';
 import { createId, nowIso } from '../id';
 import {
   mapDailyGuide,
   mapDailyGuideAction,
-  mapDailyGuideBlock,
   mapDailyGuideTask,
   mapDecision,
   mapEvaluation,
   mapGoal,
   mapPlanAdjustmentProposal,
-  mapPlanBlock,
   mapQuestionMessage,
   mapQuestionThread,
   mapRoadmapStage,
-  mapRuntimeState,
   mapSession,
   mapSubmission
 } from './serialization';
 import type { CurrentLearningContextPersistence } from './current-learning-context';
+import { readLatestSubmissionForTask, readSubmission } from './submission-read';
 
 export class RuntimePersistence {
   private cachedActiveStepId: string | null = null;
@@ -69,220 +60,151 @@ export class RuntimePersistence {
   }
 
   async getState(): Promise<LearningRuntimeState> {
-    const rows = await this.db
-      .select()
-      .from(learningRuntimeStates)
-      .where(eq(learningRuntimeStates.id, 'default'))
-      .limit(1);
-    if (rows[0]) return mapRuntimeState(rows[0]);
-
-    const row = {
-      id: 'default' as const,
-      activeGoalId: null,
-      activeStageId: null,
-      activeDailyTaskId: null,
-      activeStepId: null,
-      activeQuestionThreadId: null,
-      sessionStatus: 'idle' as const,
-      updatedAt: nowIso()
-    };
-    await this.db.insert(learningRuntimeStates).values(row);
-    return row;
+    const resolved = await this.currentLearningContext.resolve();
+    this.cachedActiveStepId = resolved.actionId;
+    return resolved.state;
   }
 
-  async updateState(patch: Partial<Omit<LearningRuntimeState, 'id' | 'updatedAt'>>): Promise<LearningRuntimeState> {
-    const current = await this.getState();
-    const next = {
-      ...current,
-      ...patch,
-      updatedAt: nowIso()
-    };
-    await this.db
-      .insert(learningRuntimeStates)
-      .values(next)
-      .onConflictDoUpdate({
-        target: learningRuntimeStates.id,
-        set: {
-          activeGoalId: next.activeGoalId,
-          activeStageId: next.activeStageId,
-          activeDailyTaskId: next.activeDailyTaskId,
-          activeStepId: next.activeStepId,
-          activeQuestionThreadId: next.activeQuestionThreadId,
-          sessionStatus: next.sessionStatus,
-          updatedAt: next.updatedAt
-        }
-      });
-    if (next.activeStepId) this.cachedActiveStepId = next.activeStepId;
-    return next;
+  async updateState(
+    patch: Partial<Omit<LearningRuntimeState, 'id' | 'updatedAt'>>
+  ): Promise<LearningRuntimeState> {
+    await this.currentLearningContext.write({
+      ...(patch.activeGoalId !== undefined ? { goalId: patch.activeGoalId } : {}),
+      ...(patch.activeDailyTaskId !== undefined ? { taskId: patch.activeDailyTaskId } : {}),
+      ...(patch.activeStepId !== undefined ? { actionId: patch.activeStepId } : {})
+    });
+    return this.getState();
   }
 
   async startSession(taskId: string): Promise<StudySession> {
-    await this.currentLearningContext.prepareSessionStart(taskId);
-    const guideTask = await this.getDailyGuideTaskById(taskId);
-    if (!guideTask) throw new Error(`找不到主任务：${taskId}`);
-    if (guideTask.status === 'done') {
-      throw new Error('当前主任务已完成，不能重新开始学习。');
-    }
-
-    const existingSessions = await this.db.select().from(studySessions).where(eq(studySessions.taskId, taskId));
-    const existingActive = existingSessions.find((session) => session.status === 'active');
-    if (existingActive) {
-      await this.initializeLearningForTask(taskId, 'active');
-      return mapSession(existingActive);
-    }
-    const existingPaused = existingSessions
-      .filter((session) => session.status === 'paused')
-      .sort((a, b) => new Date(b.endedAt ?? b.startedAt).getTime() - new Date(a.endedAt ?? a.startedAt).getTime())[0];
-    if (existingPaused) {
-      const resumedAt = nowIso();
-      await this.db
-        .update(studySessions)
-        .set({
-          startedAt: resumedAt,
-          endedAt: null,
-          status: 'active'
-        })
-        .where(eq(studySessions.id, existingPaused.id));
-      await this.initializeLearningForTask(taskId, 'active');
-      const rows = await this.db.select().from(studySessions).where(eq(studySessions.id, existingPaused.id)).limit(1);
-      return mapSession(rows[0]);
-    }
-    const row = {
-      id: createId('session'),
-      taskId,
-      taskItemsId: null,
-      startedAt: nowIso(),
-      endedAt: null,
-      durationMinutes: null,
-      status: 'active' as const,
-      focusScore: null,
-      notes: null
-    };
-    await this.db.insert(studySessions).values(row);
-    await this.initializeLearningForTask(taskId, 'active');
-    return row;
+    const now = nowIso();
+    const result = await this.db.transaction(async (tx) => {
+      await this.currentLearningContext.prepareSessionStart(taskId, tx);
+      const unfinished = (await tx.select().from(focusSessions)
+        .where(inArray(focusSessions.status, ['active', 'paused']))
+        .orderBy(desc(focusSessions.startedAt)).limit(1))[0] ?? null;
+      if (unfinished) {
+        if (unfinished.taskId !== taskId) {
+          throw new Error('已有未结束的 Focus Session，请先暂停后的 Session 结束，或继续原 Task。');
+        }
+        if (unfinished.status === 'paused') {
+          const rows = await tx.update(focusSessions).set({
+            status: 'active',
+            activeSince: now
+          }).where(eq(focusSessions.id, unfinished.id)).returning();
+          return rows[0];
+        }
+        return unfinished;
+      }
+      const row = {
+        id: createId('session'),
+        taskId,
+        startedAt: now,
+        activeSince: now,
+        endedAt: null,
+        durationSeconds: 0,
+        status: 'active' as const,
+        notes: null
+      };
+      await tx.insert(focusSessions).values(row);
+      await tx.update(learningTasks).set({ status: 'active', updatedAt: now })
+        .where(and(eq(learningTasks.id, taskId), ne(learningTasks.status, 'closed')));
+      return row;
+    });
+    return mapSession(result);
   }
 
   async pauseSession(sessionId: string): Promise<StudySession> {
-    const session = await this.finishSession(sessionId, 'paused');
-    if (session.taskId) {
-      await this.updateDailyGuideTaskElapsed(session.taskId);
-      const runtime = await this.getState();
-      if (runtime.activeDailyTaskId === session.taskId) {
-        await this.updateState({ sessionStatus: 'paused' });
-      }
-    }
-    return session;
+    const now = nowIso();
+    const rows = await this.db.transaction(async (tx) => {
+      const session = (await tx.select().from(focusSessions)
+        .where(eq(focusSessions.id, sessionId)).limit(1))[0];
+      if (!session) throw new Error(`Focus Session not found: ${sessionId}`);
+      if (session.status === 'ended') return [session];
+      const durationSeconds = session.durationSeconds + elapsedSeconds(session.activeSince, now);
+      return tx.update(focusSessions).set({
+        status: 'paused',
+        activeSince: null,
+        durationSeconds
+      }).where(eq(focusSessions.id, sessionId)).returning();
+    });
+    return mapSession(rows[0]);
   }
 
   async completeSession(sessionId: string, notes?: string): Promise<StudySession> {
-    const session = await this.finishSession(sessionId, 'completed', notes);
-    if (session.taskId) {
-      await this.updateDailyGuideTaskElapsed(session.taskId);
-      const runtime = await this.getState();
-      if (runtime.activeDailyTaskId === session.taskId) {
-        await this.updateState({ sessionStatus: 'completed' });
-      }
-    }
-    return session;
-  }
-
-  async recordFocusEvent(params: {
-    sessionId: string | null;
-    appName: string;
-    windowTitle: string | null;
-    eventType: 'foreground' | 'away' | 'return' | 'unknown';
-    durationSeconds?: number;
-  }): Promise<void> {
-    await this.db.insert(focusEvents).values({
-      id: createId('focus'),
-      sessionId: params.sessionId,
-      appName: params.appName,
-      windowTitle: params.windowTitle,
-      eventType: params.eventType,
-      startedAt: nowIso(),
-      endedAt: null,
-      durationSeconds: params.durationSeconds
+    const now = nowIso();
+    const rows = await this.db.transaction(async (tx) => {
+      const session = (await tx.select().from(focusSessions)
+        .where(eq(focusSessions.id, sessionId)).limit(1))[0];
+      if (!session) throw new Error(`Focus Session not found: ${sessionId}`);
+      if (session.status === 'ended') return [session];
+      const durationSeconds = session.durationSeconds + elapsedSeconds(session.activeSince, now);
+      return tx.update(focusSessions).set({
+        status: 'ended',
+        activeSince: null,
+        endedAt: now,
+        durationSeconds,
+        notes: notes?.trim() || session.notes
+      }).where(eq(focusSessions.id, sessionId)).returning();
     });
+    return mapSession(rows[0]);
   }
 
   async listSessions(): Promise<StudySession[]> {
-    const rows = await this.db.select().from(studySessions).orderBy(desc(studySessions.startedAt));
+    const rows = await this.db.select().from(focusSessions).orderBy(desc(focusSessions.startedAt));
     return rows.map(mapSession);
   }
 
   async getAccumulatedSeconds(taskId: string, excludeSessionId?: string): Promise<number> {
-    const rows = await this.db.select().from(studySessions).where(eq(studySessions.taskId, taskId));
-    let total = 0;
-    for (const row of rows) {
-      if (excludeSessionId && row.id === excludeSessionId) continue;
-      if (row.status === 'completed' || row.status === 'paused') {
-        total += Math.round((row.durationMinutes ?? 0) * 60);
-      }
-    }
-    return total;
+    const filters = [eq(focusSessions.taskId, taskId)];
+    if (excludeSessionId) filters.push(ne(focusSessions.id, excludeSessionId));
+    const rows = await this.db.select({ total: sql<number>`COALESCE(SUM(${focusSessions.durationSeconds}), 0)` })
+      .from(focusSessions).where(and(...filters));
+    return Number(rows[0]?.total ?? 0);
   }
 
   async getSnapshot(): Promise<LearningRuntimeSnapshot> {
-    const resolvedContext = await this.currentLearningContext.resolve();
-    const state = resolvedContext.state;
-    const [goal, questionThread] = await Promise.all([
-      state.activeGoalId ? this.getGoal(state.activeGoalId) : Promise.resolve(null),
-      state.activeQuestionThreadId ? this.getQuestionThread(state.activeQuestionThreadId) : Promise.resolve(null)
-    ]);
-
-    let dailyGuide: DailyGuide | null = null;
-    let dailyGuideTask: DailyGuideTask | null = null;
-    let dailyGuideAction: DailyGuideAction | null = null;
-    let roadmapStage: RoadmapStage | null = null;
-
-    if (resolvedContext.displayGuideId) {
-      dailyGuide = await this.getDailyGuideById(resolvedContext.displayGuideId);
+    const resolved = await this.currentLearningContext.resolve();
+    this.cachedActiveStepId = resolved.actionId;
+    const goal = resolved.goalId ? await this.getGoal(resolved.goalId) : null;
+    const dailyGuide = resolved.displayGuideId ? await this.getGuide(resolved.displayGuideId) : null;
+    const dailyGuideTask = resolved.taskId ? await this.getTask(resolved.taskId) : null;
+    const dailyGuideAction = dailyGuideTask
+      ? dailyGuideTask.actions.find((item) => item.id === resolved.actionId)
+        ?? dailyGuideTask.actions.find((item) => item.status === 'planned')
+        ?? null
+      : null;
+    if (dailyGuideAction?.id !== resolved.actionId) {
+      await this.currentLearningContext.write({ actionId: dailyGuideAction?.id ?? null });
+      resolved.state.activeStepId = dailyGuideAction?.id ?? null;
     }
-
-    if (resolvedContext.taskId) {
-      dailyGuideTask = await this.getDailyGuideTaskById(resolvedContext.taskId);
-      if (dailyGuideTask) {
-        if (resolvedContext.actionId) {
-          dailyGuideAction = dailyGuideTask.actions.find((a) => a.id === resolvedContext.actionId) ?? null;
-        }
-      }
-    }
-
-    if (state.activeStageId) {
-      const rsRows = await this.db.select().from(roadmapStages).where(eq(roadmapStages.id, state.activeStageId)).limit(1);
-      roadmapStage = rsRows[0] ? mapRoadmapStage(rsRows[0]) : null;
-    } else if (goal && !resolvedContext.stageConflict) {
-      const rsRows = await this.db.select().from(roadmapStages).where(eq(roadmapStages.goalId, goal.id)).orderBy(asc(roadmapStages.position)).limit(1);
-      roadmapStage = rsRows[0] ? mapRoadmapStage(rsRows[0]) : null;
-    }
-
-    const questionThreadId = questionThread?.id ?? null;
-    const [questionMessageRows, latestSubmission, latestEvaluation, latestDecision] = await Promise.all([
-      questionThreadId ? this.listQuestionMessages(questionThreadId) : Promise.resolve([]),
-      state.activeStepId ? this.getLatestSubmissionByActionId(state.activeStepId) : Promise.resolve(null),
-      state.activeStepId ? this.getLatestEvaluationByActionId(state.activeStepId) : Promise.resolve(null),
-      state.activeStepId ? this.getLatestDecisionByActionId(state.activeStepId) : Promise.resolve(null)
-    ]);
-    const pendingAdjustment = await this.getPendingAdjustment({
-      goalId: goal?.id ?? null,
-      stageId: null,
-      taskId: null
-    });
+    const roadmapStage = dailyGuideTask?.roadmapStageId
+      ? await this.getStage(dailyGuideTask.roadmapStageId)
+      : null;
+    const questionThread = dailyGuideTask ? await this.getOpenThread(dailyGuideTask.id) : null;
+    const questionMessages = questionThread ? await this.getMessages(questionThread.id) : [];
+    const latestSubmission = dailyGuideTask ? await this.getLatestSubmission(dailyGuideTask.id) : null;
+    const latestEvaluation = latestSubmission ? await this.getLatestEvaluation(latestSubmission.id) : null;
+    const latestDecision = latestEvaluation ? await this.getDecision(latestEvaluation.id) : null;
+    const submissionAttempts = dailyGuideTask
+      ? await this.getSubmissionAttempts(dailyGuideTask.id)
+      : [];
+    const pendingAdjustment = goal ? await this.getPendingAdjustment(goal.id) : null;
 
     return {
-      state,
+      state: resolved.state,
       goal,
       dailyGuide,
       dailyGuideTask,
       dailyGuideAction,
       roadmapStage,
-      stageConflict: resolvedContext.stageConflict,
+      stageConflict: null,
       questionThread,
-      questionMessages: questionMessageRows,
+      questionMessages,
       latestSubmission,
       latestEvaluation,
       latestDecision,
+      submissionAttempts,
       pendingAdjustment
     };
   }
@@ -292,350 +214,239 @@ export class RuntimePersistence {
   }
 
   async completeCurrentAction(): Promise<LearningRuntimeSnapshot> {
-    const snapshot = await this.getSnapshot();
-    const taskId = snapshot.state.activeDailyTaskId;
-    if (!taskId) {
-      throw new Error('当前没有可完成的主任务步骤。请先开始学习。');
-    }
-
-    const task = snapshot.dailyGuideTask;
-    const tasks = task ? [task] : [];
-    if (!task) {
-      throw new Error('当前主任务没有可记录的行动步骤。');
-    }
-    if (task.actions.length === 0) {
-      throw new Error('当前主任务没有行动步骤。');
-    }
-
-    const currentAction = task.currentAction ?? task.actions.find((action) => action.status !== 'done') ?? null;
-    if (!currentAction) {
-      return snapshot;
-    }
-
-    const now = nowIso();
-    const result = completeAction({
-      tasks,
-      activeDailyTaskId: taskId,
-      activeStepId: currentAction.id
-    }, currentAction.id);
-    if (!result.ok) {
-      throw new Error(result.conflict.message);
-    }
-    await this.persistExecutionState(result.state, now);
-
-    await this.updateState({
-      activeDailyTaskId: result.state.activeDailyTaskId,
-      activeStepId: result.state.activeStepId,
-      activeQuestionThreadId: null,
-      sessionStatus: snapshot.state.sessionStatus === 'idle' ? 'active' : snapshot.state.sessionStatus
-    });
-
-    return this.getSnapshot();
+    return this.finishCurrentAction('done');
   }
 
   async skipCurrentAction(): Promise<LearningRuntimeSnapshot> {
-    const snapshot = await this.getSnapshot();
-    const taskId = snapshot.state.activeDailyTaskId;
-    if (!taskId || !snapshot.dailyGuideTask) return snapshot;
-
-    const tasks = [snapshot.dailyGuideTask];
-    const currentAction = snapshot.dailyGuideTask.currentAction
-      ?? snapshot.dailyGuideTask.actions.find((a) => a.status !== 'done')
-      ?? null;
-    if (!currentAction) return snapshot;
-
-    const result = skipAction({
-      tasks,
-      activeDailyTaskId: taskId,
-      activeStepId: currentAction.id
-    });
-    if (!result.ok) throw new Error(result.conflict.message);
-
-    await this.persistExecutionState(result.state, nowIso());
-    const updatedTask = result.state.tasks.find((t) => t.id === taskId);
-    const nextAction = updatedTask?.currentAction ?? null;
-    await this.updateState({
-      activeDailyTaskId: result.state.activeDailyTaskId,
-      activeStepId: result.state.activeStepId ?? nextAction?.id ?? null,
-      activeQuestionThreadId: null,
-      sessionStatus: snapshot.state.sessionStatus === 'idle' ? 'active' : snapshot.state.sessionStatus
-    });
-    return this.getSnapshot();
+    return this.finishCurrentAction('skipped');
   }
 
-  async skipCurrentTask(): Promise<LearningRuntimeSnapshot> {
-    const snapshot = await this.getSnapshot();
-    const taskId = snapshot.state.activeDailyTaskId;
-    if (!taskId || !snapshot.dailyGuideTask) return snapshot;
+  async insertGuideSupplement(params: {
+    title: string;
+    instruction: string;
+    checkpoint: string;
+    sourceAiReviewId: string;
+    expectedContextVersion: number;
+  }): Promise<DailyGuideAction> {
+    const existing = (await this.db.select().from(learningActions)
+      .where(eq(learningActions.sourceAiReviewId, params.sourceAiReviewId))
+      .limit(1))[0];
+    if (existing) return mapDailyGuideAction(existing);
 
-    const tasks = snapshot.dailyGuide?.tasks ?? [snapshot.dailyGuideTask];
-    const result = skipTask({ tasks, activeDailyTaskId: taskId, activeStepId: null });
-    if (!result.ok) throw new Error(result.conflict.message);
-
-    await this.persistExecutionState(result.state, nowIso());
-    const resumableSessions = await this.db
-      .select({ id: studySessions.id })
-      .from(studySessions)
+    const resolved = await this.currentLearningContext.resolve();
+    if (
+      resolved.version !== params.expectedContextVersion
+      || !resolved.taskId
+      || !resolved.actionId
+      || !resolved.activeGuideId
+    ) {
+      throw new Error('学习上下文已经变化，临时补充内容没有写入。');
+    }
+    const currentAction = (await this.db.select().from(learningActions)
       .where(and(
-        eq(studySessions.taskId, taskId),
-        inArray(studySessions.status, ['active', 'paused'])
+        eq(learningActions.id, resolved.actionId),
+        eq(learningActions.taskId, resolved.taskId),
+        eq(learningActions.status, 'planned')
+      ))
+      .limit(1))[0];
+    if (!currentAction) {
+      throw new Error('当前 Action 已经结束，临时补充内容没有写入。');
+    }
+    const currentTask = (await this.db.select({
+      guideId: learningTasks.guideId,
+      status: learningTasks.status
+    }).from(learningTasks).where(eq(learningTasks.id, resolved.taskId)).limit(1))[0];
+    if (
+      !currentTask
+      || currentTask.guideId !== resolved.activeGuideId
+      || (currentTask.status !== 'planned' && currentTask.status !== 'active')
+    ) {
+      throw new Error('临时补充内容只能写入当前 Guide 中尚未关闭的 Task。');
+    }
+
+    return this.db.transaction(async (tx) => {
+      const duplicate = (await tx.select().from(learningActions)
+        .where(eq(learningActions.sourceAiReviewId, params.sourceAiReviewId))
+        .limit(1))[0];
+      if (duplicate) return mapDailyGuideAction(duplicate);
+
+      await tx.update(learningActions).set({
+        position: sql`${learningActions.position} + 1`
+      }).where(and(
+        eq(learningActions.taskId, resolved.taskId!),
+        gte(learningActions.position, currentAction.position)
       ));
-    for (const session of resumableSessions) {
-      await this.finishSession(session.id, 'skipped', '主任务已跳过');
-    }
-    if (resumableSessions.length > 0) {
-      await this.updateDailyGuideTaskElapsed(taskId);
-    }
-    const nextTask = result.state.activeDailyTaskId
-      ? result.state.tasks.find((task) => task.id === result.state.activeDailyTaskId) ?? null
-      : null;
-
-    await this.updateState({
-      activeDailyTaskId: result.state.activeDailyTaskId,
-      activeStepId: result.state.activeStepId ?? nextTask?.currentAction?.id ?? null,
-      activeQuestionThreadId: null,
-      sessionStatus: nextTask ? 'idle' : 'completed'
+      const supplementId = createId('learning_action');
+      await tx.insert(learningActions).values({
+        id: supplementId,
+        taskId: resolved.taskId!,
+        title: params.title,
+        instruction: params.instruction,
+        checkpoint: params.checkpoint,
+        requirement: 'optional',
+        status: 'planned',
+        origin: 'agent_supplement',
+        sourceAiReviewId: params.sourceAiReviewId,
+        position: currentAction.position
+      });
+      const pointerChanged = await this.currentLearningContext.replaceActionInTransaction(tx, {
+        expectedVersion: params.expectedContextVersion,
+        expectedActionId: resolved.actionId!,
+        actionId: supplementId
+      });
+      if (!pointerChanged) {
+        throw new Error('学习上下文已经变化，临时补充内容没有写入。');
+      }
+      const inserted = (await tx.select().from(learningActions)
+        .where(eq(learningActions.id, supplementId)).limit(1))[0];
+      return mapDailyGuideAction(inserted);
     });
-
-    if (!nextTask && snapshot.dailyGuide?.id) {
-      const allTasksSkipped = result.state.tasks.length > 0
-        && result.state.tasks.every((task) => task.status === 'skipped');
-      if (allTasksSkipped) {
-        await this.currentLearningContext.skipGuide(snapshot.dailyGuide.id);
-      } else {
-        await this.closeCurrentSession(snapshot.dailyGuide.id);
-      }
-    }
-
-    return this.getSnapshot();
   }
 
-  private async finishSession(
-    sessionId: string,
-    status: 'paused' | 'completed' | 'skipped',
-    notes?: string
-  ): Promise<StudySession> {
-    const rows = await this.db.select().from(studySessions).where(eq(studySessions.id, sessionId)).limit(1);
-    const existing = rows[0];
-    if (!existing) throw new Error(`Session not found: ${sessionId}`);
-    const endedAt = nowIso();
-    const previousSeconds = Math.round((existing.durationMinutes ?? 0) * 60);
-    const currentSeconds =
-      existing.status === 'active'
-        ? Math.max(0, Math.floor((new Date(endedAt).getTime() - new Date(existing.startedAt).getTime()) / 1000))
-        : 0;
-    const durationMinutes = (previousSeconds + currentSeconds) / 60;
-    await this.db
-      .update(studySessions)
-      .set({
-        endedAt,
-        durationMinutes,
-        status,
-        notes: notes ?? existing.notes
-      })
-      .where(eq(studySessions.id, sessionId));
-    const updated = await this.db.select().from(studySessions).where(eq(studySessions.id, sessionId)).limit(1);
-    return mapSession(updated[0]);
-  }
-
-  private async initializeLearningForTask(taskId: string, sessionStatus?: LearningRuntimeState['sessionStatus']): Promise<LearningRuntimeSnapshot> {
-    const guideTask = await this.getDailyGuideTaskById(taskId);
-    const guide = guideTask
-      ? (await this.db.select().from(dailyGuides).where(eq(dailyGuides.id, guideTask.guideId)).limit(1))[0]
-      : null;
-
-    const stageId = guideTask?.roadmapStageId ?? null;
-
-    const currentActionId = guideTask?.currentAction?.id
-      ?? guideTask?.actions.find((action) => action.status !== 'done' && action.status !== 'skipped')?.id
-      ?? null;
-
-    await this.updateState({
-      activeGoalId: guide?.goalId ?? null,
-      activeStageId: stageId,
-      activeDailyTaskId: guideTask?.id ?? null,
-      activeStepId: currentActionId,
-      activeQuestionThreadId: null,
-      sessionStatus
-    });
-
-    return this.getSnapshot();
-  }
-
-  private async getGoal(goalId: string): Promise<LearningGoal | null> {
-    const rows = await this.db.select().from(goals).where(eq(goals.id, goalId)).limit(1);
-    return rows[0] ? mapGoal(rows[0]) : null;
-  }
-
-  private async getQuestionThread(threadId: string): Promise<QuestionThread | null> {
-    const rows = await this.db.select().from(questionThreads).where(eq(questionThreads.id, threadId)).limit(1);
-    return rows[0] ? mapQuestionThread(rows[0]) : null;
-  }
-
-  private async listQuestionMessages(threadId: string): Promise<QuestionMessage[]> {
-    const rows = await this.db
-      .select()
-      .from(questionMessages)
-      .where(eq(questionMessages.threadId, threadId))
-      .orderBy(asc(questionMessages.createdAt));
-    return rows.map(mapQuestionMessage);
-  }
-
-  private async getDailyGuideById(guideId: string): Promise<DailyGuide | null> {
-    const rows = await this.db.select().from(dailyGuides).where(eq(dailyGuides.id, guideId)).limit(1);
-    const guide = rows[0];
-    if (!guide) return null;
-    const taskRows = await this.db
-      .select()
-      .from(dailyGuideTasks)
-      .where(eq(dailyGuideTasks.guideId, guideId))
-      .orderBy(asc(dailyGuideTasks.position));
-    const tasks: DailyGuideTask[] = [];
-    for (const task of taskRows) {
-      const actionRows = await this.db
-        .select()
-        .from(dailyGuideActions)
-        .where(eq(dailyGuideActions.taskId, task.id))
-        .orderBy(asc(dailyGuideActions.position));
-      tasks.push(mapDailyGuideTask(task, actionRows.map(mapDailyGuideAction)));
-    }
-    const guideBlockRows = await this.db
-      .select()
-      .from(dailyGuideBlocks)
-      .where(eq(dailyGuideBlocks.guideId, guideId))
-      .orderBy(asc(dailyGuideBlocks.position));
-    const blocks: DailyGuideBlock[] = [];
-    for (const guideBlock of guideBlockRows) {
-      const planBlockRows = await this.db.select().from(dailyPlanBlocks).where(eq(dailyPlanBlocks.id, guideBlock.planBlockId)).limit(1);
-      if (planBlockRows[0]) {
-        blocks.push(mapDailyGuideBlock(guideBlock, mapPlanBlock(planBlockRows[0])));
-      }
-    }
-    return mapDailyGuide(guide, blocks, tasks);
-  }
-
-  private async updateDailyGuideTaskElapsed(taskId: string): Promise<void> {
-    const taskRows = await this.db
-      .select()
-      .from(dailyGuideTasks)
-      .where(or(eq(dailyGuideTasks.id, taskId), eq(dailyGuideTasks.legacyPlanBlockId, taskId)))
-      .limit(1);
-    const task = taskRows[0];
-    if (!task) return;
-    const sessions = await this.db.select().from(studySessions).where(eq(studySessions.taskId, taskId));
-    const totalElapsedMinutes = Math.round(sessions.reduce((sum, session) => sum + (session.durationMinutes ?? 0), 0));
-    await this.db
-      .update(dailyGuideTasks)
-      .set({
-        totalElapsedMinutes,
-        updatedAt: nowIso()
-      })
-      .where(eq(dailyGuideTasks.id, task.id));
-  }
-
-  private async getDailyGuideTaskById(taskId: string): Promise<DailyGuideTask | null> {
-    const taskRows = await this.db.select().from(dailyGuideTasks).where(eq(dailyGuideTasks.id, taskId)).limit(1);
-    if (!taskRows[0]) return null;
-    const actionRows = await this.db.select().from(dailyGuideActions).where(eq(dailyGuideActions.taskId, taskId)).orderBy(asc(dailyGuideActions.position));
-    return mapDailyGuideTask(taskRows[0], actionRows.map(mapDailyGuideAction));
-  }
-
-  private async persistExecutionState(state: Pick<ExecutionState, 'tasks'>, timestamp: string): Promise<void> {
-    for (const task of state.tasks) {
-      await this.db
-        .update(dailyGuideTasks)
-        .set({
-          status: task.status,
-          progressPercent: task.progressPercent,
-          currentActionId: task.status === 'active' ? task.currentAction?.id ?? null : null,
-          nextStartPoint: task.nextStartPoint,
-          updatedAt: timestamp
-        })
-        .where(eq(dailyGuideTasks.id, task.id));
-      for (const action of task.actions) {
-        await this.db
-          .update(dailyGuideActions)
-          .set({
-            status: action.status,
-            completedAt: action.status === 'done' ? (action.completedAt ?? timestamp) : action.completedAt
-          })
-          .where(eq(dailyGuideActions.id, action.id));
-      }
-      if (task.legacyPlanBlockId && task.status === 'done') {
-        await this.db
-          .update(dailyPlanBlocks)
-          .set({ status: 'done' })
-          .where(eq(dailyPlanBlocks.id, task.legacyPlanBlockId));
-      }
-    }
-  }
-
-  private async getLatestSubmissionByActionId(actionId: string): Promise<LearningSubmission | null> {
-    const rows = await this.db
-      .select()
-      .from(learningSubmissions)
-      .where(or(
-        eq(learningSubmissions.dailyGuideActionId, actionId),
-        eq(learningSubmissions.stepId, actionId)
-      ))
-      .orderBy(desc(learningSubmissions.createdAt))
-      .limit(1);
-    return rows[0] ? mapSubmission(rows[0]) : null;
-  }
-
-  private async getLatestEvaluationByActionId(actionId: string): Promise<LearningEvaluation | null> {
-    const rows = await this.db
-      .select()
-      .from(learningEvaluations)
-      .where(or(
-        eq(learningEvaluations.dailyGuideActionId, actionId),
-        eq(learningEvaluations.stepId, actionId)
-      ))
-      .orderBy(desc(learningEvaluations.createdAt))
-      .limit(1);
-    return rows[0] ? mapEvaluation(rows[0]) : null;
-  }
-
-  private async getLatestDecisionByActionId(actionId: string): Promise<StoredNextStepDecision | null> {
-    const evaluationRows = await this.db
-      .select({ id: learningEvaluations.id })
-      .from(learningEvaluations)
-      .where(or(
-        eq(learningEvaluations.dailyGuideActionId, actionId),
-        eq(learningEvaluations.stepId, actionId)
-      ))
-      .orderBy(desc(learningEvaluations.createdAt))
-      .limit(1);
-    if (!evaluationRows[0]) return null;
-    const rows = await this.db
-      .select()
-      .from(nextStepDecisions)
-      .where(eq(nextStepDecisions.evaluationId, evaluationRows[0].id))
-      .orderBy(desc(nextStepDecisions.createdAt))
-      .limit(1);
-    return rows[0] ? mapDecision(rows[0]) : null;
-  }
-
-  private async getPendingAdjustment(params: {
-    goalId: string | null;
-    stageId: string | null;
-    taskId: string | null;
-  }): Promise<PlanAdjustmentProposal | null> {
-    const rows = await this.db
-      .select()
-      .from(planAdjustmentProposals)
-      .where(eq(planAdjustmentProposals.status, 'pending'))
-      .orderBy(desc(planAdjustmentProposals.createdAt));
-    const mapped = rows.map(mapPlanAdjustmentProposal);
-    return (
-      mapped.find((item) => params.taskId && item.taskId === params.taskId) ??
-      mapped.find((item) => params.stageId && item.stageId === params.stageId) ??
-      mapped.find((item) => params.goalId && item.goalId === params.goalId) ??
-      null
+  async closeTask(
+    taskId: string,
+    closureKind: 'completed' | 'partial' | 'abandoned' | 'replaced',
+    closureReason?: string,
+    nextStartPoint?: string
+  ): Promise<void> {
+    await this.currentLearningContext.closeTask(
+      taskId,
+      closureKind,
+      closureReason,
+      nextStartPoint
     );
   }
 
-  private async closeCurrentSession(guideId: string): Promise<void> {
-    await this.currentLearningContext.completeGuide(guideId);
+  private async finishCurrentAction(status: 'done' | 'skipped'): Promise<LearningRuntimeSnapshot> {
+    const resolved = await this.currentLearningContext.resolve();
+    if (!resolved.taskId || !resolved.actionId) throw new Error('当前没有可处理的 Action。');
+    const now = nowIso();
+    await this.db.transaction(async (tx) => {
+      await tx.update(learningActions).set({
+        status,
+        completedAt: now
+      }).where(and(
+        eq(learningActions.id, resolved.actionId!),
+        eq(learningActions.taskId, resolved.taskId!)
+      ));
+    });
+    const next = (await this.db.select({ id: learningActions.id }).from(learningActions)
+      .where(and(eq(learningActions.taskId, resolved.taskId), eq(learningActions.status, 'planned')))
+      .orderBy(asc(learningActions.position)).limit(1))[0];
+    await this.currentLearningContext.write({ actionId: next?.id ?? null });
+    return this.getSnapshot();
   }
+
+  private async getGoal(id: string): Promise<LearningGoal | null> {
+    const row = (await this.db.select().from(goals).where(eq(goals.id, id)).limit(1))[0];
+    return row ? mapGoal(row) : null;
+  }
+
+  private async getStage(id: string): Promise<RoadmapStage | null> {
+    const row = (await this.db.select().from(roadmapStages).where(eq(roadmapStages.id, id)).limit(1))[0];
+    return row ? mapRoadmapStage(row) : null;
+  }
+
+  private async getGuide(id: string): Promise<DailyGuide | null> {
+    const row = (await this.db.select().from(learningGuides).where(eq(learningGuides.id, id)).limit(1))[0];
+    if (!row) return null;
+    const taskRows = await this.db.select().from(learningTasks)
+      .where(eq(learningTasks.guideId, id)).orderBy(asc(learningTasks.position));
+    const tasks: DailyGuideTask[] = [];
+    for (const task of taskRows) {
+      const actions = await this.db.select().from(learningActions)
+        .where(eq(learningActions.taskId, task.id)).orderBy(asc(learningActions.position));
+      tasks.push(mapDailyGuideTask(task, actions.map(mapDailyGuideAction)));
+    }
+    return mapDailyGuide(row, [], tasks);
+  }
+
+  private async getTask(id: string): Promise<DailyGuideTask | null> {
+    const row = (await this.db.select().from(learningTasks).where(eq(learningTasks.id, id)).limit(1))[0];
+    if (!row) return null;
+    const actions = await this.db.select().from(learningActions)
+      .where(eq(learningActions.taskId, id)).orderBy(asc(learningActions.position));
+    return mapDailyGuideTask(row, actions.map(mapDailyGuideAction));
+  }
+
+  private async getOpenThread(taskId: string): Promise<QuestionThread | null> {
+    const rows = await this.db.select({
+      thread: conversationThreads,
+      goalId: conversationMessages.linkedGoalId,
+      linkedTaskId: conversationMessages.linkedTaskId,
+      linkedActionId: conversationMessages.linkedActionId
+    }).from(conversationThreads)
+      .innerJoin(conversationMessages, eq(conversationMessages.threadId, conversationThreads.id))
+      .where(and(eq(conversationThreads.status, 'open'), eq(conversationMessages.linkedTaskId, taskId)))
+      .orderBy(desc(conversationThreads.updatedAt)).limit(1);
+    return rows[0] ? mapQuestionThread(rows[0].thread, {
+      goalId: rows[0].goalId,
+      taskId: rows[0].linkedTaskId,
+      actionId: rows[0].linkedActionId
+    }) : null;
+  }
+
+  private async getMessages(threadId: string): Promise<QuestionMessage[]> {
+    const rows = await this.db.select().from(conversationMessages)
+      .where(eq(conversationMessages.threadId, threadId)).orderBy(asc(conversationMessages.createdAt));
+    return rows.map(mapQuestionMessage);
+  }
+
+  private async getLatestSubmission(taskId: string): Promise<LearningSubmission | null> {
+    return readLatestSubmissionForTask(this.db, taskId);
+  }
+
+  private async getSubmissionAttempts(taskId: string): Promise<SubmissionAttemptHistory[]> {
+    const submissionRows = await this.db.select().from(learningSubmissions)
+      .where(eq(learningSubmissions.taskId, taskId))
+      .orderBy(desc(learningSubmissions.createdAt));
+    const result: SubmissionAttemptHistory[] = [];
+    for (const row of submissionRows) {
+      const submission = await readSubmission(this.db, row.id);
+      if (!submission) continue;
+      const evaluations = (await this.db.select().from(learningEvaluations)
+        .where(and(
+          eq(learningEvaluations.kind, 'submission'),
+          eq(learningEvaluations.submissionId, row.id)
+        ))
+        .orderBy(desc(learningEvaluations.createdAt)))
+        .map(mapEvaluation);
+      result.push({
+        submission,
+        evaluations,
+        latestEvaluation: evaluations[0] ?? null
+      });
+    }
+    return result;
+  }
+
+  private async getLatestEvaluation(submissionId: string): Promise<LearningEvaluation | null> {
+    const row = (await this.db.select().from(learningEvaluations)
+      .where(and(
+        eq(learningEvaluations.kind, 'submission'),
+        eq(learningEvaluations.submissionId, submissionId)
+      )).orderBy(desc(learningEvaluations.createdAt)).limit(1))[0];
+    return row ? mapEvaluation(row) : null;
+  }
+
+  private async getDecision(evaluationId: string): Promise<StoredNextStepDecision | null> {
+    const row = (await this.db.select().from(learningEvaluations)
+      .where(eq(learningEvaluations.id, evaluationId)).limit(1))[0];
+    return row?.recommendationJson ? mapDecision(row) : null;
+  }
+
+  private async getPendingAdjustment(goalId: string): Promise<PlanAdjustmentProposal | null> {
+    const row = (await this.db.select().from(learningEvaluations)
+      .where(and(
+        eq(learningEvaluations.kind, 'goal_review'),
+        eq(learningEvaluations.goalId, goalId),
+        eq(learningEvaluations.recommendationDecision, 'pending')
+      )).orderBy(desc(learningEvaluations.createdAt)).limit(1))[0];
+    return row ? mapPlanAdjustmentProposal(row) : null;
+  }
+}
+
+function elapsedSeconds(activeSince: string | null, now: string): number {
+  if (!activeSince) return 0;
+  return Math.max(0, Math.floor((Date.parse(now) - Date.parse(activeSince)) / 1000));
 }

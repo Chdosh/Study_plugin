@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, or } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import type {
   DailyPlanBlock,
   DailyGuide,
@@ -13,19 +13,17 @@ import type {
   LearningGoal,
   LearningRuntimeSnapshot,
   LearningRuntimeState,
-  LearningStep,
   LearningSubmission,
-  LearningSummary,
   PlanAdjustmentProposal,
   PlanProposalInput,
   PlanVersionEntry,
-  PreviousLearningDayResult,
+  PreviousLearningUnitResult,
   PromptProfile,
   QuestionMessage,
   QuestionThread,
   ReviewResult,
   RoadmapStage,
-  ShortPlanDay,
+  NearTermPlanItem,
   StoredNextStepDecision,
   StudySession,
   StudyWindow,
@@ -40,7 +38,6 @@ import type {
   SubmissionEvaluationAgentOutput,
   TeachStepAgentOutput
 } from '../../shared/schemas';
-import { applyEvaluationResult } from '../domain/execution-state-machine';
 import type { Database } from '../db/client';
 import type {
   CreatePendingInteractionInput,
@@ -52,20 +49,13 @@ import type { LearningAiOperation, BuiltLearningContext } from './context-builde
 export type { LearningAiOperation, BuiltLearningContext };
 import {
   aiReviews,
-  dailyGuideActions,
-  dailyGuideBlocks,
-  dailyGuideTasks,
-  dailyGuides,
-  dailyPlanBlocks,
-  dailyPlans,
   goals,
+  learningActions,
   learningEvaluations,
-  learningRuntimeStates,
-  learningSteps,
-  nextStepDecisions,
+  learningGuides,
+  learningSubmissions,
+  learningTasks,
   roadmapStages,
-  shortPlanDays,
-  studySessions,
 } from '../db/schema';
 import { createId, nowIso } from './id';
 import { EvaluationPersistence } from './store/evaluation-persistence';
@@ -80,14 +70,14 @@ import { ReportingPersistence } from './store/reporting-persistence';
 import { RuntimePersistence } from './store/runtime-persistence';
 import { CurrentLearningContextPersistence } from './store/current-learning-context';
 import {
+  RecommendationCommandGateway,
+  type RecommendationDecision
+} from './store/recommendation-command-gateway';
+import {
   mapDailyGuideAction,
   mapDailyGuideTask,
-  mapDecision,
   mapGoal,
-  mapPlanBlock,
-  mapQuestionThread,
   mapRoadmapStage,
-  parseStringArray,
 } from './store/serialization';
 
 export class StudyStore extends KnowledgeStore {
@@ -101,6 +91,7 @@ export class StudyStore extends KnowledgeStore {
   private readonly ops: OpsPersistence;
   private readonly layeredPlans: LayeredPlanPersistence;
   private readonly reporting: ReportingPersistence;
+  private readonly recommendationCommands: RecommendationCommandGateway;
 
   constructor(db: Database) {
     super(db);
@@ -113,7 +104,14 @@ export class StudyStore extends KnowledgeStore {
     this.questionBranches = new QuestionBranchPersistence(db, this.runtime, (params) => this.recordKnowledgeItems(params));
     this.ops = new OpsPersistence(db);
     this.layeredPlans = new LayeredPlanPersistence(db, (guideId) => this.getDailyGuideById(guideId));
-    this.reporting = new ReportingPersistence(db, (date) => this.getGuideByDate(date));
+    this.reporting = new ReportingPersistence(
+      db,
+      (guideId) => this.getDailyGuideById(guideId)
+    );
+    this.recommendationCommands = new RecommendationCommandGateway(
+      db,
+      this.runtime
+    );
   }
 
   getActiveStepId(): string | null {
@@ -142,7 +140,6 @@ export class StudyStore extends KnowledgeStore {
     const now = nowIso();
     const row = {
       id: createId('goal'),
-      sourceImportId: null,
       title: cleanTitle,
       description: description?.trim() || null,
       status: 'active' as const,
@@ -160,7 +157,7 @@ export class StudyStore extends KnowledgeStore {
       activeQuestionThreadId: null,
       sessionStatus: 'idle'
     });
-    return row;
+    return mapGoal(row);
   }
 
   async listGoals(): Promise<LearningGoal[]> {
@@ -209,7 +206,7 @@ export class StudyStore extends KnowledgeStore {
     roadmap: RoadmapAgentOutput;
     shortPlan: ShortPlanAgentOutput;
     dailyGuide: DailyGuideAgentOutput;
-  }): Promise<{ goal: LearningGoal; roadmap: RoadmapStage[]; shortPlan: ShortPlanDay[]; guide: DailyGuide }> {
+  }): Promise<{ goal: LearningGoal; roadmap: RoadmapStage[]; shortPlan: NearTermPlanItem[]; guide: DailyGuide }> {
     return this.layeredPlans.saveLayeredPlan(params);
   }
 
@@ -221,28 +218,28 @@ export class StudyStore extends KnowledgeStore {
     goalId: string;
     roadmapStageId: string;
     items: Array<{
-      dayIndex: number;
+      itemIndex: number;
       title: string;
       focus: string;
       tasks: string[];
       expectedOutput: string;
       successCriteria: string;
     }>;
-  }): Promise<ShortPlanDay[]> {
+  }): Promise<NearTermPlanItem[]> {
     return this.layeredPlans.saveRollingPlanDays(params);
   }
 
   async applyReviewPlanAdjustments(params: {
     goalId: string;
     adjustments: Array<{
-      dayIndex: number;
+      itemIndex: number;
       title: string;
       focus: string;
       expectedOutput: string;
       successCriteria: string;
       reason: string;
     }>;
-  }): Promise<ShortPlanDay[]> {
+  }): Promise<NearTermPlanItem[]> {
     return this.planChanges.applyReviewPlanAdjustments(params);
   }
 
@@ -280,44 +277,44 @@ export class StudyStore extends KnowledgeStore {
     return this.ops.getTokenCostStats(opts);
   }
 
-  async confirmDailyGuide(guideId: string): Promise<DailyGuide> {
-    return this.dailyGuidesStore.confirmDailyGuide(guideId);
+  async confirmLearningGuide(guideId: string): Promise<DailyGuide> {
+    return this.dailyGuidesStore.confirmLearningGuide(guideId);
   }
 
-  async archiveTodayGuides(date: string): Promise<GoalIntakeState> {
-    return this.goalIntakes.archiveTodayGuides(date);
+  async archiveActiveGoalsAndRestart(): Promise<GoalIntakeState> {
+    return this.goalIntakes.archiveActiveGoalsAndRestart();
   }
 
-  async getUsedShortPlanDayIds(goalId: string): Promise<Set<string>> {
-    return this.dailyGuidesStore.getUsedShortPlanDayIds(goalId);
+  async getUsedNearTermPlanItemIds(goalId: string): Promise<Set<string>> {
+    return this.dailyGuidesStore.getUsedNearTermPlanItemIds(goalId);
   }
 
-  async listAvailableShortPlanDaysForStage(goalId: string, roadmapStageId: string): Promise<ShortPlanDay[]> {
-    return this.dailyGuidesStore.listAvailableShortPlanDaysForStage(goalId, roadmapStageId);
+  async listAvailableNearTermPlanItemsForStage(goalId: string, roadmapStageId: string): Promise<NearTermPlanItem[]> {
+    return this.dailyGuidesStore.listAvailableNearTermPlanItemsForStage(goalId, roadmapStageId);
   }
 
   async getPreviousCompletedLearningDayContext(
     goalId: string
-  ): Promise<PreviousLearningDayResult | null> {
+  ): Promise<PreviousLearningUnitResult | null> {
     const guideRows = await this.db
       .select()
-      .from(dailyGuides)
+      .from(learningGuides)
       .where(and(
-        eq(dailyGuides.goalId, goalId),
-        eq(dailyGuides.sessionStatus, 'closed')
+        eq(learningGuides.goalId, goalId),
+        eq(learningGuides.status, 'closed')
       ))
-      .orderBy(desc(dailyGuides.createdAt))
+      .orderBy(desc(learningGuides.createdAt))
       .limit(1);
     if (guideRows.length === 0) return null;
 
     const guide = guideRows[0];
     const tasks = await this.db
       .select()
-      .from(dailyGuideTasks)
-      .where(eq(dailyGuideTasks.guideId, guide.id))
-      .orderBy(asc(dailyGuideTasks.position));
+      .from(learningTasks)
+      .where(eq(learningTasks.guideId, guide.id))
+      .orderBy(asc(learningTasks.position));
 
-    const completedTasks = tasks.filter((t) => t.status === 'done').map((t) => t.title);
+    const completedTasks = tasks.filter((t) => t.closureKind === 'completed').map((t) => t.title);
     if (completedTasks.length === 0) return null;
 
     const submissionResults = await this.getLastSubmissionEvaluationForGuide(guide);
@@ -327,7 +324,7 @@ export class StudyStore extends KnowledgeStore {
     const reviewRows = await this.db
       .select()
       .from(aiReviews)
-      .where(and(eq(aiReviews.kind, 'reflection'), eq(aiReviews.date, guide.date)))
+      .where(and(eq(aiReviews.kind, 'reflection'), eq(aiReviews.date, guide.createdAt.slice(0, 10))))
       .orderBy(desc(aiReviews.createdAt))
       .limit(1);
     if (
@@ -346,22 +343,22 @@ export class StudyStore extends KnowledgeStore {
   async getRollingPlanContext(goalId: string): Promise<{ summary: string; reviewSummary?: string } | null> {
     const guideRows = await this.db
       .select()
-      .from(dailyGuides)
+      .from(learningGuides)
       .where(and(
-        eq(dailyGuides.goalId, goalId),
-        eq(dailyGuides.sessionStatus, 'closed')
+        eq(learningGuides.goalId, goalId),
+        eq(learningGuides.status, 'closed')
       ))
-      .orderBy(desc(dailyGuides.createdAt))
+      .orderBy(desc(learningGuides.createdAt))
       .limit(1);
     if (guideRows.length === 0) return null;
 
     const guide = guideRows[0];
     const taskRows = await this.db
-      .select({ title: dailyGuideTasks.title, status: dailyGuideTasks.status })
-      .from(dailyGuideTasks)
-      .where(eq(dailyGuideTasks.guideId, guide.id));
+      .select({ title: learningTasks.title, closureKind: learningTasks.closureKind })
+      .from(learningTasks)
+      .where(eq(learningTasks.guideId, guide.id));
 
-    const doneTasks = taskRows.filter((t) => t.status === 'done').map((t) => t.title);
+    const doneTasks = taskRows.filter((t) => t.closureKind === 'completed').map((t) => t.title);
     const allTasks = taskRows.map((t) => t.title);
     const summary = doneTasks.length > 0
       ? `已完成任务：${doneTasks.join('、')}。全部任务：${allTasks.join('、')}。`
@@ -386,26 +383,17 @@ export class StudyStore extends KnowledgeStore {
     return { summary, reviewSummary };
   }
 
-  async getLastSubmissionEvaluationForGuide(guide: typeof dailyGuides.$inferSelect): Promise<string | null> {
-    const blockRows = await this.db
-      .select()
-      .from(dailyGuideBlocks)
-      .where(eq(dailyGuideBlocks.guideId, guide.id));
-    if (blockRows.length === 0) return null;
-
-    const blockIds = blockRows.map((b) => b.planBlockId);
-    const stepRows = await this.db
-      .select()
-      .from(learningSteps)
-      .where(inArray(learningSteps.blockId, blockIds))
-      .orderBy(desc(learningSteps.updatedAt))
-      .limit(1);
-    if (stepRows.length === 0) return null;
-
+  async getLastSubmissionEvaluationForGuide(guide: typeof learningGuides.$inferSelect): Promise<string | null> {
+    const taskRows = await this.db.select({ id: learningTasks.id }).from(learningTasks)
+      .where(eq(learningTasks.guideId, guide.id));
+    if (taskRows.length === 0) return null;
+    const submissions = await this.db.select({ id: learningSubmissions.id }).from(learningSubmissions)
+      .where(inArray(learningSubmissions.taskId, taskRows.map((item) => item.id)));
+    if (submissions.length === 0) return null;
     const evalRows = await this.db
       .select()
       .from(learningEvaluations)
-      .where(eq(learningEvaluations.stepId, stepRows[0].id))
+      .where(inArray(learningEvaluations.submissionId, submissions.map((item) => item.id)))
       .orderBy(desc(learningEvaluations.createdAt))
       .limit(1);
     if (evalRows.length > 0) {
@@ -418,7 +406,7 @@ export class StudyStore extends KnowledgeStore {
     goal: LearningGoal;
     date: string;
     windows: StudyWindow[];
-    shortPlanDayId: string;
+    nearTermPlanItemId: string;
   }): Promise<DailyGuide> {
     return this.dailyGuidesStore.ensureDraftDailyGuide(params);
   }
@@ -427,14 +415,14 @@ export class StudyStore extends KnowledgeStore {
     goal: LearningGoal;
     date: string;
     windows: StudyWindow[];
-    shortPlanDayId: string;
+    nearTermPlanItemId: string;
     dailyGuide: DailyGuideAgentOutput;
-  }): Promise<{ goal: LearningGoal; roadmap: RoadmapStage[]; shortPlan: ShortPlanDay[]; guide: DailyGuide }> {
+  }): Promise<{ goal: LearningGoal; roadmap: RoadmapStage[]; shortPlan: NearTermPlanItem[]; guide: DailyGuide }> {
     return this.dailyGuidesStore.saveDailyGuideWithTransaction(params);
   }
 
   async completeLearningDay(guideId: string): Promise<void> {
-    const guideRows = await this.db.select().from(dailyGuides).where(eq(dailyGuides.id, guideId)).limit(1);
+    const guideRows = await this.db.select().from(learningGuides).where(eq(learningGuides.id, guideId)).limit(1);
     if (guideRows.length === 0) throw new Error('Guide not found');
     const guide = guideRows[0];
     await this.currentLearningContext.completeGuide(guideId);
@@ -445,7 +433,7 @@ export class StudyStore extends KnowledgeStore {
     return this.evaluations.getPendingEvaluationIdsForGoal(goalId);
   }
 
-  async getActiveGuide(activeOnly: boolean = false): Promise<{ goal: LearningGoal | null; roadmap: RoadmapStage[]; shortPlan: ShortPlanDay[]; guide: DailyGuide | null }> {
+  async getActiveGuide(activeOnly: boolean = false): Promise<{ goal: LearningGoal | null; roadmap: RoadmapStage[]; shortPlan: NearTermPlanItem[]; guide: DailyGuide | null }> {
     return this.dailyGuidesStore.getActiveGuide(activeOnly);
   }
 
@@ -453,8 +441,8 @@ export class StudyStore extends KnowledgeStore {
     return this.dailyGuidesStore.getGuideByDate(date);
   }
 
-  async activateShortPlanDay(shortPlanDayId: string): Promise<boolean> {
-    return this.dailyGuidesStore.activateShortPlanDay(shortPlanDayId);
+  async activateNearTermPlanItem(nearTermPlanItemId: string): Promise<boolean> {
+    return this.dailyGuidesStore.activateNearTermPlanItem(nearTermPlanItemId);
   }
 
   async getActiveStageForGoal(goalId: string): Promise<RoadmapStage | null> {
@@ -467,12 +455,8 @@ export class StudyStore extends KnowledgeStore {
     return rows[0] ? mapRoadmapStage(rows[0]) : null;
   }
 
-  async getPendingShortPlanDaysForGoal(goalId: string): Promise<ShortPlanDay[]> {
-    return this.dailyGuidesStore.getPendingShortPlanDaysForGoal(goalId);
-  }
-
-  async updateShortPlanDay(shortPlanDayId: string, patch: Partial<ShortPlanDay>): Promise<ShortPlanDay | null> {
-    return this.dailyGuidesStore.updateShortPlanDay(shortPlanDayId, patch);
+  async getPendingNearTermPlanItemsForGoal(goalId: string): Promise<NearTermPlanItem[]> {
+    return this.dailyGuidesStore.getPendingNearTermPlanItemsForGoal(goalId);
   }
 
   async getCompletedGuidesForGoal(goalId: string): Promise<DailyGuide[]> {
@@ -495,6 +479,13 @@ export class StudyStore extends KnowledgeStore {
     return this.questionBranches.createTaskFromBranch(branchSummary, anchor);
   }
 
+  createTaskFromTemporary(
+    threadId: string,
+    goalId: string
+  ): Promise<{ taskId: string; guideId: string | null }> {
+    return this.questionBranches.createTaskFromTemporary(threadId, goalId);
+  }
+
   async extractKnowledgeFromBranch(summary: string, sourceId: string, goalId: string): Promise<void> {
     await this.questionBranches.extractKnowledgeFromBranch(summary, sourceId, goalId);
   }
@@ -505,7 +496,7 @@ export class StudyStore extends KnowledgeStore {
 
   async getDailyGuideTaskByBlockId(blockId: string): Promise<DailyGuideTask | null> {
     const tasks = await this.getDailyGuideTasksByBlockId(blockId);
-    return tasks.find((task) => task.legacyPlanBlockId === blockId || task.id === blockId) ?? null;
+    return tasks.find((task) => task.id === blockId) ?? null;
   }
 
   async startSession(taskId: string): Promise<StudySession> {
@@ -518,16 +509,6 @@ export class StudyStore extends KnowledgeStore {
 
   async completeSession(sessionId: string, notes?: string): Promise<StudySession> {
     return this.runtime.completeSession(sessionId, notes);
-  }
-
-  async recordFocusEvent(params: {
-    sessionId: string | null;
-    appName: string;
-    windowTitle: string | null;
-    eventType: 'foreground' | 'away' | 'return' | 'unknown';
-    durationSeconds?: number;
-  }): Promise<void> {
-    await this.runtime.recordFocusEvent(params);
   }
 
   async listSessions(): Promise<StudySession[]> {
@@ -543,8 +524,8 @@ export class StudyStore extends KnowledgeStore {
   }
 
   async getBlock(blockId: string): Promise<DailyPlanBlock | null> {
-    const rows = await this.db.select().from(dailyPlanBlocks).where(eq(dailyPlanBlocks.id, blockId)).limit(1);
-    return rows[0] ? mapPlanBlock(rows[0]) : null;
+    void blockId;
+    return null;
   }
 
   async getLearningRuntimeSnapshot(): Promise<LearningRuntimeSnapshot> {
@@ -559,11 +540,26 @@ export class StudyStore extends KnowledgeStore {
     return this.runtime.skipCurrentAction();
   }
 
-  async skipCurrentTask(): Promise<LearningRuntimeSnapshot> {
-    return this.runtime.skipCurrentTask();
+  async closeTask(
+    taskId: string,
+    closureKind: 'completed' | 'partial' | 'abandoned' | 'replaced',
+    closureReason?: string,
+    nextStartPoint?: string
+  ): Promise<void> {
+    return this.runtime.closeTask(taskId, closureKind, closureReason, nextStartPoint);
   }
 
-  async openQuestion(actionId: string | null, question: string, opts?: { goalId?: string; kind?: 'question' | 'debug' | 'practice'; metadata?: Record<string, unknown> }): Promise<QuestionThread> {
+  insertGuideSupplement(params: {
+    title: string;
+    instruction: string;
+    checkpoint: string;
+    sourceAiReviewId: string;
+    expectedContextVersion: number;
+  }): Promise<DailyGuideAction> {
+    return this.runtime.insertGuideSupplement(params);
+  }
+
+  async openQuestion(actionId: string | null, question: string, opts?: { goalId?: string; kind?: 'question' | 'debug' | 'practice'; metadata?: Record<string, unknown>; standalone?: boolean }): Promise<QuestionThread> {
     return this.questionBranches.openQuestion(actionId, question, opts);
   }
 
@@ -575,28 +571,20 @@ export class StudyStore extends KnowledgeStore {
     return this.questionBranches.getQuestionMessages(threadId);
   }
 
+  getLatestStandaloneQuestionThread(): Promise<QuestionThread | null> {
+    return this.questionBranches.getLatestStandaloneQuestionThread();
+  }
+
+  linkQuestionThreadToGoal(threadId: string, goalId: string): Promise<QuestionThread> {
+    return this.questionBranches.linkQuestionThreadToGoal(threadId, goalId);
+  }
+
   async saveQuestionAnswer(threadId: string, output: AnswerStepQuestionAgentOutput): Promise<QuestionThread> {
     return this.questionBranches.saveQuestionAnswer(threadId, output);
   }
 
   async resolveQuestion(threadId: string, summary?: string): Promise<void> {
     await this.questionBranches.resolveQuestion(threadId, summary);
-  }
-
-  async beginLearningSummary(kind: LearningSummary['kind'], refId: string): Promise<LearningSummary> {
-    return this.questionBranches.beginLearningSummary(kind, refId);
-  }
-
-  async completeLearningSummary(summaryId: string, summary: unknown): Promise<LearningSummary> {
-    return this.questionBranches.completeLearningSummary(summaryId, summary);
-  }
-
-  async failLearningSummary(summaryId: string, errorCategory: string): Promise<LearningSummary> {
-    return this.questionBranches.failLearningSummary(summaryId, errorCategory);
-  }
-
-  async getLatestLearningSummary(kind: LearningSummary['kind'], refId: string): Promise<LearningSummary | null> {
-    return this.questionBranches.getLatestLearningSummary(kind, refId);
   }
 
   async createSubmission(
@@ -634,6 +622,36 @@ export class StudyStore extends KnowledgeStore {
     decisionAiReviewId?: string;
   }): Promise<{ evaluation: LearningEvaluation; decision: StoredNextStepDecision; nextAction: DailyGuideAction | null }> {
     return this.evaluations.saveEvaluationAndDecision(params);
+  }
+
+  decideEvaluationRecommendation(
+    evaluationId: string,
+    decision: RecommendationDecision,
+    reason?: string
+  ): Promise<LearningRuntimeSnapshot> {
+    return this.recommendationCommands.decide(evaluationId, decision, reason);
+  }
+
+  async recordEvaluationCorrection(
+    evaluationId: string,
+    reason: string
+  ): Promise<LearningRuntimeSnapshot> {
+    const correction = await this.evaluations.recordCorrection(evaluationId, reason);
+    await this.recordKnowledgeItems({
+      goalId: correction.goalId,
+      items: [{
+        key: `evaluation-correction:${evaluationId}`,
+        summary: correction.evaluation.feedback,
+        detail: reason.trim(),
+        sourceType: 'correction',
+        sourceId: correction.evaluation.id,
+        evidence: {
+          submissionId: correction.submissionId,
+          evaluationId: correction.evaluation.id
+        }
+      }]
+    });
+    return this.runtime.getSnapshot();
   }
 
   /**
@@ -706,24 +724,26 @@ export class StudyStore extends KnowledgeStore {
   private async getDailyGuideTasksByBlockId(blockId: string): Promise<DailyGuideTask[]> {
     const taskRows = await this.db
       .select()
-      .from(dailyGuideTasks)
-      .where(eq(dailyGuideTasks.legacyPlanBlockId, blockId))
+      .from(learningTasks)
+      .where(eq(learningTasks.id, blockId))
       .limit(1);
     const currentTask = taskRows[0];
     if (!currentTask) return [];
 
     const guideTaskRows = await this.db
       .select()
-      .from(dailyGuideTasks)
-      .where(eq(dailyGuideTasks.guideId, currentTask.guideId))
-      .orderBy(asc(dailyGuideTasks.position));
+      .from(learningTasks)
+      .where(currentTask.guideId
+        ? eq(learningTasks.guideId, currentTask.guideId)
+        : isNull(learningTasks.guideId))
+      .orderBy(asc(learningTasks.position));
     const tasks: DailyGuideTask[] = [];
     for (const task of guideTaskRows) {
       const actionRows = await this.db
         .select()
-        .from(dailyGuideActions)
-        .where(eq(dailyGuideActions.taskId, task.id))
-        .orderBy(asc(dailyGuideActions.position));
+        .from(learningActions)
+        .where(eq(learningActions.taskId, task.id))
+        .orderBy(asc(learningActions.position));
       tasks.push(mapDailyGuideTask(task, actionRows.map(mapDailyGuideAction)));
     }
     return tasks;
@@ -755,6 +775,10 @@ export class StudyStore extends KnowledgeStore {
 
   updateAiReview(id: string, patch: UpdateAiReviewInput): Promise<void> {
     return this.ops.updateAiReview(id, patch);
+  }
+
+  getAgentRunState(id: string) {
+    return this.ops.getAgentRunState(id);
   }
 
   getActiveAgentRun(scopeType: string, scopeId: string) {
@@ -806,7 +830,7 @@ export class StudyStore extends KnowledgeStore {
     return this.ops.getLatestReview(date);
   }
 
-  async getDaySnapshot(date: string) {
-    return this.reporting.getDaySnapshot(date);
+  async getGuideSnapshot(guideId: string) {
+    return this.reporting.getGuideSnapshot(guideId);
   }
 }

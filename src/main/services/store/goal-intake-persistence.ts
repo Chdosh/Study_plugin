@@ -8,16 +8,15 @@ import type {
   LearningGoal
 } from '../../../shared/types';
 import type { GoalIntakeAgentOutput } from '../../../shared/schemas';
-import { localDateIso } from '../../../shared/date';
 import type { Database } from '../../db/client';
 import {
-  dailyGuides,
-  dailyPlans,
   goalIntakeMessages,
   goalIntakes,
-  goals
+  goals,
+  learningGuides
 } from '../../db/schema';
 import { createId, nowIso } from '../id';
+import { resolveGoalDueDate } from '../../domain/goal-deadline';
 import type { RuntimePersistence } from './runtime-persistence';
 import {
   mapGoal,
@@ -28,7 +27,7 @@ import {
 } from './serialization';
 
 const DEFAULT_GREETING = '我们先把目标说清楚。你可以直接告诉我想学什么、想达到什么结果；如果赶时间，也可以说"直接开始"。';
-const RESTART_GREETING = '上一版今日计划已经归档。我们重新开始：你想开启什么新学习计划？也可以直接说"直接开始"。';
+const RESTART_GREETING = '上一版学习计划已经归档。我们重新开始：你想开启什么新学习计划？也可以直接说"直接开始"。';
 
 export class GoalIntakePersistence {
   private cachedActiveIntakeId: string | null = null;
@@ -75,7 +74,7 @@ export class GoalIntakePersistence {
           ? confirmedWithGoal.updatedAt >= intake.createdAt
           : false;
         if (confirmedWithGoal && confirmedIsNewerThanEmptyIntake) {
-          const hasGuide = await this.hasNonArchivedGuideForToday(confirmedWithGoal.goalId);
+          const hasGuide = await this.hasOpenGuideForGoal(confirmedWithGoal.goalId);
           if (!hasGuide) {
             intake = confirmedWithGoal;
           }
@@ -86,7 +85,7 @@ export class GoalIntakePersistence {
     if (!intake) {
       const latest = existing[0];
       if (latest && latest.status === 'confirmed' && latest.goalId) {
-        const hasGuide = await this.hasNonArchivedGuideForToday(latest.goalId);
+        const hasGuide = await this.hasOpenGuideForGoal(latest.goalId);
         if (!hasGuide) {
           intake = latest;
         }
@@ -132,6 +131,12 @@ export class GoalIntakePersistence {
       throw new Error('目标理解缺少标题，无法确认。');
     }
     const description = this.describeBrief(brief);
+    const confirmedAt = nowIso();
+    const confirmedDate = confirmedAt.slice(0, 10);
+    const dueDate = resolveGoalDueDate(brief.deadline, confirmedDate);
+    if (dueDate && dueDate < confirmedDate) {
+      throw new Error('截止日期早于目标确认日期，请重新确认目标期限。');
+    }
 
     let goal: LearningGoal;
     if (current.intake.goalId) {
@@ -141,17 +146,24 @@ export class GoalIntakePersistence {
         await this.db.update(goals).set({
           title: brief.title,
           description: description || null,
+          dueDate,
           updatedAt: now
         }).where(eq(goals.id, existingGoal.id));
-        goal = { ...existingGoal, title: brief.title, description: description || null, updatedAt: now };
+        goal = {
+          ...existingGoal,
+          title: brief.title,
+          description: description || null,
+          dueDate,
+          updatedAt: now
+        };
       } else {
-        goal = await this.createGoal(brief.title, description);
+        goal = await this.createGoal(brief.title, description, dueDate);
       }
     } else {
-      goal = await this.createGoal(brief.title, description);
+      goal = await this.createGoal(brief.title, description, dueDate);
     }
 
-    const now = nowIso();
+    const now = confirmedAt;
     await this.db
       .update(goalIntakes)
       .set({
@@ -171,7 +183,7 @@ export class GoalIntakePersistence {
     return rows[0]?.briefJson ? parseGoalBrief(rows[0].briefJson) : null;
   }
 
-  async archiveTodayGuides(date: string): Promise<GoalIntakeState> {
+  async archiveActiveGoalsAndRestart(): Promise<GoalIntakeState> {
     const now = nowIso();
     const activeGoalRows = await this.db
       .select()
@@ -179,17 +191,11 @@ export class GoalIntakePersistence {
       .where(eq(goals.status, 'active'));
     const activeGoalIds = activeGoalRows.map((goal) => goal.id);
 
-    const guideRows = await this.db.select().from(dailyGuides).where(eq(dailyGuides.date, date));
-    for (const guide of guideRows) {
-      await this.db.update(dailyGuides).set({ status: 'archived' }).where(eq(dailyGuides.id, guide.id));
-      await this.db.update(dailyPlans).set({ status: 'archived' }).where(eq(dailyPlans.id, guide.planId));
-    }
-    await this.db.update(dailyPlans).set({ status: 'archived' }).where(eq(dailyPlans.date, date));
     if (activeGoalIds.length > 0) {
       await this.db
-        .update(dailyGuides)
+        .update(learningGuides)
         .set({ status: 'archived' })
-        .where(inArray(dailyGuides.goalId, activeGoalIds));
+        .where(inArray(learningGuides.goalId, activeGoalIds));
       await this.db
         .update(goals)
         .set({ status: 'archived', updatedAt: now })
@@ -249,25 +255,31 @@ export class GoalIntakePersistence {
     return rows[0];
   }
 
-  private async hasNonArchivedGuideForToday(goalId: string): Promise<boolean> {
-    const guideRows = await this.db.select().from(dailyGuides)
-      .where(and(eq(dailyGuides.goalId, goalId), eq(dailyGuides.date, localDateIso())))
+  private async hasOpenGuideForGoal(goalId: string): Promise<boolean> {
+    const guideRows = await this.db.select().from(learningGuides)
+      .where(and(
+        eq(learningGuides.goalId, goalId),
+        inArray(learningGuides.status, ['draft', 'active'])
+      ))
       .limit(1);
-    return guideRows.length > 0 && guideRows[0].status !== 'archived';
+    return guideRows.length > 0;
   }
 
-  private async createGoal(title: string, description?: string): Promise<LearningGoal> {
+  private async createGoal(
+    title: string,
+    description?: string,
+    dueDate: string | null = null
+  ): Promise<LearningGoal> {
     const cleanTitle = title.trim();
     if (!cleanTitle) throw new Error('学习目标标题不能为空。');
     const now = nowIso();
     const row = {
       id: createId('goal'),
-      sourceImportId: null,
       title: cleanTitle,
       description: description?.trim() || null,
       status: 'active' as const,
       priority: 3,
-      dueDate: null,
+      dueDate,
       createdAt: now,
       updatedAt: now
     };
@@ -280,7 +292,7 @@ export class GoalIntakePersistence {
       activeQuestionThreadId: null,
       sessionStatus: 'idle'
     });
-    return row;
+    return mapGoal(row);
   }
 
   private async getGoal(goalId: string): Promise<LearningGoal | null> {

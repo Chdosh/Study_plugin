@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { PromptProfile, ReviewResult } from '../../../shared/types';
 import type { ReviewAgentOutput } from '../../../shared/schemas';
 import type {
@@ -12,7 +12,6 @@ import { defaultPromptProfiles } from '../../db/default-prompts';
 import {
   aiReviews,
   appSettings,
-  generationLocks,
   pendingInteractions,
   promptProfiles,
   promptVersions
@@ -20,6 +19,8 @@ import {
 import { createId, nowIso } from '../id';
 
 export class OpsPersistence {
+  private readonly generationLocks = new Set<string>();
+
   constructor(private readonly db: Database) {}
 
   async seedDefaults(): Promise<void> {
@@ -174,32 +175,14 @@ export class OpsPersistence {
   }
 
   async acquireGenerationLock(lockKey: string, ttlMs: number = 120_000): Promise<boolean> {
-    const now = Date.now();
-    const staleThreshold = new Date(now - ttlMs).toISOString();
-    await this.db
-      .delete(generationLocks)
-      .where(lt(generationLocks.lockedAt, staleThreshold));
-    const existing = await this.db
-      .select()
-      .from(generationLocks)
-      .where(eq(generationLocks.lockKey, lockKey))
-      .limit(1);
-    if (existing.length > 0) return false;
-    try {
-      await this.db.insert(generationLocks).values({
-        lockKey,
-        lockedAt: nowIso()
-      });
-      return true;
-    } catch {
-      return false;
-    }
+    void ttlMs;
+    if (this.generationLocks.has(lockKey)) return false;
+    this.generationLocks.add(lockKey);
+    return true;
   }
 
   async releaseGenerationLock(lockKey: string): Promise<void> {
-    await this.db
-      .delete(generationLocks)
-      .where(eq(generationLocks.lockKey, lockKey));
+    this.generationLocks.delete(lockKey);
   }
 
   async listPromptProfiles(): Promise<PromptProfile[]> {
@@ -312,6 +295,31 @@ export class OpsPersistence {
     }
     if (Object.keys(values).length === 0) return;
     await this.db.update(aiReviews).set(values).where(eq(aiReviews.id, id));
+  }
+
+  async getAgentRunState(id: string): Promise<{
+    id: string;
+    status: 'running' | 'waiting_user' | 'completed' | 'failed' | 'cancelled';
+    output: unknown;
+  } | null> {
+    const rows = await this.db
+      .select({
+        id: aiReviews.id,
+        status: aiReviews.status,
+        outputJson: aiReviews.outputJson
+      })
+      .from(aiReviews)
+      .where(and(eq(aiReviews.id, id), eq(aiReviews.recordType, 'run')))
+      .limit(1);
+    const row = rows[0];
+    if (!row || !['running', 'waiting_user', 'completed', 'failed', 'cancelled'].includes(row.status)) {
+      return null;
+    }
+    return {
+      id: row.id,
+      status: row.status as 'running' | 'waiting_user' | 'completed' | 'failed' | 'cancelled',
+      output: JSON.parse(row.outputJson)
+    };
   }
 
   async getActiveAgentRun(

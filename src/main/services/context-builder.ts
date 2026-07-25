@@ -10,6 +10,7 @@ export type LearningAiOperation =
   | 'generate_stage_outline'
   | 'teach_step'
   | 'answer_step_question'
+  | 'answer_temporary_question'
   | 'evaluate_submission'
   | 'decide_next_step'
   | 'summarize_step'
@@ -46,6 +47,7 @@ const OPERATION_FIELD_WHITELIST: Record<LearningAiOperation, string[]> = {
   generate_stage_outline: ['operation', 'goal', 'roadmapStage', 'pendingAdjustment'],
   teach_step: ['operation', 'guideTask', 'guideAction', 'roadmapStage'],
   answer_step_question: ['operation', 'guideTask', 'guideAction', 'currentQuestionThread'],
+  answer_temporary_question: ['operation'],
   evaluate_submission: ['operation', 'guideTask', 'latestSubmission', 'latestEvaluation'],
   decide_next_step: ['operation', 'guideTask', 'latestEvaluation', 'latestDecision', 'pendingAdjustment'],
   summarize_step: ['operation', 'guideTask', 'guideAction', 'latestSubmission', 'latestEvaluation'],
@@ -62,6 +64,7 @@ const OPERATION_EXTRA_FIELD_WHITELIST: Record<LearningAiOperation, string[]> = {
   generate_stage_outline: ['learnerProfile', 'availableTime'],
   teach_step: ['learningStyle'],
   answer_step_question: ['question'],
+  answer_temporary_question: ['question', 'conversationHistory', 'linkedGoalId'],
   evaluate_submission: ['submission'],
   decide_next_step: ['remainingMinutes'],
   summarize_step: [],
@@ -183,6 +186,39 @@ export class ContextBuilder {
       contextSourceIds.push(...selectedFacts.map((fact) => fact.id));
       const latestFact = [...selectedFacts].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
       meta.learnerFacts = { status: 'current', sourceId: latestFact.id, createdAt: latestFact.updatedAt };
+    }
+
+    if (
+      snapshot.goal?.id
+      && (operation === 'teach_step' || operation === 'answer_step_question')
+    ) {
+      const { knowledgeItems } = await this.store.getKnowledgeContextForGoal(snapshot.goal.id);
+      const priorities = [...knowledgeItems]
+        .sort((left, right) =>
+          Number(right.sourceType === 'correction') - Number(left.sourceType === 'correction')
+          || right.occurrenceCount - left.occurrenceCount
+          || (right.lastSeenAt ?? right.updatedAt).localeCompare(left.lastSeenAt ?? left.updatedAt)
+        )
+        .slice(0, 3);
+      if (priorities.length > 0) {
+        context.knowledgePriorities = priorities.map((item) => ({
+          summary: item.summary,
+          detail: item.detail,
+          sourceType: item.sourceType,
+          occurrenceCount: item.occurrenceCount,
+          reason: item.sourceType === 'correction'
+            ? '用户纠正，优先于冲突的 AI 判断'
+            : item.occurrenceCount > 1
+              ? '多次出现，需要在当前教学中再次验证'
+              : '最近的有效学习证据'
+        }));
+        contextSourceIds.push(...priorities.map((item) => item.id));
+        meta.knowledgePriorities = {
+          status: 'current',
+          sourceId: priorities[0].id,
+          createdAt: priorities[0].lastSeenAt
+        };
+      }
     }
 
     const boundedContext = enforceTokenBudget(context, OPERATION_BUDGET_TOKENS);
@@ -387,7 +423,7 @@ function arbitrateContext(snapshot: LearningRuntimeSnapshot, facts: LearnerFact[
   }
 
   if (evaluation && snapshot.latestSubmission) {
-    const lowMastery = evaluation.mastery < 50;
+    const lowMastery = evaluation.result === 'failed' || evaluation.result === 'partial';
     const highSubmissionCount = snapshot.latestSubmission.content.length > 200;
     if (lowMastery && highSubmissionCount) {
       conflicts.push({
@@ -398,10 +434,10 @@ function arbitrateContext(snapshot: LearningRuntimeSnapshot, facts: LearnerFact[
       });
       rules.push({
         priority: '完成标准 > 提交篇幅',
-        decision: '以 mastery 分数为准',
-        reason: '评估基于完成标准，而非提交长度'
+        decision: '以实际完成标准和证据为准',
+        reason: '评价基于完成标准，而非提交长度或伪精确分数'
       });
-      safeToUse.push('mastery 评估分数');
+      safeToUse.push('评价中的完成标准和证据');
       avoidAssuming.push('提交长度反映掌握度');
     }
   }
@@ -426,16 +462,13 @@ function arbitrateContext(snapshot: LearningRuntimeSnapshot, facts: LearnerFact[
     }
   }
 
-  if (evaluation && snapshot.dailyGuideTask) {
-    const passedWithLowMastery = evaluation.result === 'passed' && evaluation.mastery < 70;
-    if (passedWithLowMastery) {
-      rules.push({
-        priority: '连续评价 > 单次判断',
-        decision: '标记为初步通过，建议后续继续巩固',
-        reason: '单次 AI 判断不能永久确认掌握'
-      });
-      avoidAssuming.push('用户已完全掌握该知识点');
-    }
+  if (evaluation?.result === 'passed' && snapshot.dailyGuideTask) {
+    rules.push({
+      priority: '连续证据 > 单次判断',
+      decision: '本次只记为一次正确表现，后续继续按证据派生定性状态',
+      reason: '单次 AI 判断不能永久确认掌握'
+    });
+    avoidAssuming.push('用户已完全掌握该知识点');
   }
 
   if (evaluation && confirmedCurrentLevel && (evaluation.result === 'failed' || evaluation.result === 'partial')) {
@@ -459,8 +492,8 @@ function arbitrateContext(snapshot: LearningRuntimeSnapshot, facts: LearnerFact[
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     .slice(0, 3);
   if (!confirmedCurrentLevel && recentEvaluations.length >= 2) {
-    const consistentlyLow = recentEvaluations.every((item) => item.result === 'failed' || item.result === 'partial' || item.mastery < 60);
-    const consistentlyHigh = recentEvaluations.every((item) => item.result === 'passed' && item.mastery >= 80);
+    const consistentlyLow = recentEvaluations.every((item) => item.result === 'failed' || item.result === 'partial');
+    const consistentlyHigh = recentEvaluations.every((item) => item.result === 'passed');
     if (consistentlyLow || consistentlyHigh) {
       rules.push({
         priority: '连续实际评价 > 旧目标描述 > 单次 AI 判断',

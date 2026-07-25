@@ -1,31 +1,25 @@
-import { and, asc, desc, eq, gt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray } from 'drizzle-orm';
 import type {
   PlanAdjustmentProposal,
   PlanProposalInput,
   PlanVersionEntry,
   RoadmapStage,
-  ShortPlanDay
+  NearTermPlanItem
 } from '../../../shared/types';
 import type { Database } from '../../db/client';
 import {
-  dailyGuides,
-  dailyGuideTasks,
-  dailyPlans,
-  learningRuntimeStates,
-  planAdjustmentProposals,
+  goals,
+  learningEvaluations,
+  learningGuides,
+  nearTermPlanItems,
   planVersions,
-  roadmapStages,
-  shortPlanDays,
-  taskItems
+  roadmapStages
 } from '../../db/schema';
 import { createId, nowIso } from '../id';
 import {
-  difficultyFromRecommendedAction,
   mapPlanAdjustmentProposal,
   mapRoadmapStage,
-  mapShortPlanDay,
-  readProposedChanges,
-  truncateText
+  mapNearTermPlanItem
 } from './serialization';
 
 export class PlanChangePersistence {
@@ -34,350 +28,287 @@ export class PlanChangePersistence {
   async applyReviewPlanAdjustments(params: {
     goalId: string;
     adjustments: Array<{
-      dayIndex: number;
+      itemIndex: number;
       title: string;
       focus: string;
       expectedOutput: string;
       successCriteria: string;
       reason: string;
     }>;
-  }): Promise<ShortPlanDay[]> {
+  }): Promise<NearTermPlanItem[]> {
     if (params.adjustments.length === 0) return [];
-    const activeStageRows = await this.db
-      .select({ id: roadmapStages.id })
-      .from(roadmapStages)
+    const activeStage = (await this.db.select({ id: roadmapStages.id }).from(roadmapStages)
       .where(and(eq(roadmapStages.goalId, params.goalId), eq(roadmapStages.status, 'active')))
-      .orderBy(asc(roadmapStages.position))
-      .limit(1);
-    const activeStageId = activeStageRows[0]?.id ?? null;
-    const allDays = await this.db
-      .select()
-      .from(shortPlanDays)
-      .where(and(
-        eq(shortPlanDays.goalId, params.goalId),
-        eq(shortPlanDays.sessionStatus, 'pending'),
-        ...(activeStageId ? [eq(shortPlanDays.roadmapStageId, activeStageId)] : [])
-      ))
-      .orderBy(asc(shortPlanDays.dayIndex));
-    const updated: ShortPlanDay[] = [];
-    for (const adj of params.adjustments) {
-      const target = allDays.find((d) => d.dayIndex === adj.dayIndex);
-      if (!target || target.locked) continue;
-      await this.db
-        .update(shortPlanDays)
-        .set({
-          title: adj.title,
-          focus: adj.focus,
-          expectedOutput: adj.expectedOutput,
-          successCriteria: adj.successCriteria
-        })
-        .where(eq(shortPlanDays.id, target.id));
-      const mapped = mapShortPlanDay({ ...target, title: adj.title, focus: adj.focus, expectedOutput: adj.expectedOutput, successCriteria: adj.successCriteria });
-      updated.push(mapped);
-    }
+      .orderBy(asc(roadmapStages.position)).limit(1))[0];
+    const candidates = await this.db.select().from(nearTermPlanItems).where(and(
+      eq(nearTermPlanItems.goalId, params.goalId),
+      eq(nearTermPlanItems.status, 'pending'),
+      ...(activeStage ? [eq(nearTermPlanItems.roadmapStageId, activeStage.id)] : [])
+    )).orderBy(asc(nearTermPlanItems.itemIndex));
+    const updated: NearTermPlanItem[] = [];
+    await this.db.transaction(async (tx) => {
+      for (const adjustment of params.adjustments) {
+        const target = candidates.find((item) => item.itemIndex === adjustment.itemIndex);
+        if (!target) continue;
+        const values = {
+          title: adjustment.title,
+          focus: adjustment.focus,
+          expectedOutput: adjustment.expectedOutput,
+          successCriteria: adjustment.successCriteria
+        };
+        await tx.update(nearTermPlanItems).set(values)
+          .where(eq(nearTermPlanItems.id, target.id));
+        updated.push(mapNearTermPlanItem({ ...target, ...values }));
+      }
+      if (updated.length > 0) {
+        const version = (await tx.select({ version: planVersions.version }).from(planVersions)
+          .where(eq(planVersions.goalId, params.goalId))
+          .orderBy(desc(planVersions.version)).limit(1))[0]?.version ?? 0;
+        await tx.insert(planVersions).values({
+          id: createId('plan_version'),
+          goalId: params.goalId,
+          version: version + 1,
+          changeSummary: params.adjustments.map((item) => item.reason).filter(Boolean).join('；') || '应用复盘调整',
+          snapshotJson: JSON.stringify({ shortPlan: updated }),
+          createdAt: nowIso()
+        });
+      }
+    });
     return updated;
   }
 
   async markRoadmapStageReadyForReview(goalId: string): Promise<void> {
-    if (!goalId) return;
-
-    const activeStageRows = await this.db
-      .select()
-      .from(roadmapStages)
+    const active = (await this.db.select().from(roadmapStages)
       .where(and(eq(roadmapStages.goalId, goalId), eq(roadmapStages.status, 'active')))
-      .orderBy(asc(roadmapStages.position))
-      .limit(1);
-    const activeStage = activeStageRows[0];
-    if (!activeStage) return;
-
-    const spDayRows = await this.db
-      .select({ id: shortPlanDays.id, sessionStatus: shortPlanDays.sessionStatus })
-      .from(shortPlanDays)
-      .where(and(eq(shortPlanDays.goalId, goalId), eq(shortPlanDays.roadmapStageId, activeStage.id)));
-    const spDayIdsForStage = new Set(spDayRows.map((d) => d.id));
-
-    const guideRows = await this.db
-      .select({ id: dailyGuides.id, sessionStatus: dailyGuides.sessionStatus, shortPlanDayId: dailyGuides.shortPlanDayId })
-      .from(dailyGuides)
-      .where(eq(dailyGuides.goalId, goalId));
-    const guidesForStage = guideRows.filter((g) => g.shortPlanDayId && spDayIdsForStage.has(g.shortPlanDayId));
-
-    const allDaysActivated = spDayRows.every((d) => {
-      if (d.sessionStatus === 'pending') return false;
-      return guidesForStage.some((g) => g.shortPlanDayId === d.id);
-    });
-    const allGuidesComplete = allDaysActivated && guidesForStage.length > 0 && guidesForStage.every((g) => g.sessionStatus === 'closed');
-
-    if (!allGuidesComplete) return;
-
-    const now = nowIso();
-    await this.db
-      .update(roadmapStages)
-      .set({ status: 'ready_for_review', updatedAt: now })
-      .where(eq(roadmapStages.id, activeStage.id));
+      .orderBy(asc(roadmapStages.position)).limit(1))[0];
+    if (!active) return;
+    const items = await this.db.select().from(nearTermPlanItems)
+      .where(and(
+        eq(nearTermPlanItems.goalId, goalId),
+        eq(nearTermPlanItems.roadmapStageId, active.id)
+      ));
+    if (items.length === 0 || items.some((item) => !['completed', 'skipped'].includes(item.status))) return;
+    const guides = await this.db.select({ status: learningGuides.status }).from(learningGuides)
+      .where(inArray(learningGuides.nearTermPlanItemId, items.map((item) => item.id)));
+    if (guides.length === 0 || guides.some((guide) => guide.status !== 'closed' && guide.status !== 'archived')) return;
+    await this.db.update(roadmapStages).set({
+      status: 'ready_for_review',
+      updatedAt: nowIso()
+    }).where(eq(roadmapStages.id, active.id));
   }
 
   async confirmRoadmapStageCompletion(goalId: string, stageId: string): Promise<RoadmapStage[]> {
     await this.db.transaction(async (tx) => {
-      const stageRows = await tx
-        .select()
-        .from(roadmapStages)
-        .where(and(eq(roadmapStages.id, stageId), eq(roadmapStages.goalId, goalId)))
-        .limit(1);
-      const stage = stageRows[0];
-      if (!stage) throw new Error('找不到需要复核的学习阶段。');
+      const stage = (await tx.select().from(roadmapStages).where(and(
+        eq(roadmapStages.id, stageId),
+        eq(roadmapStages.goalId, goalId)
+      )).limit(1))[0];
+      if (!stage) throw new Error('找不到需要确认的 Roadmap Stage。');
       if (stage.status === 'completed') return;
-      if (stage.status !== 'ready_for_review') throw new Error('当前阶段尚未达到待复核状态。');
-
+      if (stage.status !== 'ready_for_review') throw new Error('当前 Stage 尚未进入待复盘状态。');
       const now = nowIso();
-      await tx.update(roadmapStages).set({ status: 'completed', updatedAt: now }).where(eq(roadmapStages.id, stage.id));
-      const nextRows = await tx
-        .select()
-        .from(roadmapStages)
-        .where(and(eq(roadmapStages.goalId, goalId), eq(roadmapStages.status, 'pending'), gt(roadmapStages.position, stage.position)))
-        .orderBy(asc(roadmapStages.position))
-        .limit(1);
-      const next = nextRows[0];
+      await tx.update(roadmapStages).set({ status: 'completed', updatedAt: now })
+        .where(eq(roadmapStages.id, stageId));
+      const next = (await tx.select().from(roadmapStages).where(and(
+        eq(roadmapStages.goalId, goalId),
+        eq(roadmapStages.status, 'pending'),
+        gt(roadmapStages.position, stage.position)
+      )).orderBy(asc(roadmapStages.position)).limit(1))[0];
       if (next) {
-        await tx.update(roadmapStages).set({ status: 'active', updatedAt: now }).where(eq(roadmapStages.id, next.id));
-        await tx.update(learningRuntimeStates).set({ activeStageId: next.id, updatedAt: now }).where(eq(learningRuntimeStates.id, 'default'));
+        await tx.update(roadmapStages).set({ status: 'active', updatedAt: now })
+          .where(eq(roadmapStages.id, next.id));
       } else {
-        await tx.update(learningRuntimeStates).set({ activeStageId: null, updatedAt: now }).where(eq(learningRuntimeStates.id, 'default'));
+        await tx.update(goals).set({ status: 'done', updatedAt: now })
+          .where(eq(goals.id, goalId));
       }
     });
     return this.listRoadmap(goalId);
   }
 
   async getPlanAdjustmentProposal(proposalId: string): Promise<PlanAdjustmentProposal | null> {
-    const rows = await this.db.select().from(planAdjustmentProposals).where(eq(planAdjustmentProposals.id, proposalId)).limit(1);
-    return rows[0] ? mapPlanAdjustmentProposal(rows[0]) : null;
+    const row = (await this.db.select().from(learningEvaluations)
+      .where(and(
+        eq(learningEvaluations.id, proposalId),
+        eq(learningEvaluations.kind, 'goal_review')
+      )).limit(1))[0];
+    return row ? mapPlanAdjustmentProposal(row) : null;
   }
 
-  async listPlanAdjustmentProposals(status?: PlanAdjustmentProposal['status']): Promise<PlanAdjustmentProposal[]> {
-    const rows = status
-      ? await this.db
-          .select()
-          .from(planAdjustmentProposals)
-          .where(eq(planAdjustmentProposals.status, status))
-          .orderBy(desc(planAdjustmentProposals.createdAt))
-      : await this.db.select().from(planAdjustmentProposals).orderBy(desc(planAdjustmentProposals.createdAt));
-    return rows.map(mapPlanAdjustmentProposal);
+  async listPlanAdjustmentProposals(
+    status?: PlanAdjustmentProposal['status']
+  ): Promise<PlanAdjustmentProposal[]> {
+    const rows = await this.db.select().from(learningEvaluations)
+      .where(eq(learningEvaluations.kind, 'goal_review'))
+      .orderBy(desc(learningEvaluations.createdAt));
+    const mapped = rows.map(mapPlanAdjustmentProposal);
+    return status ? mapped.filter((item) => item.status === status) : mapped;
   }
 
-  async decidePlanAdjustment(proposalId: string, status: 'accepted' | 'rejected'): Promise<PlanAdjustmentProposal> {
-    const existingRows = await this.db
-      .select()
-      .from(planAdjustmentProposals)
-      .where(eq(planAdjustmentProposals.id, proposalId))
-      .limit(1);
-    if (!existingRows[0]) throw new Error(`Plan adjustment proposal not found: ${proposalId}`);
-
-    const existing = mapPlanAdjustmentProposal(existingRows[0]);
-    const now = nowIso();
-    let appliedTaskId = existing.appliedTaskId;
-    let appliedAt = existing.appliedAt;
-
-    if (status === 'accepted' && !appliedTaskId) {
-      appliedTaskId = await this.createFollowUpTaskFromAdjustment(existing);
-      appliedAt = appliedTaskId ? now : null;
-    }
-
-    await this.db
-      .update(planAdjustmentProposals)
-      .set({
-        status,
-        decidedAt: now,
-        appliedTaskId,
-        appliedAt
-      })
-      .where(eq(planAdjustmentProposals.id, proposalId));
-    const rows = await this.db
-      .select()
-      .from(planAdjustmentProposals)
-      .where(eq(planAdjustmentProposals.id, proposalId))
-      .limit(1);
-    if (!rows[0]) throw new Error(`Plan adjustment proposal not found: ${proposalId}`);
-    return mapPlanAdjustmentProposal(rows[0]);
+  async decidePlanAdjustment(
+    proposalId: string,
+    status: 'accepted' | 'rejected'
+  ): Promise<PlanAdjustmentProposal> {
+    return status === 'accepted'
+      ? this.confirmProposal(proposalId)
+      : this.rejectProposal(proposalId);
   }
 
   async getPlanVersionsForGoal(goalId: string): Promise<PlanVersionEntry[]> {
-    const rows = await this.db
-      .select({ version: planVersions.version, changeSummary: planVersions.changeSummary, createdAt: planVersions.createdAt, snapshotJson: planVersions.snapshotJson })
-      .from(planVersions)
-      .innerJoin(dailyPlans, eq(planVersions.planId, dailyPlans.id))
-      .innerJoin(dailyGuides, eq(dailyGuides.planId, dailyPlans.id))
-      .where(eq(dailyGuides.goalId, goalId))
-      .orderBy(desc(planVersions.createdAt))
-      .limit(10);
-    return rows.map((r) => {
-      let snapshot: PlanVersionEntry['snapshot'] = null;
-      try {
-        const raw = r.snapshotJson ? JSON.parse(r.snapshotJson) : null;
-        if (raw && typeof raw === 'object') {
-          const record = raw as Record<string, unknown>;
-          const sp = record.shortPlan;
-          const shortPlan = Array.isArray(sp) ? sp.map((d: Record<string, unknown>) => ({
-            dayIndex: Number(d.dayIndex) || 0,
-            title: String(d.title ?? ''),
-            focus: String(d.focus ?? ''),
-            expectedOutput: String(d.expectedOutput ?? ''),
-            successCriteria: String(d.successCriteria ?? '')
-          })) : undefined;
-          snapshot = { shortPlan, reason: typeof record.reason === 'string' ? record.reason : undefined };
-        }
-      } catch {
-        snapshot = null;
-      }
-      return {
-        version: r.version,
-        changeSummary: r.changeSummary ?? '',
-        createdAt: r.createdAt,
-        snapshot
-      };
-    });
+    const rows = await this.db.select().from(planVersions)
+      .where(eq(planVersions.goalId, goalId))
+      .orderBy(desc(planVersions.version)).limit(20);
+    return rows.map((row) => ({
+      version: row.version,
+      changeSummary: row.changeSummary,
+      createdAt: row.createdAt,
+      snapshot: parsePlanSnapshot(row.snapshotJson)
+    }));
   }
 
-  async createProposal(goalId: string, proposal: PlanProposalInput): Promise<PlanAdjustmentProposal> {
-    const now = nowIso();
-    const id = createId('pap');
-    await this.db.insert(planAdjustmentProposals).values({
-      id,
+  async createProposal(
+    goalId: string,
+    proposal: PlanProposalInput
+  ): Promise<PlanAdjustmentProposal> {
+    const row = {
+      id: createId('goal_review'),
+      kind: 'goal_review' as const,
+      submissionId: null,
       goalId,
-      stageId: null,
-      taskId: null,
-      sourceDecisionId: null,
-      status: 'pending',
-      reason: proposal.reason,
-      proposedChangesJson: JSON.stringify({ adjustments: proposal.adjustments }),
-      appliedTaskId: null,
-      createdAt: now,
-      decidedAt: null,
-      appliedAt: null
-    });
-    const rows = await this.db.select().from(planAdjustmentProposals).where(eq(planAdjustmentProposals.id, id)).limit(1);
-    return mapPlanAdjustmentProposal(rows[0]);
+      result: 'unclear' as const,
+      evidenceJson: '[]',
+      correctPartsJson: '[]',
+      misconceptionsJson: '[]',
+      missingRequirementsJson: '[]',
+      feedback: proposal.reason,
+      direction: 'replan' as const,
+      selfNote: null,
+      recommendationJson: JSON.stringify({ adjustments: proposal.adjustments }),
+      recommendationDecision: 'pending' as const,
+      recommendationDecisionReason: null,
+      applicationStatus: null,
+      applicationError: null,
+      appliedAt: null,
+      source: 'ai' as const,
+      supersedesEvaluationId: null,
+      correctionReason: null,
+      aiReviewId: null,
+      createdAt: nowIso()
+    };
+    await this.db.insert(learningEvaluations).values(row);
+    return mapPlanAdjustmentProposal(row);
   }
 
   async confirmProposal(proposalId: string): Promise<PlanAdjustmentProposal> {
-    const existingRows = await this.db
-      .select()
-      .from(planAdjustmentProposals)
-      .where(eq(planAdjustmentProposals.id, proposalId))
-      .limit(1);
-    if (!existingRows[0]) throw new Error(`Plan adjustment proposal not found: ${proposalId}`);
-
-    const existing = mapPlanAdjustmentProposal(existingRows[0]);
-    if (existing.status === 'accepted') return existing;
-    if (existing.status === 'rejected') throw new Error('Cannot confirm a rejected proposal');
-
-    const proposed = (typeof existing.proposedChanges === 'string'
-      ? JSON.parse(existing.proposedChanges)
-      : existing.proposedChanges) as { adjustments: Array<{ dayIndex: number; title: string; focus: string; expectedOutput: string; successCriteria: string; reason?: string }> };
-    const adjustments = (proposed.adjustments ?? []).map((adj) => ({
-      dayIndex: adj.dayIndex,
-      title: adj.title,
-      focus: adj.focus,
-      expectedOutput: adj.expectedOutput,
-      successCriteria: adj.successCriteria,
-      reason: adj.reason ?? existing.reason
-    }));
-
-    const updated = await this.applyReviewPlanAdjustments({ goalId: existing.goalId!, adjustments });
-
-    const now = nowIso();
-    const planId = await this.findLatestPlanIdForGoal(existing.goalId!);
-    if (planId && updated.length > 0) {
-      const maxVersionRow = await this.db
-        .select({ maxVersion: sql<number>`max(${planVersions.version})` })
-        .from(planVersions)
-        .where(eq(planVersions.planId, planId))
-        .limit(1);
-      const nextVersion = ((maxVersionRow[0]?.maxVersion as number) ?? 0) + 1;
-      await this.db.insert(planVersions).values({
-        id: createId('plan_version'),
-        planId,
-        version: nextVersion,
-        changeSummary: `应用计划调整：${existing.reason}`,
-        snapshotJson: JSON.stringify({ reason: existing.reason, shortPlan: adjustments.map((a) => ({ dayIndex: a.dayIndex, title: a.title, focus: a.focus, expectedOutput: a.expectedOutput, successCriteria: a.successCriteria })) }),
-        createdAt: now
-      });
+    const row = (await this.db.select().from(learningEvaluations).where(and(
+      eq(learningEvaluations.id, proposalId),
+      eq(learningEvaluations.kind, 'goal_review')
+    )).limit(1))[0];
+    if (!row) throw new Error(`Goal review recommendation not found: ${proposalId}`);
+    if (row.recommendationDecision === 'accepted' && row.applicationStatus === 'applied') {
+      return mapPlanAdjustmentProposal(row);
     }
-
-    await this.db
-      .update(planAdjustmentProposals)
-      .set({ status: 'accepted', decidedAt: now, appliedAt: updated.length > 0 ? now : null })
-      .where(eq(planAdjustmentProposals.id, proposalId));
-    const rows = await this.db.select().from(planAdjustmentProposals).where(eq(planAdjustmentProposals.id, proposalId)).limit(1);
-    return mapPlanAdjustmentProposal(rows[0]);
+    if (row.recommendationDecision === 'declined') {
+      throw new Error('已拒绝的建议不能再次应用。');
+    }
+    if (!row.goalId || !row.recommendationJson) throw new Error('建议缺少可执行的 Goal 或 Payload。');
+    const payload = parseRecommendation(row.recommendationJson);
+    const now = nowIso();
+    await this.db.update(learningEvaluations).set({
+      recommendationDecision: 'accepted',
+      applicationStatus: 'pending',
+      applicationError: null
+    }).where(eq(learningEvaluations.id, proposalId));
+    try {
+      await this.applyReviewPlanAdjustments({
+        goalId: row.goalId,
+        adjustments: payload.adjustments.map((item) => ({ ...item, reason: row.feedback }))
+      });
+      await this.db.update(learningEvaluations).set({
+        applicationStatus: 'applied',
+        appliedAt: now
+      }).where(eq(learningEvaluations.id, proposalId));
+    } catch (error) {
+      await this.db.update(learningEvaluations).set({
+        applicationStatus: 'failed',
+        applicationError: error instanceof Error ? error.message : 'plan_application_failed'
+      }).where(eq(learningEvaluations.id, proposalId));
+      throw error;
+    }
+    const updated = (await this.db.select().from(learningEvaluations)
+      .where(eq(learningEvaluations.id, proposalId)).limit(1))[0];
+    return mapPlanAdjustmentProposal(updated);
   }
 
   async rejectProposal(proposalId: string): Promise<PlanAdjustmentProposal> {
-    const existingRows = await this.db
-      .select()
-      .from(planAdjustmentProposals)
-      .where(eq(planAdjustmentProposals.id, proposalId))
-      .limit(1);
-    if (!existingRows[0]) throw new Error(`Plan adjustment proposal not found: ${proposalId}`);
-
-    const now = nowIso();
-    await this.db
-      .update(planAdjustmentProposals)
-      .set({ status: 'rejected', decidedAt: now })
-      .where(eq(planAdjustmentProposals.id, proposalId));
-    const rows = await this.db.select().from(planAdjustmentProposals).where(eq(planAdjustmentProposals.id, proposalId)).limit(1);
+    const rows = await this.db.update(learningEvaluations).set({
+      recommendationDecision: 'declined',
+      applicationStatus: null,
+      applicationError: null,
+      appliedAt: null
+    }).where(and(
+      eq(learningEvaluations.id, proposalId),
+      eq(learningEvaluations.kind, 'goal_review')
+    )).returning();
+    if (!rows[0]) throw new Error(`Goal review recommendation not found: ${proposalId}`);
     return mapPlanAdjustmentProposal(rows[0]);
   }
 
-  private async createFollowUpTaskFromAdjustment(proposal: PlanAdjustmentProposal): Promise<string | null> {
-    const sourceTaskRows = proposal.taskId
-      ? await this.db.select().from(taskItems).where(eq(taskItems.id, proposal.taskId)).limit(1)
-      : [];
-    const sourceTask = sourceTaskRows[0] ?? null;
-    const proposed = readProposedChanges(proposal.proposedChanges);
-    const nextFocus = proposed.nextFocus || proposed.carryForward || proposal.reason;
-    const cleanFocus = nextFocus.trim();
-    if (!cleanFocus) return null;
-
-    const now = nowIso();
-    const id = createId('task');
-    const missing = proposed.missingRequirements.length > 0
-      ? proposed.missingRequirements.join('；')
-      : cleanFocus;
-    const misconceptions = proposed.misconceptions.length > 0
-      ? `\n需要纠正：${proposed.misconceptions.join('；')}`
-      : '';
-
-    await this.db.insert(taskItems).values({
-      id,
-      goalId: proposal.goalId ?? sourceTask?.goalId ?? null,
-      sourceImportId: null,
-      title: `跟进：${truncateText(cleanFocus, 42)}`,
-      description: `由学习评估生成的后续计划调整。\n原因：${proposal.reason}${misconceptions}`,
-      status: 'backlog',
-      priority: sourceTask?.priority ?? 3,
-      difficulty: sourceTask?.difficulty ?? difficultyFromRecommendedAction(proposed.recommendedAction),
-      estimateMinutes: Math.max(10, Math.min(sourceTask?.estimateMinutes ?? 10, 60)),
-      acceptanceCriteria: missing,
-      createdAt: now,
-      updatedAt: now
-    });
-
-    return id;
-  }
-
-  private async findLatestPlanIdForGoal(goalId: string): Promise<string | null> {
-    const rows = await this.db
-      .select({ planId: dailyPlans.id })
-      .from(dailyPlans)
-      .innerJoin(dailyGuides, eq(dailyGuides.planId, dailyPlans.id))
-      .where(eq(dailyGuides.goalId, goalId))
-      .orderBy(desc(dailyPlans.createdAt))
-      .limit(1);
-    return rows[0]?.planId ?? null;
-  }
-
   private async listRoadmap(goalId: string): Promise<RoadmapStage[]> {
-    const rows = await this.db.select().from(roadmapStages).where(eq(roadmapStages.goalId, goalId)).orderBy(asc(roadmapStages.position));
+    const rows = await this.db.select().from(roadmapStages)
+      .where(eq(roadmapStages.goalId, goalId)).orderBy(asc(roadmapStages.position));
     return rows.map(mapRoadmapStage);
+  }
+}
+
+function parseRecommendation(raw: string): {
+  adjustments: Array<{
+    itemIndex: number;
+    title: string;
+    focus: string;
+    expectedOutput: string;
+    successCriteria: string;
+  }>;
+} {
+  const value = JSON.parse(raw) as { adjustments?: unknown };
+  if (!Array.isArray(value.adjustments)) throw new Error('建议 Payload 不符合 V2 Command Schema。');
+  const adjustments = value.adjustments.map((item) => {
+    if (!item || typeof item !== 'object') throw new Error('建议 Payload 不符合 V2 Command Schema。');
+    const record = item as Record<string, unknown>;
+    const mapped = {
+      itemIndex: Number(record.itemIndex),
+      title: String(record.title ?? ''),
+      focus: String(record.focus ?? ''),
+      expectedOutput: String(record.expectedOutput ?? ''),
+      successCriteria: String(record.successCriteria ?? '')
+    };
+    if (!Number.isInteger(mapped.itemIndex) || !mapped.title || !mapped.focus) {
+      throw new Error('建议 Payload 不符合 V2 Command Schema。');
+    }
+    return mapped;
+  });
+  return { adjustments };
+}
+
+function parsePlanSnapshot(raw: string): PlanVersionEntry['snapshot'] {
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    const plan = Array.isArray(value.shortPlan)
+      ? value.shortPlan.map((item) => {
+          const row = item as Record<string, unknown>;
+          return {
+            itemIndex: Number(row.itemIndex ?? 0),
+            title: String(row.title ?? ''),
+            focus: String(row.focus ?? ''),
+            expectedOutput: String(row.expectedOutput ?? ''),
+            successCriteria: String(row.successCriteria ?? '')
+          };
+        })
+      : undefined;
+    return {
+      shortPlan: plan,
+      reason: typeof value.reason === 'string' ? value.reason : undefined
+    };
+  } catch {
+    return null;
   }
 }
