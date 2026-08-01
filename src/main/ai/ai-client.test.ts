@@ -27,6 +27,21 @@ describe('AiClient', () => {
     evidence: z.array(z.string()).min(1)
   });
 
+  it.each([
+    [{ apiKey: null, baseUrl: 'http://127.0.0.1/v1', model: 'test-model' }, 'API Key'],
+    [{ apiKey: 'test-key', baseUrl: ' ', model: 'test-model' }, '服务地址'],
+    [{ apiKey: 'test-key', baseUrl: 'http://127.0.0.1/v1', model: ' ' }, '模型名称']
+  ])('rejects incomplete provider configuration before making a request', async (config, missing) => {
+    await expect(new AiClient().generateJson({
+      ...config,
+      system: 'test-agent',
+      user: 'return evaluation json',
+      schema: testSchema
+    })).rejects.toThrow(missing);
+
+    expect(openAiMocks.create).not.toHaveBeenCalled();
+  });
+
   it('asks the model to repair JSON once when schema validation fails', async () => {
     openAiMocks.create
       .mockResolvedValueOnce({
@@ -51,6 +66,32 @@ describe('AiClient', () => {
     expect(openAiMocks.create.mock.calls[0][1]).toEqual({ timeout: 1234 });
     expect(openAiMocks.create.mock.calls[1][0].messages[1].content).toContain('上一次 AI 输出');
     expect(openAiMocks.create.mock.calls[1][0].messages[1].content).toContain('解析或校验问题');
+  });
+
+  it('normalizes JSON returned through reasoning_content by an OpenAI-compatible model', async () => {
+    openAiMocks.create.mockResolvedValueOnce({
+      choices: [{
+        message: {
+          content: null,
+          reasoning_content: [
+            '先检查一个无关对象：{"draft":true}',
+            JSON.stringify({ result: 'passed', evidence: ['ok'] })
+          ].join('\n')
+        }
+      }]
+    });
+
+    const output = await new AiClient().generateJson({
+      apiKey: 'test-key',
+      baseUrl: 'http://127.0.0.1/v1',
+      model: 'reasoning-model',
+      system: 'test-agent',
+      user: 'return evaluation json',
+      schema: testSchema
+    });
+
+    expect(output).toEqual({ result: 'passed', evidence: ['ok'] });
+    expect(openAiMocks.create.mock.calls[0][1]).toEqual({ timeout: 180_000 });
   });
 
   it('throws after repair also fails schema validation', async () => {

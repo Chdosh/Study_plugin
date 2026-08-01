@@ -2,6 +2,8 @@ import OpenAI from 'openai';
 import { z } from 'zod';
 import { CategorizedError, categorizeThrownError } from './categorized-error';
 
+const DEFAULT_AI_REQUEST_TIMEOUT_MS = 180_000;
+
 export interface AiJsonRequest<TSchema extends z.ZodTypeAny> {
   apiKey: string | null;
   baseUrl: string;
@@ -24,7 +26,12 @@ export interface AiCallMetrics {
 
 export class AiClient {
   async generateJson<TSchema extends z.ZodTypeAny>(request: AiJsonRequest<TSchema>): Promise<z.infer<TSchema>> {
-    if (!request.apiKey) {
+    const missingConfiguration = [
+      !request.apiKey ? 'API Key' : '',
+      !request.baseUrl.trim() ? '服务地址' : '',
+      !request.model.trim() ? '模型名称' : ''
+    ].filter(Boolean);
+    if (missingConfiguration.length > 0) {
       const metrics: AiCallMetrics = {
         traceId: request.traceId ?? `ta_${crypto.randomUUID()}`,
         inputTokens: null,
@@ -35,15 +42,15 @@ export class AiClient {
       request.onMetrics?.(metrics);
       throw new CategorizedError(
         'missing_config',
-        '缺少 DeepSeek API Key。请先在“设置”里填写密钥，再运行 AI 功能。'
+        `AI 配置不完整：缺少${missingConfiguration.join('、')}。请先在“设置”里填写当前 AI 服务配置。`
       );
     }
 
     const traceId = request.traceId ?? `ta_${crypto.randomUUID()}`;
     const client = new OpenAI({
-      apiKey: request.apiKey,
+      apiKey: request.apiKey!,
       baseURL: request.baseUrl,
-      timeout: request.timeoutMs ?? 60_000
+      timeout: request.timeoutMs ?? DEFAULT_AI_REQUEST_TIMEOUT_MS
     });
 
     const start = nowMs();
@@ -129,17 +136,29 @@ async function createJsonCompletion<TSchema extends z.ZodTypeAny>(
   const response = await client.chat.completions.create({
     model: request.model,
     messages,
-    response_format: {
-      type: 'json_object'
-    },
     temperature: 0.2
-  }, { timeout: request.timeoutMs ?? 60_000 });
+  }, { timeout: request.timeoutMs ?? DEFAULT_AI_REQUEST_TIMEOUT_MS });
 
-  const content = response.choices[0]?.message?.content;
+  const message = response.choices[0]?.message as
+    | (OpenAI.Chat.Completions.ChatCompletionMessage & {
+        reasoning_content?: unknown;
+      })
+    | undefined;
+  const content = firstNonEmptyText(
+    message?.content,
+    message?.reasoning_content
+  );
   if (!content) {
     throw new Error('AI 返回了空内容。');
   }
   return content;
+}
+
+function firstNonEmptyText(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return null;
 }
 
 function parseAndValidate<TSchema extends z.ZodTypeAny>(content: string, schema: TSchema): z.infer<TSchema> {
@@ -162,12 +181,55 @@ function parseJsonObject(content: string): unknown {
   try {
     return JSON.parse(trimmed);
   } catch {
-    const match = trimmed.match(/\{[\s\S]*\}/);
-    if (!match) {
-      throw new Error('AI 返回内容不是合法 JSON。');
+    const candidates = extractJsonObjectCandidates(trimmed);
+    for (let index = candidates.length - 1; index >= 0; index -= 1) {
+      try {
+        return JSON.parse(candidates[index]);
+      } catch {
+        // Continue backwards to the latest complete JSON object.
+      }
     }
-    return JSON.parse(match[0]);
+    throw new Error('AI 返回内容不是合法 JSON。');
   }
+}
+
+function extractJsonObjectCandidates(content: string): string[] {
+  const candidates: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < content.length; index += 1) {
+    const character = content[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+      continue;
+    }
+    if (character === '{') {
+      if (depth === 0) start = index;
+      depth += 1;
+      continue;
+    }
+    if (character === '}' && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        candidates.push(content.slice(start, index + 1));
+        start = -1;
+      }
+    }
+  }
+  return candidates;
 }
 
 function nowMs(): number {

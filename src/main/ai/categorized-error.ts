@@ -48,7 +48,7 @@ export function categorizeThrownError(error: unknown): CategorizedError {
   if (error instanceof z.ZodError) {
     return new CategorizedError(
       'schema_violation',
-      'AI 返回的内容结构不完整，已阻止写入正式计划。',
+      'AI 返回内容未通过业务格式校验；原始数据已保留，请在对应记录中重试。',
       error
     );
   }
