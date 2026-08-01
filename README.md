@@ -69,7 +69,7 @@ SQLite (libSQL + Drizzle ORM)
 - Electron、electron-vite
 - React、TypeScript、Lucide React
 - SQLite、libSQL、Drizzle ORM
-- OpenAI-compatible DeepSeek client
+- OpenAI-compatible AI client
 - Zod、Vitest
 
 ## 本地运行
@@ -83,7 +83,7 @@ npm install
 npm run dev
 ```
 
-启动后进入“设置”，填写 DeepSeek API Key、Base URL 与模型名称。默认 Base URL 为 `https://api.deepseek.com`，默认模型为 `deepseek-chat`。
+启动后进入“设置”，填写当前 AI 服务的 API Key、Base URL 与模型名称。应用不预设供应商，也不会在配置缺失时回退到其他服务。
 
 ## 常用命令
 
@@ -95,7 +95,9 @@ npm run build        # 类型检查并构建生产版本
 npm run db:generate  # 生成 Drizzle 迁移
 ```
 
-真实 DeepSeek 合约测试默认跳过，只有在显式提供测试环境变量时才会访问远程模型。
+真实 AI 服务合约测试默认跳过。只有同时设置
+`RUN_AI_PROVIDER_CONTRACT=1`、`STUDY_AI_API_KEY`、`STUDY_AI_BASE_URL`
+和 `STUDY_AI_MODEL` 时才会访问明确指定的远程模型；测试不会读取供应商专用环境变量，也没有默认服务地址。
 
 ## 项目结构
 

@@ -11,7 +11,7 @@
 
 - Electron + React + TypeScript
 - SQLite/libSQL + Drizzle ORM
-- OpenAI-compatible DeepSeek client
+- OpenAI-compatible AI client
 - Zod runtime validation
 - typed preload API + narrow IPC
 - Vitest
