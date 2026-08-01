@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+import { CategorizedError } from '../ai/categorized-error';
 import { AgentLoop } from './agent-loop';
 import type {
   AgentLoopPersistencePort,
@@ -416,6 +417,55 @@ describe('AgentLoop autonomous Learning Turn', () => {
     expect([...failingPersistence.reviews.values()].every((item) =>
       item.status === 'failed'
     )).toBe(true);
+  });
+
+  it('模型结构校验失败时只记录安全字段诊断，不保存模型原文', async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'explain',
+      description: '讲解',
+      contexts: ['study'],
+      execute: async (input) => ({ output: input })
+    });
+    const persistence = new MemoryAgentPersistence();
+    const schemaError = new z.ZodError([{
+      code: z.ZodIssueCode.invalid_type,
+      expected: 'string',
+      received: 'undefined',
+      path: ['explanation'],
+      message: 'Required'
+    }]);
+    const loop = new AgentLoop(registry, persistence, {
+      selectNext: async () => {
+        throw new CategorizedError(
+          'schema_violation',
+          'AI 返回内容未通过业务格式校验；原始数据已保留，请在对应记录中重试。',
+          schemaError
+        );
+      }
+    });
+
+    await expect(loop.runTurn({
+      intent: 'continue_teaching',
+      boundedContext: {},
+      context,
+      audit,
+      modelConfig,
+      allowedTools: ['explain']
+    })).rejects.toThrow('格式校验');
+
+    expect([...persistence.reviews.values()][0]).toMatchObject({
+      status: 'failed',
+      output: {
+        phase: 'failed',
+        diagnostic: {
+          category: 'schema_violation',
+          issues: [{ path: 'explanation', message: 'Required' }]
+        }
+      }
+    });
+    expect(JSON.stringify([...persistence.reviews.values()][0].output))
+      .not.toContain('模型原文');
   });
 
   it('达到工具调用上限时失败，并可取消等待中的 Run', async () => {

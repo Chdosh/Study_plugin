@@ -32,7 +32,8 @@ export class ToolRegistry {
         name: tool.name,
         description: tool.description,
         inputDescription: tool.inputDescription ?? 'JSON object',
-        effect: tool.effect ?? 'content'
+        effect: tool.effect ?? 'content',
+        inputSchema: tool.inputSchema
       }));
   }
 

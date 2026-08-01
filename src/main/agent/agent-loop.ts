@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { CategorizedError } from '../ai/categorized-error';
 import type {
   AgentContext,
@@ -339,6 +340,12 @@ export class AgentLoop {
     } catch (error) {
       await this.persistence.updateAiReview(runReviewId, {
         status: 'failed',
+        output: {
+          intent: params.intent,
+          phase: 'failed',
+          completedTools: previousToolResults,
+          diagnostic: createSafeFailureDiagnostic(error)
+        },
         errorMessage: error instanceof Error ? error.message : String(error),
         completedAt: new Date().toISOString()
       }).catch(() => undefined);
@@ -418,4 +425,41 @@ export class AgentLoop {
       throw error;
     }
   }
+}
+
+function createSafeFailureDiagnostic(error: unknown): {
+  category: string;
+  issues?: Array<{ path: string; message: string }>;
+} {
+  const categorized = error instanceof CategorizedError ? error : null;
+  const zodError = findZodError(categorized?.cause ?? error);
+  return {
+    category: categorized?.category ?? 'unknown',
+    ...(zodError
+      ? {
+          issues: flattenZodIssues(zodError).slice(0, 12).map((issue) => ({
+            path: issue.path.join('.') || '(root)',
+            message: issue.message
+          }))
+        }
+      : {})
+  };
+}
+
+function findZodError(error: unknown): z.ZodError | null {
+  let current = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (current instanceof z.ZodError) return current;
+    if (!(current instanceof Error) || !('cause' in current)) return null;
+    current = current.cause;
+  }
+  return null;
+}
+
+function flattenZodIssues(error: z.ZodError): z.ZodIssue[] {
+  return error.issues.flatMap((issue) =>
+    issue.code === z.ZodIssueCode.invalid_union
+      ? issue.unionErrors.flatMap(flattenZodIssues)
+      : [issue]
+  );
 }

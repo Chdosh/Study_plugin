@@ -92,6 +92,7 @@ export interface MountedAgentTool {
   description: string;
   inputDescription: string;
   effect: AgentToolEffect;
+  inputSchema?: z.ZodTypeAny;
 }
 
 export interface AgentTurnToolResult {

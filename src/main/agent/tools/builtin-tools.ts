@@ -51,6 +51,26 @@ const conversationEvaluationArtifactSchema = z.object({
   requiresSubmission: z.boolean()
 });
 
+type ExplainToolInput =
+  | z.infer<typeof teachingArtifactSchema>
+  | z.infer<typeof answerStepQuestionAgentOutputSchema>;
+type EvaluationToolInput =
+  | z.infer<typeof conversationEvaluationArtifactSchema>
+  | z.infer<typeof submissionEvaluationAgentOutputSchema>;
+
+const explainToolInputSchema = z.preprocess(
+  (value) => unwrapTaggedVariant(value, ['teaching', 'questionAnswer']),
+  z.union([teachingArtifactSchema, answerStepQuestionAgentOutputSchema])
+) as z.ZodType<ExplainToolInput>;
+
+const evaluationToolInputSchema = z.preprocess(
+  (value) => unwrapTaggedVariant(value, ['conversation', 'submission']),
+  z.union([
+    conversationEvaluationArtifactSchema,
+    submissionEvaluationAgentOutputSchema
+  ])
+) as z.ZodType<EvaluationToolInput>;
+
 const askUserRequestSchema = z.object({
   question: z.string().min(1),
   reason: z.string().min(1),
@@ -140,7 +160,7 @@ export function createBuiltinToolRegistry(
     description: '把近期学习单元展开为当前可执行内容。',
     contexts: ['planning', 'study'],
     schema: dailyGuideAgentOutputSchema,
-    inputDescription: '{"date":"日期","todayGoal":"目标","deliverables":["产出"],"boundaries":["边界"],"acceptanceCriteria":["标准"],"tomorrowActions":["后续"],"tasks":[{"title":"Task","objective":"目标","scope":"范围","estimatedMinutes":{"min":5,"target":20,"max":30},"actions":[{"title":"Action","instruction":"说明","checkpoint":"检查点"}],"deliverable":"产出","doneWhen":["标准"],"quickHint":"提示","evaluationMode":"ai","submissionPolicy":"once_after_task","carryoverAllowed":true}]}',
+    inputDescription: '{"date":"日期","todayGoal":"目标","deliverables":["产出"],"boundaries":["边界"],"acceptanceCriteria":["标准"],"tomorrowActions":["后续"],"tasks":[{"title":"Task","objective":"目标","scope":"范围","estimatedMinutes":{"min":5,"target":20,"max":30},"actions":[{"title":"Action","instruction":"说明","checkpoint":"检查点"}],"deliverable":"产出","doneWhen":["标准"],"quickHint":"提示","evaluationMode":"ai"}]}',
     effect: 'proposal'
   });
   registerOutputTool({
@@ -156,22 +176,12 @@ export function createBuiltinToolRegistry(
     name: 'explain',
     description: '讲解当前内容或回答当前学习问题。',
     contexts: ['study'],
-    inputSchema: z.union([teachingArtifactSchema, answerStepQuestionAgentOutputSchema]),
-    inputDescription: JSON.stringify({
-      teaching: {
-        explanation: '结合当前 Action 和已查询知识给出的中文讲解',
-        userAction: '用户接下来可执行的一步',
-        requiresSubmission: '是否建议提交成果'
-      },
-      questionAnswer: {
-        answer: '问题答案',
-        relationToCurrentStep: '与当前 Action 的关系',
-        example: '示例，可为空字符串',
-        resolved: '是否已经解决',
-        returnToStepInstruction: '返回主线的动作',
-        resolutionSummary: '解决摘要，可为空字符串'
-      }
-    }),
+    inputSchema: explainToolInputSchema,
+    inputDescription: [
+      '只直接返回下面两种业务对象之一，不要添加 teaching、questionAnswer 或其他包装层：',
+      '回答用户问题时返回 {"answer":"问题答案","relationToCurrentStep":"与当前 Action 的关系","example":"可选示例","resolved":true,"returnToStepInstruction":"返回主线的动作","resolutionSummary":"可选摘要"}；',
+      '主动讲解时返回 {"explanation":"结合当前 Action 的中文讲解","userAction":"用户接下来可执行的一步","requiresSubmission":false}。'
+    ].join(''),
     effect: 'content',
     continuation: 'complete',
     execute: async (input) => ({
@@ -203,31 +213,12 @@ export function createBuiltinToolRegistry(
     name: 'evaluate',
     description: '评价已保存成果或当前对话中的学习回答。',
     contexts: ['study', 'evaluation'],
-    inputSchema: z.union([
-      conversationEvaluationArtifactSchema,
-      submissionEvaluationAgentOutputSchema
-    ]),
-    inputDescription: JSON.stringify({
-      conversation: {
-        mode: 'conversation_response',
-        feedback: '即时反馈',
-        correctParts: ['正确之处'],
-        misconceptions: ['需要纠正之处'],
-        nextPrompt: '返回主线的下一步',
-        requiresSubmission: false
-      },
-      submission: {
-        result: 'passed|partial|failed|unclear',
-        mastery: '0 到 100',
-        evidence: ['证据'],
-        correctParts: ['正确之处'],
-        misconceptions: ['误区'],
-        missingRequirements: ['缺失项'],
-        feedback: '反馈',
-        recommendedAction: '建议动作',
-        decision: 'advance|stay|remediate|replan'
-      }
-    }),
+    inputSchema: evaluationToolInputSchema,
+    inputDescription: [
+      '只直接返回下面两种业务对象之一，不要添加 conversation、submission 或其他包装层：',
+      '评价对话回答时返回 {"mode":"conversation_response","feedback":"即时反馈","correctParts":[],"misconceptions":[],"nextPrompt":"返回主线的下一步","requiresSubmission":false}；',
+      '评价正式提交时返回 {"result":"passed|partial|failed|unclear","evidence":[],"correctParts":[],"misconceptions":[],"missingRequirements":[],"feedback":"反馈","recommendedAction":"passed 时只能为 advance 或 complete_task；其他结果不能推荐完成"}。'
+    ].join(''),
     effect: 'content',
     continuation: 'complete',
     execute: async (input) => ({
@@ -308,4 +299,14 @@ export function createBuiltinToolRegistry(
   });
 
   return registry;
+}
+
+function unwrapTaggedVariant(value: unknown, keys: string[]): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  for (const key of keys) {
+    const nested = record[key];
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) return nested;
+  }
+  return value;
 }

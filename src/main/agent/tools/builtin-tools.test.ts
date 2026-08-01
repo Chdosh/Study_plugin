@@ -81,6 +81,40 @@ describe('built-in Agent Loop tools', () => {
     })).rejects.toThrow();
   });
 
+  it('兼容模型为问题回答和正式评价添加的命名包装层', async () => {
+    const registry = createRegistry();
+    await expect(registry.execute('explain', {
+      questionAnswer: {
+        answer: '暂存区用于选择本次提交的改动。'
+      }
+    }, studyContext)).resolves.toMatchObject({
+      output: {
+        answer: '暂存区用于选择本次提交的改动。',
+        returnToStepInstruction: '回答后请返回当前步骤继续学习。'
+      }
+    });
+
+    await expect(registry.execute('evaluate', {
+      submission: {
+        result: 'passed',
+        evidence: ['配置和仓库状态均已验证'],
+        correctParts: ['完成关键验证'],
+        misconceptions: [],
+        missingRequirements: [],
+        feedback: '达到当前任务标准。',
+        recommendedAction: 'complete_task'
+      }
+    }, {
+      ...studyContext,
+      kind: 'evaluation'
+    })).resolves.toMatchObject({
+      output: {
+        result: 'passed',
+        recommendedAction: 'complete_task'
+      }
+    });
+  });
+
   it('临时补充写入只接收 Registry 注入的 toolReviewId 和 contextVersion', async () => {
     const insert = vi.fn().mockResolvedValue({
       id: 'supplement-1',
