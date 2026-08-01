@@ -15,13 +15,19 @@ export class LearningReviewModule {
   async generateForGuide(guideId: Id): Promise<ReviewResult> {
     const guide = await this.store.getDailyGuideById(guideId);
     if (!guide) throw new Error(`Guide not found: ${guideId}`);
-    const [snapshot, profile, runtimeSettings, reviewContext, knowledge] = await Promise.all([
+    const taskIds = guide.tasks.map((t) => t.id);
+    const [snapshot, profile, runtimeSettings, knowledge, sessions] = await Promise.all([
       this.store.getGuideSnapshot(guideId),
       this.store.getPromptProfile(),
       this.settings.getRuntimeSettings(),
-      this.context.build('generate_review'),
-      this.store.getKnowledgeContextForGoal(guide.goalId)
+      this.store.getKnowledgeContextForGoal(guide.goalId),
+      this.store.listSessions()
     ]);
+    const guideSessions = sessions.filter((s) => s.taskId && taskIds.includes(s.taskId));
+    const reviewContext = await this.context.build('generate_review', {
+      guideTasks: guide.tasks,
+      sessions: guideSessions
+    });
     const input = {
       learningUnit: snapshot,
       knowledgeEvidence: knowledge,
@@ -43,8 +49,8 @@ export class LearningReviewModule {
       audit: {
         kind: 'reflection',
         date: guide.date,
-        provider: 'deepseek',
-        model: runtimeSettings.deepseekModel,
+        provider: 'configured_ai',
+        model: runtimeSettings.aiModel,
         promptProfileId: profile.id,
         promptVersionId: profile.activeVersionId,
         inputSnapshot: {

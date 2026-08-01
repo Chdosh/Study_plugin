@@ -79,7 +79,7 @@ describe('LearnerContextModule', () => {
     const firstGoal = await store.createGoal('目标 A');
     const secondGoal = await store.createGoal('目标 B');
     await module.proposeFact(firstGoal.id, { scope: 'global', key: 'os', value: 'Windows', source: 'confirmed' });
-    await module.proposeFact(firstGoal.id, { scope: 'goal', key: 'provider', value: 'DeepSeek', source: 'confirmed' });
+    await module.proposeFact(firstGoal.id, { scope: 'goal', key: 'provider', value: 'OpenAI-compatible', source: 'confirmed' });
 
     const secondGoalFacts = await module.listFactsForGoal(secondGoal.id);
 

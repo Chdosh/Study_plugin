@@ -1,6 +1,7 @@
 import type {
   DailyGuideTask,
   Id,
+  LearningEvaluation,
   LearningSubmission,
   SubmissionEvaluationResult
 } from '../../../shared/types';
@@ -9,7 +10,6 @@ import type {
   SubmissionEvaluationAgentOutput
 } from '../../../shared/schemas';
 import { CategorizedError } from '../../ai/categorized-error';
-import { isPassingEvaluation } from '../../domain/execution-state-machine';
 import type { SettingsService } from '../../services/settings-service';
 import type { StudyStore } from '../../services/store';
 import type { LearnerContextModule } from '../context/context';
@@ -23,43 +23,45 @@ export class LearningEvaluationModule {
     private readonly learningTurn: LearningTurnModule
   ) {}
 
-  async retry(submissionId: Id, promptProfileId?: Id): Promise<SubmissionEvaluationResult> {
-    const submission = await this.store.getSubmissionById(submissionId);
-    if (!submission) {
-      throw new CategorizedError('user_input_error', '找不到需要重试的提交记录。');
-    }
-    if (submission.evaluationStatus === 'completed') {
-      throw new CategorizedError('validation_error', '这条提交已经完成评价，无需重复评价。');
-    }
-    return this.evaluate(submission, promptProfileId, true);
-  }
-
   async evaluate(
     submission: LearningSubmission,
-    promptProfileId?: Id,
-    resetExistingLock = false
+    promptProfileId?: Id
   ): Promise<SubmissionEvaluationResult> {
-    const before = await this.store.getLearningRuntimeSnapshot();
-    if (!before.dailyGuideTask || before.dailyGuideTask.id !== submission.stepId) {
-      throw new CategorizedError('validation_error', '当前 Task 与这条提交不一致，无法自动评价或重试。');
+    const taskId = submission.taskId;
+    const guideTask = await this.store.getDailyGuideTaskByBlockId(taskId);
+    if (!guideTask) {
+      throw new CategorizedError('validation_error', '这条提交对应的 Task 不存在，无法生成评价。');
     }
     const evaluationLockKey = `evaluation:${submission.id}`;
-    if (resetExistingLock) await this.store.releaseGenerationLock(evaluationLockKey);
     if (!await this.store.acquireGenerationLock(evaluationLockKey)) {
       throw new CategorizedError('validation_error', '这条提交正在评价中，请稍后再试。');
     }
 
     try {
-      const guideTask = before.dailyGuideTask;
-      const activeGuide = await this.store.getActiveGuide(true);
-      const goalId = activeGuide.goal?.id;
+      const guideId = guideTask.guideId;
+      if (!guideId) {
+        throw new CategorizedError('validation_error', '这条提交没有关联 Learning Guide，无法生成评价。');
+      }
+      const guide = await this.store.getDailyGuideById(guideId);
+      const goalId = guide?.goalId;
+      if (!goalId) {
+        throw new CategorizedError('validation_error', '这条提交对应的学习目标不存在，无法生成评价。');
+      }
+      const goal = await this.store.getGoal(goalId);
+      if (!goal) {
+        throw new CategorizedError('validation_error', '这条提交对应的学习目标不存在，无法生成评价。');
+      }
       const [evaluationContext, profile, runtimeSettings, knowledge] = await Promise.all([
-        this.context.build('evaluate_submission', { submission: submission.content }),
+        this.context.build('evaluate_submission', {
+          submission: submission.content,
+          evaluationGoal: goal,
+          evaluationGuide: guide,
+          evaluationTask: guideTask,
+          evaluationSubmission: submission
+        }),
         this.store.getPromptProfile(promptProfileId),
         this.settings.getRuntimeSettings(),
-        goalId
-          ? this.store.getKnowledgeContextForGoal(goalId)
-          : Promise.resolve({ knowledgeItems: [], reviewKnowledgeItems: [] })
+        this.store.getKnowledgeContextForGoal(goalId)
       ]);
       let evaluationAiReviewId: string | undefined;
       let evaluationOutput: SubmissionEvaluationAgentOutput;
@@ -88,8 +90,8 @@ export class LearningEvaluationModule {
             },
             audit: {
               kind: 'submission_evaluation',
-              provider: 'deepseek',
-              model: runtimeSettings.deepseekModel,
+              provider: 'configured_ai',
+              model: runtimeSettings.aiModel,
               promptProfileId: profile.id,
               promptVersionId: profile.activeVersionId,
               inputSnapshot: {
@@ -105,7 +107,7 @@ export class LearningEvaluationModule {
           if (error instanceof CategorizedError) throw error;
           throw new CategorizedError(
             'ai_failure',
-            '评价提交时出错，已保存你的提交内容。请重试评价。',
+            '导师反馈暂未生成；提交已经保存，学习进度不受影响。',
             error instanceof Error ? error : undefined
           );
         }
@@ -113,11 +115,12 @@ export class LearningEvaluationModule {
       const result = await this.store.saveEvaluationAndDecision({
         submission,
         evaluationOutput,
+        direction: deriveEvaluationDirection(evaluationOutput),
         decisionOutput: buildLocalDecisionFromEvaluation(evaluationOutput),
         evaluationAiReviewId
       });
       await this.context.processEvaluationResult({
-        goalId: goalId ?? '',
+        goalId,
         taskId: guideTask.id,
         submissionId: submission.id,
         evaluationId: result.evaluation.id,
@@ -140,7 +143,7 @@ export class LearningEvaluationModule {
 function buildLocalDecisionFromEvaluation(
   evaluation: SubmissionEvaluationAgentOutput
 ): NextStepDecisionAgentOutput {
-  if (isPassingEvaluation(evaluation)) {
+  if (evaluation.result === 'passed') {
     return {
       decision: 'complete_task',
       reason: evaluation.feedback,
@@ -172,7 +175,6 @@ function buildLocalSubmissionEvaluation(
   const passed = trimmed.length >= 10;
   return {
     result: passed ? 'passed' : 'unclear',
-    mastery: passed ? 100 : 30,
     evidence: passed
       ? [`已提交：${truncate(trimmed)}`, ...task.doneWhen]
       : ['提交内容过短，本地检查无法确认已完成。'],
@@ -182,9 +184,15 @@ function buildLocalSubmissionEvaluation(
     feedback: passed
       ? '本地检查通过：已收到主任务最终产出。'
       : '本地检查未通过：请补充可验收的最终产出后再提交。',
-    recommendedAction: passed ? 'complete_task' : 'request_user_decision',
-    decision: passed ? 'advance' : 'stay'
+    recommendedAction: passed ? 'complete_task' : 'request_user_decision'
   };
+}
+
+function deriveEvaluationDirection(
+  evaluation: SubmissionEvaluationAgentOutput
+): LearningEvaluation['decision'] {
+  if (evaluation.result === 'passed') return 'advance';
+  return evaluation.recommendedAction === 'remediate' ? 'remediate' : 'stay';
 }
 
 function truncate(value: string): string {

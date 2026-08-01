@@ -5,7 +5,6 @@ import type { AgentContext, AgentRunAudit } from '../../agent/agent-types';
 import type { SettingsService } from '../../services/settings-service';
 import type { StudyStore } from '../../services/store';
 import type { LearnerContextModule } from '../context/context';
-import type { LearningBranchModule } from '../branch/branch';
 import type { LearningTurnModule } from '../learning-turn/learning-turn';
 
 const FORCE_START_MESSAGE = '请使用当前信息生成初步计划。';
@@ -15,7 +14,6 @@ export class LearningConversationModule {
     private readonly store: StudyStore,
     private readonly settings: SettingsService,
     private readonly context: LearnerContextModule,
-    private readonly branch: LearningBranchModule,
     private readonly learningTurn: LearningTurnModule
   ) {}
 
@@ -32,7 +30,23 @@ export class LearningConversationModule {
         '目标访谈内容已经变化，原问题没有被自动套用。请刷新后重新回答。'
       );
     }
-    await this.store.addGoalIntakeMessage(current.intake.id, 'user', content);
+    if (!pending) {
+      const activeRun = await this.store.getActiveAgentRun('goal_intake', current.intake.id);
+      if (activeRun) {
+        throw new CategorizedError(
+          'validation_error',
+          activeRun.status === 'waiting_user'
+            ? '当前目标访谈正在等待你的回答；本次点击未重复保存，请先回答已有问题。'
+            : '当前目标访谈已有 AI 操作正在执行；本次点击未重复保存，请等待当前结果。'
+        );
+      }
+    }
+    const latestMessage = current.messages.at(-1);
+    const retriesFailedTurn = latestMessage?.role === 'user'
+      && latestMessage.content === content;
+    if (!retriesFailedTurn) {
+      await this.store.addGoalIntakeMessage(current.intake.id, 'user', content);
+    }
     const [nextState, profile, runtimeSettings] = await Promise.all([
       this.store.getCurrentGoalIntake(),
       this.store.getPromptProfile(),
@@ -60,8 +74,8 @@ export class LearningConversationModule {
     };
     const audit: AgentRunAudit = {
       kind: 'goal_intake',
-      provider: 'deepseek',
-      model: runtimeSettings.deepseekModel,
+      provider: 'configured_ai',
+      model: runtimeSettings.aiModel,
       promptProfileId: profile.id,
       promptVersionId: profile.activeVersionId,
       inputSnapshot: {
@@ -104,7 +118,10 @@ export class LearningConversationModule {
   async cancelGoalIntakeQuestion() {
     const state = await this.store.getCurrentGoalIntake();
     const pending = await this.learningTurn.getOpenInteraction('goal_intake', state.intake.id);
-    if (pending) await this.learningTurn.cancel(pending.id);
+    if (pending) {
+      await this.learningTurn.cancel(pending.id);
+      await this.store.addGoalIntakeMessage(state.intake.id, 'assistant', '已取消当前提问，你可以继续描述学习目标或开始学习。');
+    }
     return this.withPendingInteraction(await this.store.getCurrentGoalIntake());
   }
 
@@ -112,26 +129,30 @@ export class LearningConversationModule {
     const intake = await this.store.getCurrentGoalIntake();
     if (intake.intake.status === 'confirmed' && intake.intake.goalId) {
       const goal = await this.store.getGoal(intake.intake.goalId);
-      if (goal) return { goal, intake: intake.intake };
+      if (goal && !briefPatch) return { goal, intake: intake.intake };
     }
     return this.store.confirmGoalIntake(briefPatch);
   }
 
-  async askCurrent(question: string, promptProfileId?: Id): Promise<QuestionAnswerResult> {
+  async askCurrent(
+    question: string,
+    promptProfileId?: Id
+  ): Promise<QuestionAnswerResult> {
     const clean = requireQuestion(question);
     const before = await this.store.getLearningRuntimeSnapshot();
     const actionId = before.dailyGuideAction?.id;
     const taskId = before.dailyGuideTask?.id;
     const goalId = before.goal?.id;
-    if (!actionId || !taskId || !goalId) {
-      throw new CategorizedError('validation_error', '当前没有可返回的主线步骤，请改用临时学习。');
+    if (!taskId || !goalId) {
+      throw new CategorizedError('validation_error', '当前没有可返回的主线任务，请改用临时学习。');
     }
     let threadId: string;
-    if (before.questionThread?.status === 'open') {
-      threadId = before.questionThread.id;
+    const openThread = before.questionThread?.status === 'open' ? before.questionThread : null;
+    if (openThread && openThread.taskId === taskId) {
+      threadId = openThread.id;
       await this.store.addQuestionMessage(threadId, 'user', clean);
     } else {
-      threadId = (await this.branch.open('question', { goalId, taskId, actionId }, clean)).threadId;
+      threadId = (await this.store.openQuestion(actionId ?? null, clean, { goalId })).id;
     }
     return this.answer(threadId, clean, promptProfileId, 'answer_step_question', goalId);
   }
@@ -145,9 +166,7 @@ export class LearningConversationModule {
     const thread = threadId
       ? await this.store.getQuestionThread(threadId)
       : await this.store.openQuestion(null, clean, {
-          kind: 'question',
-          standalone: true,
-          metadata: { standalone: true }
+          standalone: true
         });
     if (!thread) throw new CategorizedError('user_input_error', '找不到要继续的临时学习记录。');
     if (thread.status !== 'open') {
@@ -248,20 +267,21 @@ export class LearningConversationModule {
         },
         audit: {
           kind: operation === 'answer_temporary_question' ? 'temporary_question' : 'question',
-          provider: 'deepseek',
-          model: runtimeSettings.deepseekModel,
+          provider: 'configured_ai',
+          model: runtimeSettings.aiModel,
           promptProfileId: profile.id,
           promptVersionId: profile.activeVersionId,
           inputSnapshot: { contextSourceIds: built.contextSourceIds, question },
           outputSchemaVersion: 'question-answer.v1'
         }
       });
+      const output = run.output;
       if (operation === 'answer_temporary_question') {
-        await this.store.addQuestionMessage(threadId, 'assistant', run.output.answer);
+        await this.store.addQuestionMessage(threadId, 'assistant', output.answer);
       } else {
-        await this.store.saveQuestionAnswer(threadId, run.output);
+        await this.store.saveQuestionAnswer(threadId, output);
       }
-      const result = await this.getResult(threadId, run.output);
+      const result = await this.getResult(threadId, output);
       if (!result) throw new Error('Conversation 保存失败。');
       return result;
     } catch (error) {

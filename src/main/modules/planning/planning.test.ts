@@ -19,8 +19,7 @@ function fixture(overrides: Partial<PlanningStore> = {}) {
     buildContext: vi.fn().mockResolvedValue({ operation: 'generate_daily_guide', snapshot: {}, context: {}, contextSourceIds: [] }),
     acquireGenerationLock: vi.fn().mockResolvedValue(true),
     releaseGenerationLock: vi.fn().mockResolvedValue(undefined),
-    closeCurrentSession: vi.fn().mockResolvedValue(undefined),
-    getLatestReview: vi.fn().mockResolvedValue(null),
+    markRoadmapStageReadyForReview: vi.fn().mockResolvedValue(undefined),
     ...overrides
   } as unknown as PlanningStore;
   const deps = {
@@ -28,7 +27,7 @@ function fixture(overrides: Partial<PlanningStore> = {}) {
       runReviewId: 'run-1',
       output: { tasks: [] }
     }),
-    getRuntimeSettings: vi.fn().mockResolvedValue({ dailyStudyWindows: [], deepseekModel: 'test-model' }),
+    getRuntimeSettings: vi.fn().mockResolvedValue({ dailyStudyWindows: [], aiModel: 'test-model' }),
     createTraceId: () => 'trace-1',
     todayIso: () => '2026-07-11'
   } as unknown as PrepareCurrentLearningUnitDeps;
@@ -36,6 +35,30 @@ function fixture(overrides: Partial<PlanningStore> = {}) {
 }
 
 describe('PlanningModule', () => {
+  it('repairs an exhausted active Stage and routes to review without calling AI', async () => {
+    const goal = { id: 'goal-1' } as any;
+    const activeState = {
+      goal,
+      roadmap: [{ id: 'stage-1', status: 'active' }],
+      shortPlan: [{ id: 'day-1', roadmapStageId: 'stage-1', sessionStatus: 'completed' }],
+      guide: null
+    } as any;
+    const reviewState = {
+      ...activeState,
+      roadmap: [{ id: 'stage-1', status: 'ready_for_review' }]
+    } as any;
+    const getActiveGuide = vi.fn()
+      .mockResolvedValueOnce(activeState)
+      .mockResolvedValueOnce(reviewState);
+    const { store, deps } = fixture({ getActiveGuide });
+
+    const result = await new PlanningModule(store).prepareCurrentLearningUnit({ forceRetry: true }, deps);
+
+    expect(store.markRoadmapStageReadyForReview).toHaveBeenCalledWith(goal.id);
+    expect(result).toEqual({ preparationState: 'stage_review_required' });
+    expect(deps.startAgentTurn).not.toHaveBeenCalled();
+  });
+
   it('没有可用计划日时返回 plan_exhausted，不调用 AI', async () => {
     const { store, deps } = fixture({
       getActiveGuide: vi.fn().mockResolvedValue({ goal: { id: 'goal-1' }, roadmap: [], shortPlan: [], guide: null })
@@ -58,6 +81,66 @@ describe('PlanningModule', () => {
     expect(store.ensureDraftDailyGuide).toHaveBeenCalledWith(expect.objectContaining({ nearTermPlanItemId: 'day-1' }));
     expect(store.saveDailyGuideWithTransaction).not.toHaveBeenCalled();
     expect(store.releaseGenerationLock).toHaveBeenCalledWith('daily_guide:goal-1');
+  });
+
+  it('AI 失败留下 draft Guide 后，用户更换配置重试仍会恢复原生成流程', async () => {
+    const goal = { id: 'goal-1' } as any;
+    const stage = { id: 'stage-1', status: 'active' } as any;
+    const item = {
+      id: 'day-1',
+      roadmapStageId: stage.id,
+      itemIndex: 1,
+      title: '第一单元',
+      sessionStatus: 'active',
+      date: null
+    } as any;
+    let draftCreated = false;
+    const { store, deps } = fixture({
+      getActiveGuide: vi.fn(async (activeOnly = false) => {
+        if (draftCreated && activeOnly) {
+          return { goal: null, roadmap: [], shortPlan: [], guide: null };
+        }
+        return {
+          goal,
+          roadmap: [stage],
+          shortPlan: [item],
+          guide: draftCreated
+            ? {
+                id: 'guide-draft',
+                goalId: goal.id,
+                nearTermPlanItemId: item.id,
+                sessionStatus: 'draft',
+                tasks: []
+              }
+            : null
+        };
+      }) as any,
+      ensureDraftDailyGuide: vi.fn(async () => {
+        draftCreated = true;
+        return { id: 'guide-draft', sessionStatus: 'draft', tasks: [] } as any;
+      })
+    });
+    vi.mocked(deps.startAgentTurn)
+      .mockRejectedValueOnce(new Error('旧配置请求失败'))
+      .mockResolvedValueOnce({
+        runReviewId: 'run-2',
+        output: { tasks: [] }
+      } as any);
+    const planning = new PlanningModule(store);
+
+    await expect(planning.prepareCurrentLearningUnit({}, deps))
+      .resolves.toEqual({
+        preparationState: 'generation_failed',
+        errorMessage: '旧配置请求失败'
+      });
+
+    const retried = await planning.prepareCurrentLearningUnit(
+      { forceRetry: true },
+      deps
+    );
+
+    expect(retried.preparationState).toBe('active');
+    expect(deps.startAgentTurn).toHaveBeenCalledTimes(2);
   });
 
   it('草稿创建失败时返回可重试结果且不调用工具', async () => {
@@ -108,66 +191,4 @@ describe('PlanningModule', () => {
     expect(store.acquireGenerationLock).toHaveBeenCalledTimes(1);
   });
 
-  it('当前学习日仍有未完成任务时拒绝推进', async () => {
-    const { store, deps } = fixture({
-      getActiveGuide: vi.fn().mockResolvedValue({
-        goal: { id: 'goal-1' }, roadmap: [], shortPlan: [],
-        guide: { id: 'guide-1', date: '2026-07-11', sessionStatus: 'active', tasks: [{ status: 'active' }] }
-      })
-    });
-
-    await expect(new PlanningModule(store).advanceLearningDay({}, {
-      ...deps, generateReview: vi.fn()
-    })).rejects.toThrow('还有进行中或待处理的 Task');
-    expect(store.closeCurrentSession).not.toHaveBeenCalled();
-  });
-
-  it('Review 失败不会回滚已关闭学习日，并继续检查下一单元', async () => {
-    const activeGuide = {
-      goal: { id: 'goal-1' }, roadmap: [], shortPlan: [],
-      guide: { id: 'guide-1', date: '2026-07-11', sessionStatus: 'active', tasks: [{ status: 'done' }] }
-    } as any;
-    const noActiveGuide = { goal: { id: 'goal-1' }, roadmap: [], shortPlan: [], guide: null } as any;
-    const getActiveGuide = vi.fn().mockResolvedValueOnce(activeGuide).mockResolvedValueOnce(noActiveGuide);
-    const { store, deps } = fixture({ getActiveGuide });
-
-    const result = await new PlanningModule(store).advanceLearningDay({}, {
-      ...deps, generateReview: vi.fn().mockRejectedValue(new Error('复盘模型超时'))
-    });
-
-    expect(store.closeCurrentSession).toHaveBeenCalledWith('guide-1');
-    expect(result.preparationState).toBe('plan_exhausted');
-    expect(result.review).toBeNull();
-  });
-
-  it('已关闭学习日复用已有 Review，不重复调用模型', async () => {
-    const review = { reviewId: 'review-1', date: '2026-07-11' } as any;
-    const closedGuide = {
-      goal: { id: 'goal-1' }, roadmap: [], shortPlan: [],
-      guide: { id: 'guide-1', date: '2026-07-11', sessionStatus: 'closed', tasks: [{ status: 'done' }] }
-    } as any;
-    const noActiveGuide = { goal: { id: 'goal-1' }, roadmap: [], shortPlan: [], guide: null } as any;
-    const getActiveGuide = vi.fn().mockResolvedValueOnce(closedGuide).mockResolvedValueOnce(noActiveGuide);
-    const { store, deps } = fixture({ getActiveGuide, getLatestReview: vi.fn().mockResolvedValue(review) });
-    const generateReview = vi.fn();
-
-    const result = await new PlanningModule(store).advanceLearningDay({}, { ...deps, generateReview });
-
-    expect(result.review).toBe(review);
-    expect(generateReview).not.toHaveBeenCalled();
-  });
-
-  it('所有 Task 已完成或放弃时都可以关闭学习单元', async () => {
-    const { store } = fixture({
-      getActiveGuide: vi.fn()
-        .mockResolvedValueOnce({ guide: { id: 'guide-1', tasks: [{ status: 'active' }] } })
-        .mockResolvedValueOnce({ guide: { id: 'guide-1', tasks: [{ status: 'done' }, { status: 'skipped' }] } })
-    });
-    const planning = new PlanningModule(store);
-
-    await expect(planning.closeCompletedLearningDay()).resolves.toBe(false);
-    await expect(planning.closeCompletedLearningDay()).resolves.toBe(true);
-    expect(store.closeCurrentSession).toHaveBeenCalledTimes(1);
-    expect(store.closeCurrentSession).toHaveBeenCalledWith('guide-1');
-  });
 });

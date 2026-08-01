@@ -162,8 +162,8 @@ export class LearningTurnModule {
         },
         audit: {
           kind: 'learning_turn',
-          provider: 'deepseek',
-          model: runtimeSettings.deepseekModel,
+          provider: 'configured_ai',
+          model: runtimeSettings.aiModel,
           promptProfileId: profile.id,
           promptVersionId: profile.activeVersionId,
           inputSnapshot: {
@@ -174,9 +174,9 @@ export class LearningTurnModule {
           idempotencyKey: input.idempotencyKey
         },
         modelConfig: {
-          apiKey: runtimeSettings.deepseekApiKey,
-          baseUrl: runtimeSettings.deepseekBaseUrl,
-          model: runtimeSettings.deepseekModel,
+          apiKey: runtimeSettings.aiApiKey,
+          baseUrl: runtimeSettings.aiBaseUrl,
+          model: runtimeSettings.aiModel,
           system: [
             systemPromptFor('主线内主动教学'),
             profile.content,
@@ -223,9 +223,9 @@ export class LearningTurnModule {
       ? params.input as Record<string, unknown>
       : {};
     const settings = input.settings as {
-      deepseekApiKey: string | null;
-      deepseekBaseUrl: string;
-      deepseekModel: string;
+      aiApiKey: string | null;
+      aiBaseUrl: string;
+      aiModel: string;
     } | undefined;
     const profile = input.profile as { content?: string } | undefined;
     if (!settings) {
@@ -243,9 +243,9 @@ export class LearningTurnModule {
       context: params.context,
       audit: params.audit,
       modelConfig: {
-        apiKey: settings.deepseekApiKey,
-        baseUrl: settings.deepseekBaseUrl,
-        model: settings.deepseekModel,
+        apiKey: settings.aiApiKey,
+        baseUrl: settings.aiBaseUrl,
+        model: settings.aiModel,
         system: [
           AGENT_SYSTEM_PROMPT,
           profile?.content ?? '',
@@ -253,9 +253,7 @@ export class LearningTurnModule {
         ].filter(Boolean).join('\n'),
         traceId: typeof traceId === 'string' ? traceId : `ta_${crypto.randomUUID()}`
       },
-      allowedTools: params.toolName === 'propose_goal'
-        ? ['propose_goal', 'ask_user']
-        : [params.toolName]
+      allowedTools: [params.toolName]
     };
   }
 

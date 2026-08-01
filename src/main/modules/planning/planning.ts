@@ -9,10 +9,8 @@ import type {
   PlanProposalInput,
   PlanVersionEntry,
   PrepareCurrentLearningUnitResult,
-  ReviewResult,
   RoadmapStage,
-  NearTermPlanItem,
-  StartNextSessionResult
+  NearTermPlanItem
 } from '../../../shared/types';
 import { CategorizedError, describeError } from '../../ai/categorized-error';
 import type { AgentContext, AgentRunAudit, AgentToolName } from '../../agent/agent-types';
@@ -33,8 +31,6 @@ export type PlanningStore = Pick<StudyStore,
   | 'ensureDraftDailyGuide'
   | 'acquireGenerationLock'
   | 'releaseGenerationLock'
-  | 'closeCurrentSession'
-  | 'getLatestReview'
   | 'findActiveOrActivateStage'
   | 'listAvailableNearTermPlanItemsForStage'
   | 'getRollingPlanContext'
@@ -42,7 +38,6 @@ export type PlanningStore = Pick<StudyStore,
   | 'getPlanVersionsForGoal'
   | 'createProposal'
   | 'confirmProposal'
-  | 'rejectProposal'
   | 'markRoadmapStageReadyForReview'
   | 'confirmRoadmapStageCompletion'
   | 'buildContext'
@@ -59,10 +54,6 @@ export interface PrepareCurrentLearningUnitDeps {
   getRuntimeSettings: () => Promise<any>;
   createTraceId: () => string;
   todayIso: () => string;
-}
-
-export interface AdvanceLearningDayDeps extends PrepareCurrentLearningUnitDeps {
-  generateReview: (guideId: Id) => Promise<ReviewResult>;
 }
 
 export interface GenerateRollingPlanDeps {
@@ -124,8 +115,8 @@ export class PlanningModule {
       },
       audit: {
         kind: 'roadmap',
-        provider: 'deepseek',
-        model: runtimeSettings.deepseekModel,
+        provider: 'configured_ai',
+        model: runtimeSettings.aiModel,
         promptProfileId: profile.id,
         promptVersionId: profile.activeVersionId,
         inputSnapshot: { goalId, brief, contextSourceIds: roadmapContext.contextSourceIds },
@@ -174,8 +165,8 @@ export class PlanningModule {
       },
       audit: {
         kind: 'short_plan',
-        provider: 'deepseek',
-        model: runtimeSettings.deepseekModel,
+        provider: 'configured_ai',
+        model: runtimeSettings.aiModel,
         promptProfileId: profile.id,
         promptVersionId: profile.activeVersionId,
         inputSnapshot: {
@@ -244,8 +235,8 @@ export class PlanningModule {
         audit: {
           kind: 'daily_guide',
           date,
-          provider: 'deepseek',
-          model: runtimeSettings.deepseekModel,
+          provider: 'configured_ai',
+          model: runtimeSettings.aiModel,
           promptProfileId: profile.id,
           promptVersionId: profile.activeVersionId,
           inputSnapshot: {
@@ -265,7 +256,7 @@ export class PlanningModule {
       dailyGuideOutput = guideRun.output;
     } catch (error) {
       if (error instanceof CategorizedError) throw error;
-      if (error instanceof Error && /DeepSeek API Key|API [Kk]ey/i.test(error.message)) {
+      if (error instanceof Error && /AI API Key|API [Kk]ey/i.test(error.message)) {
         throw new CategorizedError('missing_config', error.message, error);
       }
       if (error instanceof Error && /JSON|schema|valid|parse|required|expected/i.test(error.message)) {
@@ -296,8 +287,18 @@ export class PlanningModule {
     params: { forceRetry?: boolean },
     deps: PrepareCurrentLearningUnitDeps
   ): Promise<PrepareCurrentLearningUnitResult> {
-    const today = await this.store.getActiveGuide(true);
+    // A failed generation intentionally leaves a draft Guide as the durable
+    // recovery anchor. Reading only active Guides would hide that draft and
+    // incorrectly report that the Goal no longer exists on retry.
+    let today = await this.store.getActiveGuide();
     if (!today.goal) return { preparationState: 'needs_goal' };
+
+    await this.store.markRoadmapStageReadyForReview(today.goal.id);
+    today = await this.store.getActiveGuide();
+    if (!today.goal) return { preparationState: 'needs_goal' };
+    if (today.roadmap.some((stage) => stage.status === 'ready_for_review')) {
+      return { preparationState: 'stage_review_required' };
+    }
 
     const lockKey = `daily_guide:${today.goal.id}`;
     const existingLock = this.generationLocks.get(lockKey);
@@ -394,8 +395,8 @@ export class PlanningModule {
         audit: {
           kind: 'daily_guide',
           date,
-          provider: 'deepseek',
-          model: settings.deepseekModel,
+          provider: 'configured_ai',
+          model: settings.aiModel,
           promptProfileId: profile.id,
           promptVersionId: profile.activeVersionId,
           inputSnapshot: { goalId: goal.id, targetDay: targetDay.title, contextSourceIds },
@@ -413,58 +414,6 @@ export class PlanningModule {
     } catch (error) {
       const described = describeError(error);
       return { preparationState: 'generation_failed', errorMessage: described.message };
-    }
-  }
-
-  async advanceLearningDay(
-    params: { goalId?: Id },
-    deps: AdvanceLearningDayDeps
-  ): Promise<StartNextSessionResult> {
-    const today = await this.store.getActiveGuide();
-    if (params.goalId && today.goal?.id !== params.goalId) {
-      throw new Error('当前学习目标与请求的目标不一致，请刷新后重试。');
-    }
-
-    let review: ReviewResult | null = null;
-    if (today.guide?.sessionStatus === 'active') {
-      const allTasksTerminal = today.guide.tasks.length > 0
-        && today.guide.tasks.every((task) => task.status === 'done' || task.status === 'skipped');
-      if (!allTasksTerminal) {
-        throw new Error('当前学习单元还有进行中或待处理的 Task，请先结束、暂缓或放弃后再继续。');
-      }
-      await this.store.closeCurrentSession(today.guide.id);
-      review = await this.generateReviewSafely(today.guide.id, today.guide.date, deps.generateReview);
-    } else if (today.guide?.sessionStatus === 'closed') {
-      review = await this.store.getLatestReview(today.guide.date);
-      if (!review) review = await this.generateReviewSafely(today.guide.id, today.guide.date, deps.generateReview);
-    }
-
-    const next = await this.prepareCurrentLearningUnit({}, deps);
-    if (next.preparationState !== 'plan_exhausted') return { review, ...next };
-    return {
-      review,
-      preparationState: 'plan_exhausted',
-      errorMessage: '当前批次学习任务已全部完成。请前往复盘页查看总结，复盘后可根据当前学习路径生成下一批任务。'
-    };
-  }
-
-  async closeCompletedLearningDay(): Promise<boolean> {
-    const today = await this.store.getActiveGuide();
-    if (!today.guide || today.guide.tasks.length === 0) return false;
-    if (!today.guide.tasks.every((task) => task.status === 'done' || task.status === 'skipped')) return false;
-    await this.store.closeCurrentSession(today.guide.id);
-    return true;
-  }
-
-  private async generateReviewSafely(
-    guideId: Id,
-    date: string,
-    generateReview: (guideId: Id) => Promise<ReviewResult>
-  ): Promise<ReviewResult | null> {
-    try {
-      return await generateReview(guideId);
-    } catch {
-      return null;
     }
   }
 
@@ -536,8 +485,8 @@ export class PlanningModule {
         audit: {
           kind: 'daily_guide',
           date: todayIso(),
-          provider: 'deepseek',
-          model: runtimeSettings.deepseekModel,
+          provider: 'configured_ai',
+          model: runtimeSettings.aiModel,
           promptProfileId: profile.id,
           promptVersionId: profile.activeVersionId,
           inputSnapshot: {
@@ -584,8 +533,8 @@ export class PlanningModule {
       },
       audit: {
         kind: 'rolling_plan',
-        provider: 'deepseek',
-        model: runtimeSettings.deepseekModel,
+        provider: 'configured_ai',
+        model: runtimeSettings.aiModel,
         promptProfileId: profile.id,
         promptVersionId: profile.activeVersionId,
         inputSnapshot: {
@@ -630,10 +579,6 @@ export class PlanningModule {
 
   async confirmPlanChange(proposalId: Id): Promise<PlanAdjustmentProposal> {
     return this.store.confirmProposal(proposalId);
-  }
-
-  async rejectPlanChange(proposalId: Id): Promise<PlanAdjustmentProposal> {
-    return this.store.rejectProposal(proposalId);
   }
 
   async confirmRoadmapStage(goalId: Id, stageId: Id): Promise<RoadmapStage[]> {
