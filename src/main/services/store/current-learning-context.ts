@@ -2,7 +2,6 @@ import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import type {
   CurrentGuideChoice,
   LearningRuntimeState,
-  LearningStageConflict,
   StudySession
 } from '../../../shared/types';
 import type { Database } from '../../db/client';
@@ -18,8 +17,8 @@ import {
 import { nowIso } from '../id';
 import { mapRuntimeState, mapSession } from './serialization';
 
-type DatabaseTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
-type ContextExecutor = Database | DatabaseTransaction;
+export type DatabaseTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+export type ContextExecutor = Database | DatabaseTransaction;
 
 export interface ResolvedCurrentLearningContext {
   version: number;
@@ -29,7 +28,6 @@ export interface ResolvedCurrentLearningContext {
   taskId: string | null;
   actionId: string | null;
   stageId: string | null;
-  stageConflict: LearningStageConflict | null;
   session: StudySession | null;
   state: LearningRuntimeState;
 }
@@ -37,7 +35,6 @@ export interface ResolvedCurrentLearningContext {
 export interface LearningContextRepairResult {
   consistent: boolean;
   fixed: string[];
-  conflicts: Array<{ field: string; expected: string; actual: string }>;
 }
 
 export class CurrentLearningContextPersistence {
@@ -55,8 +52,12 @@ export class CurrentLearningContextPersistence {
           .where(eq(goals.status, 'active')).orderBy(desc(goals.createdAt)).limit(2);
     const goalId = activeGoal?.id ?? (fallbackGoals.length === 1 ? fallbackGoals[0].id : null);
 
-    const guide = context.guideId
-      ? (await this.db.select().from(learningGuides).where(eq(learningGuides.id, context.guideId)).limit(1))[0]
+    const guide = context.guideId && goalId
+      ? (await this.db.select().from(learningGuides).where(and(
+          eq(learningGuides.id, context.guideId),
+          eq(learningGuides.goalId, goalId),
+          inArray(learningGuides.status, ['active', 'draft'])
+        )).limit(1))[0]
       : null;
     const fallbackGuides = !guide && goalId
       ? await this.db.select().from(learningGuides)
@@ -65,8 +66,12 @@ export class CurrentLearningContextPersistence {
       : [];
     const selectedGuide = guide ?? (fallbackGuides.length === 1 ? fallbackGuides[0] : null);
 
-    const task = context.taskId
-      ? (await this.db.select().from(learningTasks).where(eq(learningTasks.id, context.taskId)).limit(1))[0]
+    const task = context.taskId && selectedGuide
+      ? (await this.db.select().from(learningTasks).where(and(
+          eq(learningTasks.id, context.taskId),
+          eq(learningTasks.guideId, selectedGuide.id),
+          inArray(learningTasks.status, ['planned', 'active', 'deferred'])
+        )).limit(1))[0]
       : null;
     const fallbackTasks = !task && selectedGuide
       ? await this.db.select().from(learningTasks)
@@ -78,7 +83,8 @@ export class CurrentLearningContextPersistence {
       ? (await this.db.select({ id: learningActions.id }).from(learningActions)
           .where(and(
             eq(learningActions.id, context.actionId),
-            eq(learningActions.taskId, selectedTask.id)
+            eq(learningActions.taskId, selectedTask.id),
+            eq(learningActions.status, 'planned')
           )).limit(1))[0] ?? null
       : null;
 
@@ -87,7 +93,7 @@ export class CurrentLearningContextPersistence {
       .orderBy(desc(focusSessions.startedAt)).limit(1))[0] ?? null;
 
     const desired = {
-      goalId: selectedTask ? selectedTask.goalId : selectedGuide?.goalId ?? goalId,
+      goalId,
       guideId: selectedTask?.guideId ?? selectedGuide?.id ?? null,
       taskId: selectedTask?.id ?? null,
       actionId: selectedAction?.id ?? null
@@ -117,7 +123,6 @@ export class CurrentLearningContextPersistence {
       taskId: latest.taskId,
       actionId: latest.actionId,
       stageId: selectedTask?.roadmapStageId ?? null,
-      stageConflict: null,
       session: sessionRow ? mapSession(sessionRow) : null,
       state
     };
@@ -148,13 +153,16 @@ export class CurrentLearningContextPersistence {
     });
   }
 
-  async makeGuideCurrent(guideId: string): Promise<void> {
-    const guide = (await this.db.select().from(learningGuides).where(eq(learningGuides.id, guideId)).limit(1))[0];
+  async makeGuideCurrent(
+    guideId: string,
+    executor: ContextExecutor = this.db
+  ): Promise<void> {
+    const guide = (await executor.select().from(learningGuides).where(eq(learningGuides.id, guideId)).limit(1))[0];
     if (!guide) throw new Error(`Learning guide not found: ${guideId}`);
-    const task = (await this.db.select().from(learningTasks)
+    const task = (await executor.select().from(learningTasks)
       .where(and(eq(learningTasks.guideId, guideId), inArray(learningTasks.status, ['planned', 'active', 'deferred'])))
       .orderBy(asc(learningTasks.position)).limit(1))[0] ?? null;
-    await this.write({
+    await this.writeWith(executor, {
       goalId: guide.goalId,
       guideId,
       taskId: task?.id ?? null,
@@ -190,119 +198,12 @@ export class CurrentLearningContextPersistence {
     await this.makeGuideCurrent(guideId);
   }
 
-  async resolveAmbiguousLearningUnit(guideId: string, decision: 'restore' | 'skip'): Promise<void> {
-    if (decision === 'restore') {
-      await this.makeGuideCurrent(guideId);
-      return;
-    }
-    await this.skipGuide(guideId);
-  }
-
-  async completeGuide(guideId: string): Promise<string[]> {
-    const openTasks = await this.db.select({ id: learningTasks.id }).from(learningTasks)
-      .where(and(eq(learningTasks.guideId, guideId), inArray(learningTasks.status, ['planned', 'active', 'deferred'])));
-    if (openTasks.length > 0) throw new Error('学习单元仍有未关闭 Task，不能关闭 Guide。');
-    await this.db.transaction(async (tx) => {
-      await tx.update(learningGuides).set({ status: 'closed' }).where(eq(learningGuides.id, guideId));
-      const context = await tx.select().from(currentLearningContext)
-        .where(eq(currentLearningContext.id, 'default')).limit(1);
-      if (context[0]?.guideId === guideId) {
-        await tx.update(currentLearningContext).set({
-          guideId: null,
-          taskId: null,
-          actionId: null,
-          version: context[0].version + 1,
-          updatedAt: nowIso()
-        }).where(eq(currentLearningContext.id, 'default'));
-      }
-    });
-    return [];
-  }
-
-  async closeTask(
-    taskId: string,
-    closureKind: 'completed' | 'partial' | 'abandoned' | 'replaced',
-    closureReason?: string,
-    nextStartPoint?: string
-  ): Promise<void> {
-    const now = nowIso();
-    const cleanReason = closureReason?.trim() || null;
-    const cleanNextStartPoint = nextStartPoint?.trim() || null;
-    await this.db.transaction(async (tx) => {
-      const task = (await tx.select().from(learningTasks)
-        .where(eq(learningTasks.id, taskId)).limit(1))[0];
-      if (!task) throw new Error(`Learning task not found: ${taskId}`);
-      if (task.status === 'closed') {
-        if (
-          task.closureKind !== closureKind
-          || task.closureReason !== cleanReason
-          || task.nextStartPoint !== cleanNextStartPoint
-        ) {
-          throw new Error('Task 已经以其他结果收口，不能覆盖原收口事实。');
-        }
-      } else {
-        await tx.update(learningTasks).set({
-          status: 'closed',
-          closureKind,
-          closureReason: cleanReason,
-          nextStartPoint: cleanNextStartPoint,
-          updatedAt: now
-        }).where(eq(learningTasks.id, taskId));
-      }
-      const next = task.guideId
-        ? (await tx.select().from(learningTasks).where(and(
-            eq(learningTasks.guideId, task.guideId),
-            inArray(learningTasks.status, ['planned', 'active', 'deferred'])
-          )).orderBy(asc(learningTasks.position)).limit(1))[0] ?? null
-        : null;
-      const context = (await tx.select().from(currentLearningContext)
-        .where(eq(currentLearningContext.id, 'default')).limit(1))[0];
-      const guideHasOpenTasks = task.guideId
-        ? (await tx.select({ id: learningTasks.id }).from(learningTasks).where(and(
-            eq(learningTasks.guideId, task.guideId),
-            inArray(learningTasks.status, ['planned', 'active', 'deferred'])
-          )).limit(1)).length > 0
-        : true;
-      if (task.guideId && !guideHasOpenTasks) {
-        await tx.update(learningGuides).set({ status: 'closed' })
-          .where(eq(learningGuides.id, task.guideId));
-      }
-      if (context?.taskId === taskId) {
-        await tx.update(currentLearningContext).set({
-          guideId: task.guideId && !guideHasOpenTasks ? null : context.guideId,
-          taskId: next?.id ?? null,
-          actionId: null,
-          version: context.version + 1,
-          updatedAt: now
-        }).where(eq(currentLearningContext.id, 'default'));
-      }
-    });
-  }
-
-  async skipGuide(guideId: string): Promise<string[]> {
-    await this.db.transaction(async (tx) => {
-      await tx.update(learningGuides).set({ status: 'archived' }).where(eq(learningGuides.id, guideId));
-      const rows = await tx.select().from(currentLearningContext)
-        .where(eq(currentLearningContext.id, 'default')).limit(1);
-      if (rows[0]?.guideId === guideId) {
-        await tx.update(currentLearningContext).set({
-          guideId: null,
-          taskId: null,
-          actionId: null,
-          version: rows[0].version + 1,
-          updatedAt: nowIso()
-        }).where(eq(currentLearningContext.id, 'default'));
-      }
-    });
-    return [];
-  }
-
   async repair(): Promise<LearningContextRepairResult> {
     const before = await this.ensureContext();
     await this.resolve();
     const after = await this.ensureContext();
     const fixed = JSON.stringify(before) === JSON.stringify(after) ? [] : ['current_learning_context'];
-    return { consistent: fixed.length === 0, fixed, conflicts: [] };
+    return { consistent: fixed.length === 0, fixed };
   }
 
   async write(patch: {
@@ -312,6 +213,61 @@ export class CurrentLearningContextPersistence {
     actionId?: string | null;
   }): Promise<void> {
     await this.writeWith(this.db, patch);
+  }
+
+  async writeInTransaction(
+    executor: DatabaseTransaction,
+    patch: {
+      goalId?: string | null;
+      guideId?: string | null;
+      taskId?: string | null;
+      actionId?: string | null;
+    }
+  ): Promise<void> {
+    await this.writeWith(executor, patch);
+  }
+
+  async writeIfCurrentTaskInTransaction(
+    executor: DatabaseTransaction,
+    expectedTaskId: string,
+    patch: {
+      guideId?: string | null;
+      taskId?: string | null;
+      actionId?: string | null;
+    }
+  ): Promise<boolean> {
+    const current = await this.ensureContextWith(executor);
+    if (current.taskId !== expectedTaskId) return false;
+    const changed = await executor.update(currentLearningContext).set({
+      ...patch,
+      version: current.version + 1,
+      updatedAt: nowIso()
+    }).where(and(
+      eq(currentLearningContext.id, 'default'),
+      eq(currentLearningContext.version, current.version),
+      eq(currentLearningContext.taskId, expectedTaskId)
+    )).returning({ id: currentLearningContext.id });
+    return changed.length === 1;
+  }
+
+  async clearIfCurrentGuideInTransaction(
+    executor: DatabaseTransaction,
+    expectedGuideId: string
+  ): Promise<boolean> {
+    const current = await this.ensureContextWith(executor);
+    if (current.guideId !== expectedGuideId) return false;
+    const changed = await executor.update(currentLearningContext).set({
+      guideId: null,
+      taskId: null,
+      actionId: null,
+      version: current.version + 1,
+      updatedAt: nowIso()
+    }).where(and(
+      eq(currentLearningContext.id, 'default'),
+      eq(currentLearningContext.version, current.version),
+      eq(currentLearningContext.guideId, expectedGuideId)
+    )).returning({ id: currentLearningContext.id });
+    return changed.length === 1;
   }
 
   async replaceActionInTransaction(

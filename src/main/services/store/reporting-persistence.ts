@@ -108,7 +108,8 @@ export class ReportingPersistence {
         id: task.id,
         title: task.title,
         status: task.status,
-        progressPercent: task.progressPercent,
+        completedActionCount: task.actions.filter((item) => item.status === 'done').length,
+        totalActionCount: task.actions.length,
         estimatedMinutes: task.estimatedMinutes,
         totalElapsedMinutes: taskSessions.reduce((total, item) => total + (item.durationMinutes ?? 0), 0),
         focusSessions: taskSessions.map((item) => ({

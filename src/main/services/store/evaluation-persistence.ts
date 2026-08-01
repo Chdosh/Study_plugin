@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, notExists } from 'drizzle-orm';
+import { and, desc, eq, inArray, notExists, sql } from 'drizzle-orm';
 import type {
   DailyGuideAction,
   LearningEvaluation,
@@ -11,6 +11,7 @@ import type {
 } from '../../../shared/schemas';
 import type { Database } from '../../db/client';
 import {
+  focusSessions,
   learningActions,
   learningEvaluations,
   learningSubmissions,
@@ -24,40 +25,83 @@ import { readSubmission } from './submission-read';
 export class EvaluationPersistence {
   constructor(
     private readonly db: Database,
-    private readonly runtime: RuntimePersistence,
-    _completeLearningDay: (guideId: string) => Promise<void>
+    private readonly runtime: RuntimePersistence
   ) {}
 
-  async createSubmission(
-    actionOrTaskId: string,
-    sessionId: string | null,
-    content: string
-  ): Promise<LearningSubmission> {
-    const clean = content.trim();
+  async createSubmission(params: {
+    taskId: string;
+    stepId?: string | null;
+    sessionId?: string | null;
+    content: string;
+  }): Promise<LearningSubmission> {
+    const clean = params.content.trim();
     if (!clean) throw new Error('提交内容不能为空。');
-    const action = (await this.db.select({ taskId: learningActions.taskId }).from(learningActions)
-      .where(eq(learningActions.id, actionOrTaskId)).limit(1))[0];
-    const taskId = action?.taskId ?? actionOrTaskId;
     const task = (await this.db.select().from(learningTasks)
-      .where(eq(learningTasks.id, taskId)).limit(1))[0];
+      .where(eq(learningTasks.id, params.taskId)).limit(1))[0];
     if (!task) throw new Error('提交未绑定到有效 Task。');
-    if (sessionId) {
-      const snapshot = await this.runtime.getSnapshot();
-      if (snapshot.state.activeDailyTaskId && snapshot.state.activeDailyTaskId !== taskId) {
+    let stepId: string | null = null;
+    if (params.stepId) {
+      const stepAction = (await this.db.select({ id: learningActions.id, taskId: learningActions.taskId })
+        .from(learningActions)
+        .where(eq(learningActions.id, params.stepId)).limit(1))[0];
+      if (stepAction && stepAction.taskId === params.taskId) {
+        stepId = stepAction.id;
+      }
+    }
+    if (params.sessionId) {
+      const sessionRow = (await this.db.select({ taskId: focusSessions.taskId })
+        .from(focusSessions)
+        .where(eq(focusSessions.id, params.sessionId)).limit(1))[0];
+      if (!sessionRow || sessionRow.taskId !== params.taskId) {
         throw new Error('提交的 Session 与当前 Task 不一致。');
       }
     }
     const row = {
       id: createId('submission'),
-      taskId,
+      taskId: params.taskId,
+      stepId,
       goalId: task.goalId,
-      sessionId,
+      sessionId: params.sessionId ?? null,
       content: clean,
+      evaluationStatus: 'waiting' as const,
+      evaluationAttemptCount: 0,
+      lastEvaluationError: null,
+      lastEvaluationAt: null,
       createdAt: nowIso()
     };
-    // Submission is durable before any AI evaluation starts.
     await this.db.insert(learningSubmissions).values(row);
     return mapSubmission(row);
+  }
+
+  async markEvaluationEvaluating(submissionId: string): Promise<void> {
+    await this.db.update(learningSubmissions).set({
+      evaluationStatus: 'evaluating',
+      evaluationAttemptCount: sql`${learningSubmissions.evaluationAttemptCount} + 1`,
+      lastEvaluationAt: nowIso()
+    }).where(eq(learningSubmissions.id, submissionId));
+  }
+
+  async markEvaluationCompleted(submissionId: string): Promise<void> {
+    await this.db.update(learningSubmissions).set({
+      evaluationStatus: 'completed',
+      lastEvaluationAt: nowIso(),
+      lastEvaluationError: null
+    }).where(eq(learningSubmissions.id, submissionId));
+  }
+
+  async markEvaluationFailed(submissionId: string, errorMessage: string): Promise<void> {
+    await this.db.update(learningSubmissions).set({
+      evaluationStatus: 'failed',
+      lastEvaluationAt: nowIso(),
+      lastEvaluationError: errorMessage.slice(0, 500)
+    }).where(eq(learningSubmissions.id, submissionId));
+  }
+
+  async getSubmissionsNeedingEvaluation(): Promise<string[]> {
+    const rows = await this.db.select({ id: learningSubmissions.id })
+      .from(learningSubmissions)
+      .where(inArray(learningSubmissions.evaluationStatus, ['waiting', 'evaluating']));
+    return rows.map((row) => row.id);
   }
 
   async getSubmissionById(submissionId: string): Promise<LearningSubmission | null> {
@@ -67,6 +111,7 @@ export class EvaluationPersistence {
   async saveEvaluationAndDecision(params: {
     submission: LearningSubmission;
     evaluationOutput: SubmissionEvaluationAgentOutput;
+    direction: LearningEvaluation['decision'];
     decisionOutput: NextStepDecisionAgentOutput;
     evaluationAiReviewId?: string;
     decisionAiReviewId?: string;
@@ -114,10 +159,10 @@ export class EvaluationPersistence {
       misconceptionsJson: JSON.stringify(params.evaluationOutput.misconceptions),
       missingRequirementsJson: JSON.stringify(params.evaluationOutput.missingRequirements),
       feedback: params.evaluationOutput.feedback,
-      direction: params.evaluationOutput.decision,
+      direction: params.direction,
       selfNote,
       recommendationJson: JSON.stringify(recommendation),
-      recommendationDecision: 'pending' as const,
+      recommendationDecision: null,
       recommendationDecisionReason: null,
       applicationStatus: null,
       applicationError: null,

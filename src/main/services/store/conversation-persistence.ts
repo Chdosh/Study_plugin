@@ -12,102 +12,11 @@ import { createId, nowIso } from '../id';
 import type { RuntimePersistence } from './runtime-persistence';
 import { mapQuestionMessage, mapQuestionThread } from './serialization';
 
-type RecordBranchKnowledge = (params: {
-  goalId: string;
-  items: Array<{
-    key: string;
-    summary: string;
-    sourceType: 'insight';
-    sourceId: string;
-  }>;
-}) => Promise<unknown>;
-
-export class QuestionBranchPersistence {
+export class ConversationPersistence {
   constructor(
     private readonly db: Database,
-    private readonly runtime: RuntimePersistence,
-    private readonly recordKnowledgeItems: RecordBranchKnowledge
+    private readonly runtime: RuntimePersistence
   ) {}
-
-  async promoteQuestionThread(threadId: string, target: { taskId: string }): Promise<void> {
-    const thread = await this.getQuestionThread(threadId);
-    if (!thread) throw new Error(`Conversation thread not found: ${threadId}`);
-    await this.updateQuestionThreadMetadata(threadId, {
-      promotedTaskId: target.taskId,
-      previousMetadata: await this.readMetadata(threadId)
-    });
-  }
-
-  async updateQuestionThreadKind(
-    threadId: string,
-    kind: 'question' | 'debug' | 'practice'
-  ): Promise<void> {
-    await this.db.update(conversationThreads).set({ kind, updatedAt: nowIso() })
-      .where(eq(conversationThreads.id, threadId));
-  }
-
-  async updateQuestionThreadMetadata(
-    threadId: string,
-    metadata: Record<string, unknown>
-  ): Promise<void> {
-    await this.db.update(conversationThreads).set({
-      metadata: JSON.stringify(metadata),
-      updatedAt: nowIso()
-    }).where(eq(conversationThreads.id, threadId));
-  }
-
-  async createTaskFromBranch(
-    branchSummary: string,
-    anchor: { goalId: string; taskId: string }
-  ): Promise<string> {
-    const source = (await this.db.select().from(learningTasks)
-      .where(eq(learningTasks.id, anchor.taskId)).limit(1))[0];
-    if (!source) throw new Error('找不到用于承接分支的当前 Task。');
-    const max = (await this.db.select({ position: learningTasks.position }).from(learningTasks)
-      .where(source.guideId ? eq(learningTasks.guideId, source.guideId) : isNull(learningTasks.guideId))
-      .orderBy(desc(learningTasks.position)).limit(1))[0]?.position ?? -1;
-    const now = nowIso();
-    const taskId = createId('task');
-    await this.db.transaction(async (tx) => {
-      await tx.insert(learningTasks).values({
-        id: taskId,
-        goalId: anchor.goalId,
-        guideId: source.guideId,
-        roadmapStageId: source.roadmapStageId,
-        title: branchSummary.slice(0, 60),
-        objective: branchSummary.slice(0, 200),
-        scope: '从对话显式提升',
-        estimatedMinMinutes: 15,
-        estimatedTargetMinutes: 30,
-        estimatedMaxMinutes: 45,
-        deliverable: branchSummary.slice(0, 200),
-        doneWhenJson: JSON.stringify(['用户显式确认达到分支目标']),
-        quickHint: '',
-        evaluationMode: 'local',
-        difficulty: source.difficulty,
-        taskMode: 'learning',
-        status: 'planned',
-        closureKind: null,
-        nextStartPoint: branchSummary.slice(0, 100),
-        position: max + 1,
-        createdAt: now,
-        updatedAt: now
-      });
-      await tx.insert(learningActions).values({
-        id: createId('action'),
-        taskId,
-        title: '执行提升后的学习任务',
-        instruction: branchSummary.slice(0, 300),
-        checkpoint: '确认分支问题已转化为可验证结果',
-        requirement: 'optional',
-        status: 'planned',
-        progressNote: null,
-        completedAt: null,
-        position: 0
-      });
-    });
-    return taskId;
-  }
 
   async createTaskFromTemporary(
     threadId: string,
@@ -202,25 +111,11 @@ export class QuestionBranchPersistence {
     return { taskId, guideId };
   }
 
-  async extractKnowledgeFromBranch(summary: string, sourceId: string, goalId: string): Promise<void> {
-    await this.recordKnowledgeItems({
-      goalId,
-      items: [{
-        key: `branch_${sourceId.slice(0, 8)}`,
-        summary: summary.slice(0, 100),
-        sourceType: 'insight',
-        sourceId
-      }]
-    });
-  }
-
   async openQuestion(
     actionId: string | null,
     question: string,
     opts?: {
       goalId?: string;
-      kind?: 'question' | 'debug' | 'practice';
-      metadata?: Record<string, unknown>;
       standalone?: boolean;
     }
   ): Promise<QuestionThread> {
@@ -233,10 +128,10 @@ export class QuestionBranchPersistence {
       await tx.insert(conversationThreads).values({
         id: threadId,
         status: 'open',
-        kind: opts?.kind ?? 'question',
+        kind: 'question',
         question: clean,
         resolutionSummary: null,
-        metadata: opts?.metadata ? JSON.stringify(opts.metadata) : null,
+        metadata: opts?.standalone ? JSON.stringify({ standalone: true }) : null,
         isPartial: false,
         createdAt: now,
         updatedAt: now,

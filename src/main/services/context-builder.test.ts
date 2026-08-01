@@ -9,7 +9,6 @@ function createTestSnapshot(overrides: Partial<LearningRuntimeSnapshot> = {}): L
     dailyGuideTask: null,
     dailyGuideAction: null,
     roadmapStage: null,
-    stageConflict: null,
     questionThread: null,
     questionMessages: [],
     latestSubmission: null,
@@ -24,16 +23,14 @@ function createTestSnapshot(overrides: Partial<LearningRuntimeSnapshot> = {}): L
 
 function makeTask(overrides: Partial<{ title: string; evaluationMode: string; status: string }> = {}) {
   return {
-    id: 't1', guideId: 'g1', roadmapStageId: null, legacyPlanBlockId: null,
+    id: 't1', guideId: 'g1', roadmapStageId: null,
     title: overrides.title ?? 'Task', objective: '', scope: '',
     estimatedMinutes: { min: 30, target: 45, max: 60 }, actions: [],
     deliverable: '', doneWhen: [], quickHint: '',
     evaluationMode: (overrides.evaluationMode ?? 'ai') as 'ai' | 'local',
-    submissionPolicy: 'once_after_task' as const, carryoverAllowed: true,
     closureKind: null, closureReason: null,
-    status: (overrides.status ?? 'active') as 'active' | 'planned' | 'done' | 'skipped' | 'deferred',
-    progressPercent: 0, completedActions: [], remainingActions: [],
-    currentAction: null, nextStartPoint: null, totalElapsedMinutes: 0, position: 0,
+    status: (overrides.status ?? 'active') as 'active' | 'planned' | 'deferred' | 'closed',
+    nextStartPoint: null, position: 0,
     createdAt: '', updatedAt: ''
   };
 }
@@ -56,7 +53,7 @@ describe('ContextBuilder arbitration', () => {
     const store = createMockStore(snapshot);
     store.listFactsForGoal.mockResolvedValue([
       { id: 'f1', goalId: 'g1', scope: 'goal', key: 'os', value: 'Windows', source: 'confirmed', confidence: 1, createdAt: '', updatedAt: '' },
-      { id: 'f2', goalId: 'g1', scope: 'goal', key: 'provider', value: 'DeepSeek', source: 'inferred', confidence: 0.8, createdAt: '', updatedAt: '' }
+      { id: 'f2', goalId: 'g1', scope: 'goal', key: 'provider', value: 'OpenAI-compatible', source: 'inferred', confidence: 0.8, createdAt: '', updatedAt: '' }
     ]);
 
     const ctx = await new ContextBuilder(store as never).build('teach_step');

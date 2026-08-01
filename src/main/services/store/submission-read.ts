@@ -2,7 +2,6 @@ import { and, desc, eq } from 'drizzle-orm';
 import type { LearningSubmission } from '../../../shared/types';
 import type { Database } from '../../db/client';
 import {
-  aiReviews,
   learningEvaluations,
   learningSubmissions
 } from '../../db/schema';
@@ -28,23 +27,9 @@ export async function readSubmission(
       eq(learningEvaluations.submissionId, submissionId)
     )).orderBy(desc(learningEvaluations.createdAt)).limit(1))[0];
   if (evaluation) {
-    mapped.evaluationStatus = 'completed';
     mapped.applicationStatus = evaluation.applicationStatus;
     mapped.applicationError = evaluation.applicationError;
     mapped.appliedAt = evaluation.appliedAt;
-    return mapped;
-  }
-
-  const latestRun = (await db.select({ status: aiReviews.status }).from(aiReviews)
-    .where(and(
-      eq(aiReviews.recordType, 'run'),
-      eq(aiReviews.conversationScope, 'submission'),
-      eq(aiReviews.conversationRefId, submissionId)
-    )).orderBy(desc(aiReviews.createdAt)).limit(1))[0];
-  if (latestRun) {
-    mapped.evaluationStatus = (
-      latestRun.status === 'running' || latestRun.status === 'waiting_user'
-    ) ? 'evaluating' : 'failed';
   }
   return mapped;
 }

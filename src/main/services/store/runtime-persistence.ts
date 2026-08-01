@@ -11,6 +11,7 @@ import type {
   PlanAdjustmentProposal,
   QuestionMessage,
   QuestionThread,
+  ResumableGuideSummary,
   RoadmapStage,
   StoredNextStepDecision,
   StudySession,
@@ -20,6 +21,7 @@ import type { Database } from '../../db/client';
 import {
   conversationMessages,
   conversationThreads,
+  currentLearningContext,
   focusSessions,
   goals,
   learningActions,
@@ -27,6 +29,7 @@ import {
   learningGuides,
   learningSubmissions,
   learningTasks,
+  nearTermPlanItems,
   roadmapStages
 } from '../../db/schema';
 import { createId, nowIso } from '../id';
@@ -44,7 +47,10 @@ import {
   mapSession,
   mapSubmission
 } from './serialization';
-import type { CurrentLearningContextPersistence } from './current-learning-context';
+import type {
+  CurrentLearningContextPersistence,
+  DatabaseTransaction
+} from './current-learning-context';
 import { readLatestSubmissionForTask, readSubmission } from './submission-read';
 
 export class RuntimePersistence {
@@ -63,17 +69,6 @@ export class RuntimePersistence {
     const resolved = await this.currentLearningContext.resolve();
     this.cachedActiveStepId = resolved.actionId;
     return resolved.state;
-  }
-
-  async updateState(
-    patch: Partial<Omit<LearningRuntimeState, 'id' | 'updatedAt'>>
-  ): Promise<LearningRuntimeState> {
-    await this.currentLearningContext.write({
-      ...(patch.activeGoalId !== undefined ? { goalId: patch.activeGoalId } : {}),
-      ...(patch.activeDailyTaskId !== undefined ? { taskId: patch.activeDailyTaskId } : {}),
-      ...(patch.activeStepId !== undefined ? { actionId: patch.activeStepId } : {})
-    });
-    return this.getState();
   }
 
   async startSession(taskId: string): Promise<StudySession> {
@@ -111,6 +106,7 @@ export class RuntimePersistence {
         .where(and(eq(learningTasks.id, taskId), ne(learningTasks.status, 'closed')));
       return row;
     });
+    await this.currentLearningContext.resolve();
     return mapSession(result);
   }
 
@@ -128,6 +124,7 @@ export class RuntimePersistence {
         durationSeconds
       }).where(eq(focusSessions.id, sessionId)).returning();
     });
+    await this.currentLearningContext.resolve();
     return mapSession(rows[0]);
   }
 
@@ -147,20 +144,13 @@ export class RuntimePersistence {
         notes: notes?.trim() || session.notes
       }).where(eq(focusSessions.id, sessionId)).returning();
     });
+    await this.currentLearningContext.resolve();
     return mapSession(rows[0]);
   }
 
   async listSessions(): Promise<StudySession[]> {
     const rows = await this.db.select().from(focusSessions).orderBy(desc(focusSessions.startedAt));
     return rows.map(mapSession);
-  }
-
-  async getAccumulatedSeconds(taskId: string, excludeSessionId?: string): Promise<number> {
-    const filters = [eq(focusSessions.taskId, taskId)];
-    if (excludeSessionId) filters.push(ne(focusSessions.id, excludeSessionId));
-    const rows = await this.db.select({ total: sql<number>`COALESCE(SUM(${focusSessions.durationSeconds}), 0)` })
-      .from(focusSessions).where(and(...filters));
-    return Number(rows[0]?.total ?? 0);
   }
 
   async getSnapshot(): Promise<LearningRuntimeSnapshot> {
@@ -198,7 +188,6 @@ export class RuntimePersistence {
       dailyGuideTask,
       dailyGuideAction,
       roadmapStage,
-      stageConflict: null,
       questionThread,
       questionMessages,
       latestSubmission,
@@ -213,12 +202,12 @@ export class RuntimePersistence {
     return this.getSnapshot();
   }
 
-  async completeCurrentAction(): Promise<LearningRuntimeSnapshot> {
-    return this.finishCurrentAction('done');
+  async completeCurrentAction(actionId: string): Promise<LearningRuntimeSnapshot> {
+    return this.finishCurrentAction(actionId, 'done');
   }
 
-  async skipCurrentAction(): Promise<LearningRuntimeSnapshot> {
-    return this.finishCurrentAction('skipped');
+  async skipCurrentAction(actionId: string): Promise<LearningRuntimeSnapshot> {
+    return this.finishCurrentAction(actionId, 'skipped');
   }
 
   async insertGuideSupplement(params: {
@@ -309,31 +298,249 @@ export class RuntimePersistence {
     closureReason?: string,
     nextStartPoint?: string
   ): Promise<void> {
-    await this.currentLearningContext.closeTask(
+    await this.db.transaction((tx) => this.closeTaskInTransaction(
+      tx,
       taskId,
       closureKind,
       closureReason,
       nextStartPoint
-    );
+    ));
   }
 
-  private async finishCurrentAction(status: 'done' | 'skipped'): Promise<LearningRuntimeSnapshot> {
+  async listResumableGuides(): Promise<ResumableGuideSummary[]> {
+    const guideRows = await this.db.select().from(learningGuides)
+      .where(eq(learningGuides.status, 'archived'))
+      .orderBy(desc(learningGuides.createdAt));
+    const result: ResumableGuideSummary[] = [];
+    for (const guide of guideRows) {
+      const goal = (await this.db.select().from(goals)
+        .where(and(eq(goals.id, guide.goalId), eq(goals.status, 'archived'))).limit(1))[0];
+      if (!goal) continue;
+      const tasks = await this.db.select().from(learningTasks)
+        .where(eq(learningTasks.guideId, guide.id)).orderBy(asc(learningTasks.position));
+      const openTasks = tasks.filter((task) => task.status !== 'closed');
+      if (openTasks.length === 0) continue;
+      result.push({
+        guideId: guide.id,
+        goalId: goal.id,
+        goalTitle: goal.title,
+        taskTitle: openTasks[0].title,
+        completedTaskCount: tasks.filter((task) => task.closureKind === 'completed').length,
+        totalTaskCount: tasks.length
+      });
+    }
+    return result;
+  }
+
+  async restoreArchivedGuide(guideId: string): Promise<LearningRuntimeSnapshot> {
+    await this.db.transaction(async (tx) => {
+      const unfinishedSessions = await tx.select({ id: focusSessions.id }).from(focusSessions)
+        .where(inArray(focusSessions.status, ['active', 'paused']))
+        .limit(1);
+      if (unfinishedSessions.length > 0) {
+        throw new Error('当前仍有未结束的 Session，请先结束后再恢复历史任务。');
+      }
+
+      const targetRows = await tx.select({ guide: learningGuides, goal: goals })
+        .from(learningGuides)
+        .innerJoin(goals, eq(goals.id, learningGuides.goalId))
+        .where(eq(learningGuides.id, guideId))
+        .limit(1);
+      const target = targetRows[0];
+      if (!target) throw new Error(`Learning guide not found: ${guideId}`);
+      if (target.goal.status === 'active' && target.guide.status === 'active') {
+        const context = (await tx.select({ goalId: currentLearningContext.goalId, guideId: currentLearningContext.guideId })
+          .from(currentLearningContext)
+          .where(eq(currentLearningContext.id, 'default')).limit(1))[0];
+        if (context?.goalId === target.goal.id && context.guideId === guideId) return;
+      }
+      if (target.goal.status !== 'archived' || target.guide.status !== 'archived') {
+        throw new Error('只能恢复已归档且仍有未完成 Task 的学习单元。');
+      }
+
+      const tasks = await tx.select().from(learningTasks)
+        .where(eq(learningTasks.guideId, guideId)).orderBy(asc(learningTasks.position));
+      const nextTask = tasks.find((task) => task.status !== 'closed');
+      if (!nextTask) throw new Error('该学习单元已经全部收口，只能查看历史记录。');
+      const nextAction = (await tx.select({ id: learningActions.id }).from(learningActions)
+        .where(and(eq(learningActions.taskId, nextTask.id), eq(learningActions.status, 'planned')))
+        .orderBy(asc(learningActions.position)).limit(1))[0] ?? null;
+
+      const now = nowIso();
+      const activeGoals = await tx.select({ id: goals.id }).from(goals)
+        .where(eq(goals.status, 'active'));
+      const activeGoalIds = activeGoals.map((goal) => goal.id);
+      if (activeGoalIds.length > 0) {
+        await tx.update(learningGuides).set({ status: 'archived' })
+          .where(inArray(learningGuides.goalId, activeGoalIds));
+        await tx.update(goals).set({ status: 'archived', updatedAt: now })
+          .where(inArray(goals.id, activeGoalIds));
+      }
+      await tx.update(goals).set({ status: 'active', updatedAt: now })
+        .where(eq(goals.id, target.goal.id));
+      await tx.update(learningGuides).set({ status: 'active' })
+        .where(eq(learningGuides.id, guideId));
+      await this.currentLearningContext.writeInTransaction(tx, {
+        goalId: target.goal.id,
+        guideId,
+        taskId: nextTask.id,
+        actionId: nextAction?.id ?? null
+      });
+    });
+    return this.getSnapshot();
+  }
+
+  async archiveGuide(guideId: string): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      const guide = (await tx.select().from(learningGuides)
+        .where(eq(learningGuides.id, guideId)).limit(1))[0];
+      if (!guide) throw new Error(`Learning guide not found: ${guideId}`);
+      if (guide.status !== 'archived') {
+        await tx.update(learningGuides).set({ status: 'archived' })
+          .where(eq(learningGuides.id, guideId));
+        if (guide.nearTermPlanItemId) {
+          await tx.update(nearTermPlanItems).set({ status: 'skipped' })
+            .where(eq(nearTermPlanItems.id, guide.nearTermPlanItemId));
+        }
+      }
+      await this.currentLearningContext.clearIfCurrentGuideInTransaction(tx, guideId);
+    });
+  }
+
+  async closeTaskInTransaction(
+    tx: DatabaseTransaction,
+    taskId: string,
+    closureKind: 'completed' | 'partial' | 'abandoned' | 'replaced',
+    closureReason?: string,
+    nextStartPoint?: string
+  ): Promise<void> {
+    const now = nowIso();
+    const cleanReason = closureReason?.trim() || null;
+    const cleanNextStartPoint = nextStartPoint?.trim() || null;
+    const task = (await tx.select().from(learningTasks)
+      .where(eq(learningTasks.id, taskId)).limit(1))[0];
+    if (!task) throw new Error(`Learning task not found: ${taskId}`);
+
+    if (task.status === 'closed') {
+      if (
+        task.closureKind !== closureKind
+        || task.closureReason !== cleanReason
+        || task.nextStartPoint !== cleanNextStartPoint
+      ) {
+        throw new Error('Task 已经以其他结果收口，不能覆盖原收口事实。');
+      }
+    } else {
+      await tx.update(learningTasks).set({
+        status: 'closed',
+        closureKind,
+        closureReason: cleanReason,
+        nextStartPoint: cleanNextStartPoint,
+        updatedAt: now
+      }).where(eq(learningTasks.id, taskId));
+    }
+
+    const next = task.guideId
+      ? (await tx.select().from(learningTasks).where(and(
+          eq(learningTasks.guideId, task.guideId),
+          inArray(learningTasks.status, ['planned', 'active', 'deferred'])
+        )).orderBy(asc(learningTasks.position)).limit(1))[0] ?? null
+      : null;
+    const guideHasOpenTasks = task.guideId
+      ? (await tx.select({ id: learningTasks.id }).from(learningTasks).where(and(
+          eq(learningTasks.guideId, task.guideId),
+          inArray(learningTasks.status, ['planned', 'active', 'deferred'])
+        )).limit(1)).length > 0
+      : true;
+    if (task.guideId && !guideHasOpenTasks) {
+      const guide = (await tx.select({ nearTermPlanItemId: learningGuides.nearTermPlanItemId })
+        .from(learningGuides).where(eq(learningGuides.id, task.guideId)).limit(1))[0];
+      await tx.update(learningGuides).set({ status: 'closed' })
+        .where(eq(learningGuides.id, task.guideId));
+      if (guide?.nearTermPlanItemId) {
+        await tx.update(nearTermPlanItems).set({ status: 'completed' })
+          .where(eq(nearTermPlanItems.id, guide.nearTermPlanItemId));
+        const completedItem = (await tx.select({
+          goalId: nearTermPlanItems.goalId,
+          roadmapStageId: nearTermPlanItems.roadmapStageId
+        }).from(nearTermPlanItems)
+          .where(eq(nearTermPlanItems.id, guide.nearTermPlanItemId)).limit(1))[0];
+        if (completedItem?.roadmapStageId) {
+          const stageItems = await tx.select({
+            id: nearTermPlanItems.id,
+            status: nearTermPlanItems.status
+          }).from(nearTermPlanItems).where(and(
+            eq(nearTermPlanItems.goalId, completedItem.goalId),
+            eq(nearTermPlanItems.roadmapStageId, completedItem.roadmapStageId)
+          ));
+          if (
+            stageItems.length > 0
+            && stageItems.every((item) => item.status === 'completed' || item.status === 'skipped')
+          ) {
+            const stageGuides = await tx.select({ status: learningGuides.status })
+              .from(learningGuides)
+              .where(inArray(learningGuides.nearTermPlanItemId, stageItems.map((item) => item.id)));
+            if (
+              stageGuides.length > 0
+              && stageGuides.every((item) => item.status === 'closed' || item.status === 'archived')
+            ) {
+              await tx.update(roadmapStages).set({
+                status: 'ready_for_review',
+                updatedAt: now
+              }).where(and(
+                eq(roadmapStages.id, completedItem.roadmapStageId),
+                eq(roadmapStages.status, 'active')
+              ));
+            }
+          }
+        }
+      }
+    }
+
+    const contextChanged = await this.currentLearningContext.writeIfCurrentTaskInTransaction(
+      tx,
+      taskId,
+      {
+        guideId: task.guideId && !guideHasOpenTasks ? null : task.guideId,
+        taskId: next?.id ?? null,
+        actionId: null
+      }
+    );
+    if (!contextChanged && task.status !== 'closed') {
+      throw new Error('当前学习位置已经变化，Task 未收口。');
+    }
+  }
+
+  private async finishCurrentAction(
+    actionId: string,
+    status: 'done' | 'skipped'
+  ): Promise<LearningRuntimeSnapshot> {
     const resolved = await this.currentLearningContext.resolve();
-    if (!resolved.taskId || !resolved.actionId) throw new Error('当前没有可处理的 Action。');
+    if (!resolved.taskId) throw new Error('当前没有可处理的 Action。');
     const now = nowIso();
     await this.db.transaction(async (tx) => {
+      const action = (await tx.select().from(learningActions).where(and(
+        eq(learningActions.id, actionId),
+        eq(learningActions.taskId, resolved.taskId!)
+      )).limit(1))[0];
+      if (!action) throw new Error('Action 不存在或不属于当前 Task。');
+      if (action.status !== 'planned') return;
+      if (resolved.actionId !== actionId) {
+        throw new Error('当前 Action 已经变化，请刷新后重试。');
+      }
       await tx.update(learningActions).set({
         status,
         completedAt: now
       }).where(and(
-        eq(learningActions.id, resolved.actionId!),
+        eq(learningActions.id, actionId),
         eq(learningActions.taskId, resolved.taskId!)
       ));
+      const next = (await tx.select({ id: learningActions.id }).from(learningActions)
+        .where(and(eq(learningActions.taskId, resolved.taskId!), eq(learningActions.status, 'planned')))
+        .orderBy(asc(learningActions.position)).limit(1))[0];
+      await this.currentLearningContext.writeInTransaction(tx, {
+        actionId: next?.id ?? null
+      });
     });
-    const next = (await this.db.select({ id: learningActions.id }).from(learningActions)
-      .where(and(eq(learningActions.taskId, resolved.taskId), eq(learningActions.status, 'planned')))
-      .orderBy(asc(learningActions.position)).limit(1))[0];
-    await this.currentLearningContext.write({ actionId: next?.id ?? null });
     return this.getSnapshot();
   }
 
@@ -358,7 +565,7 @@ export class RuntimePersistence {
         .where(eq(learningActions.taskId, task.id)).orderBy(asc(learningActions.position));
       tasks.push(mapDailyGuideTask(task, actions.map(mapDailyGuideAction)));
     }
-    return mapDailyGuide(row, [], tasks);
+    return mapDailyGuide(row, tasks);
   }
 
   private async getTask(id: string): Promise<DailyGuideTask | null> {

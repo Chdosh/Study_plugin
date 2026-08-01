@@ -1,5 +1,5 @@
 import { desc, eq, sql } from 'drizzle-orm';
-import type { LearningRuntimeSnapshot } from '../../../shared/types';
+import type { LearningRuntimeSnapshot, PlanAdjustmentProposal } from '../../../shared/types';
 import type { Database } from '../../db/client';
 import {
   learningEvaluations,
@@ -7,6 +7,7 @@ import {
   learningTasks
 } from '../../db/schema';
 import { nowIso } from '../id';
+import type { PlanChangePersistence } from './plan-change-persistence';
 import type { RuntimePersistence } from './runtime-persistence';
 
 export type RecommendationDecision = 'accepted' | 'declined' | 'deferred';
@@ -14,10 +15,11 @@ export type RecommendationDecision = 'accepted' | 'declined' | 'deferred';
 export class RecommendationCommandGateway {
   constructor(
     private readonly db: Database,
-    private readonly runtime: RuntimePersistence
+    private readonly runtime: RuntimePersistence,
+    private readonly planChanges: PlanChangePersistence
   ) {}
 
-  async decide(
+  async decideSubmissionRecommendation(
     evaluationId: string,
     decision: RecommendationDecision,
     reason?: string
@@ -82,11 +84,13 @@ export class RecommendationCommandGateway {
       if (latestSubmission?.id !== submission.id) {
         throw new Error('该 Recommendation 属于较早的成果尝试，不能作用到当前版本。');
       }
-      await this.runtime.closeTask(
-        task.id,
-        'completed',
-        reason?.trim() || evaluation.feedback
-      );
+      if (task.status !== 'closed') {
+        await this.runtime.closeTask(
+          task.id,
+          'completed',
+          reason?.trim() || evaluation.feedback
+        );
+      }
       await this.db.update(learningEvaluations).set({
         applicationStatus: 'applied',
         appliedAt: nowIso()
@@ -100,12 +104,26 @@ export class RecommendationCommandGateway {
     }
     return this.runtime.getSnapshot();
   }
+
+  async decideGoalReview(
+    proposalId: string,
+    status: 'accepted' | 'rejected'
+  ): Promise<PlanAdjustmentProposal> {
+    if (status === 'rejected') {
+      return this.planChanges.decidePlanAdjustment(proposalId, 'rejected');
+    }
+    await this.planChanges.decidePlanAdjustment(proposalId, 'accepted');
+    return this.planChanges.applyAcceptedProposal(proposalId);
+  }
 }
 
-function parseRecommendation(raw: string): { action: string } {
+function parseRecommendation(raw: string): { action: string; adjustments?: unknown[] } {
   const value = JSON.parse(raw) as Record<string, unknown>;
   if (typeof value.action !== 'string' || !value.action.trim()) {
     throw new Error('Recommendation 不符合 V2 Command Schema。');
   }
-  return { action: value.action };
+  return {
+    action: value.action,
+    adjustments: Array.isArray(value.adjustments) ? value.adjustments : undefined
+  };
 }

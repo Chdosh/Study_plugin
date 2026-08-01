@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { PromptProfile, ReviewResult } from '../../../shared/types';
 import type { ReviewAgentOutput } from '../../../shared/schemas';
 import type {
@@ -17,6 +17,15 @@ import {
   promptVersions
 } from '../../db/schema';
 import { createId, nowIso } from '../id';
+
+export interface AiProviderDiagnostic {
+  status: 'completed' | 'failed';
+  model: string;
+  errorCategory: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
 
 export class OpsPersistence {
   private readonly generationLocks = new Set<string>();
@@ -86,8 +95,6 @@ export class OpsPersistence {
       });
     }
 
-    await this.putSettingIfMissing('deepseekBaseUrl', 'https://api.deepseek.com');
-    await this.putSettingIfMissing('deepseekModel', 'deepseek-chat');
     await this.putSettingIfMissing('autoLaunch', 'false');
     await this.putSettingIfMissing('defaultBlockMinutes', '10');
     await this.putSettingIfMissing(
@@ -115,6 +122,35 @@ export class OpsPersistence {
         target: appSettings.key,
         set: { value, updatedAt: now }
       });
+  }
+
+  async getLatestAiProviderDiagnostic(params: {
+    goalId?: string;
+    kinds?: string[];
+  } = {}): Promise<AiProviderDiagnostic | null> {
+    const conditions = [
+      ne(aiReviews.provider, 'local'),
+      eq(aiReviews.recordType, 'run'),
+      inArray(aiReviews.status, ['completed', 'failed'])
+    ];
+    if (params.goalId) conditions.push(eq(aiReviews.goalId, params.goalId));
+    if (params.kinds?.length) conditions.push(inArray(aiReviews.kind, params.kinds));
+    const row = (await this.db.select({
+      status: aiReviews.status,
+      model: aiReviews.model,
+      errorCategory: aiReviews.errorCategory,
+      errorMessage: aiReviews.errorMessage,
+      createdAt: aiReviews.createdAt,
+      completedAt: aiReviews.completedAt
+    }).from(aiReviews)
+      .where(and(...conditions))
+      .orderBy(desc(aiReviews.createdAt))
+      .limit(1))[0];
+    if (!row || (row.status !== 'completed' && row.status !== 'failed')) return null;
+    return {
+      ...row,
+      status: row.status
+    };
   }
 
   async getTokenCostStats(opts: { fromDate?: string; toDate?: string }): Promise<{
@@ -185,7 +221,7 @@ export class OpsPersistence {
     this.generationLocks.delete(lockKey);
   }
 
-  async listPromptProfiles(): Promise<PromptProfile[]> {
+  private async listPromptProfiles(): Promise<PromptProfile[]> {
     const profiles = await this.db.select().from(promptProfiles).orderBy(asc(promptProfiles.name));
     const results: PromptProfile[] = [];
     for (const profile of profiles) {
@@ -216,30 +252,6 @@ export class OpsPersistence {
       : profiles.find((profile) => profile.key === 'foundation') ?? profiles[0];
     if (!selected) throw new Error('No prompt profiles exist.');
     return selected;
-  }
-
-  async updatePrompt(profileId: string, content: string): Promise<PromptProfile> {
-    const versions = await this.db
-      .select()
-      .from(promptVersions)
-      .where(eq(promptVersions.profileId, profileId))
-      .orderBy(desc(promptVersions.version))
-      .limit(1);
-    const nextVersion = (versions[0]?.version ?? 0) + 1;
-    const versionId = createId('prompt_version');
-    const now = nowIso();
-    await this.db.insert(promptVersions).values({
-      id: versionId,
-      profileId,
-      version: nextVersion,
-      content,
-      createdAt: now
-    });
-    await this.db
-      .update(promptProfiles)
-      .set({ activeVersionId: versionId, updatedAt: now })
-      .where(eq(promptProfiles.id, profileId));
-    return this.getPromptProfile(profileId);
   }
 
   async saveAiReview(params: SaveAiReviewInput): Promise<string> {

@@ -25,7 +25,7 @@ import {
 export class PlanChangePersistence {
   constructor(private readonly db: Database) {}
 
-  async applyReviewPlanAdjustments(params: {
+  private async applyReviewPlanAdjustments(params: {
     goalId: string;
     adjustments: Array<{
       itemIndex: number;
@@ -149,8 +149,63 @@ export class PlanChangePersistence {
     status: 'accepted' | 'rejected'
   ): Promise<PlanAdjustmentProposal> {
     return status === 'accepted'
-      ? this.confirmProposal(proposalId)
+      ? this.recordAcceptedDecision(proposalId)
       : this.rejectProposal(proposalId);
+  }
+
+  async recordAcceptedDecision(proposalId: string): Promise<PlanAdjustmentProposal> {
+    const row = (await this.db.select().from(learningEvaluations).where(and(
+      eq(learningEvaluations.id, proposalId),
+      eq(learningEvaluations.kind, 'goal_review')
+    )).limit(1))[0];
+    if (!row) throw new Error(`Goal review recommendation not found: ${proposalId}`);
+    if (row.recommendationDecision === 'accepted' && row.applicationStatus === 'applied') {
+      return mapPlanAdjustmentProposal(row);
+    }
+    if (row.recommendationDecision === 'declined') {
+      throw new Error('已拒绝的建议不能再次应用。');
+    }
+    if (!row.goalId || !row.recommendationJson) throw new Error('建议缺少可执行的 Goal 或 Payload。');
+    const updated = (await this.db.update(learningEvaluations).set({
+      recommendationDecision: 'accepted',
+      applicationStatus: 'pending',
+      applicationError: null
+    }).where(eq(learningEvaluations.id, proposalId)).returning())[0];
+    return mapPlanAdjustmentProposal(updated);
+  }
+
+  async applyAcceptedProposal(proposalId: string): Promise<PlanAdjustmentProposal> {
+    const row = (await this.db.select().from(learningEvaluations).where(and(
+      eq(learningEvaluations.id, proposalId),
+      eq(learningEvaluations.kind, 'goal_review')
+    )).limit(1))[0];
+    if (!row) throw new Error(`Goal review recommendation not found: ${proposalId}`);
+    if (row.recommendationDecision !== 'accepted') {
+      throw new Error('建议尚未被接受，不能应用。');
+    }
+    if (row.applicationStatus === 'applied') {
+      return mapPlanAdjustmentProposal(row);
+    }
+    if (!row.goalId || !row.recommendationJson) throw new Error('建议缺少可执行的 Goal 或 Payload。');
+    const payload = parseRecommendation(row.recommendationJson);
+    const now = nowIso();
+    try {
+      await this.applyReviewPlanAdjustments({
+        goalId: row.goalId,
+        adjustments: payload.adjustments.map((item) => ({ ...item, reason: row.feedback }))
+      });
+      const updated = (await this.db.update(learningEvaluations).set({
+        applicationStatus: 'applied',
+        appliedAt: now
+      }).where(eq(learningEvaluations.id, proposalId)).returning())[0];
+      return mapPlanAdjustmentProposal(updated);
+    } catch (error) {
+      await this.db.update(learningEvaluations).set({
+        applicationStatus: 'failed',
+        applicationError: error instanceof Error ? error.message : 'plan_application_failed'
+      }).where(eq(learningEvaluations.id, proposalId));
+      throw error;
+    }
   }
 
   async getPlanVersionsForGoal(goalId: string): Promise<PlanVersionEntry[]> {
@@ -196,47 +251,6 @@ export class PlanChangePersistence {
     };
     await this.db.insert(learningEvaluations).values(row);
     return mapPlanAdjustmentProposal(row);
-  }
-
-  async confirmProposal(proposalId: string): Promise<PlanAdjustmentProposal> {
-    const row = (await this.db.select().from(learningEvaluations).where(and(
-      eq(learningEvaluations.id, proposalId),
-      eq(learningEvaluations.kind, 'goal_review')
-    )).limit(1))[0];
-    if (!row) throw new Error(`Goal review recommendation not found: ${proposalId}`);
-    if (row.recommendationDecision === 'accepted' && row.applicationStatus === 'applied') {
-      return mapPlanAdjustmentProposal(row);
-    }
-    if (row.recommendationDecision === 'declined') {
-      throw new Error('已拒绝的建议不能再次应用。');
-    }
-    if (!row.goalId || !row.recommendationJson) throw new Error('建议缺少可执行的 Goal 或 Payload。');
-    const payload = parseRecommendation(row.recommendationJson);
-    const now = nowIso();
-    await this.db.update(learningEvaluations).set({
-      recommendationDecision: 'accepted',
-      applicationStatus: 'pending',
-      applicationError: null
-    }).where(eq(learningEvaluations.id, proposalId));
-    try {
-      await this.applyReviewPlanAdjustments({
-        goalId: row.goalId,
-        adjustments: payload.adjustments.map((item) => ({ ...item, reason: row.feedback }))
-      });
-      await this.db.update(learningEvaluations).set({
-        applicationStatus: 'applied',
-        appliedAt: now
-      }).where(eq(learningEvaluations.id, proposalId));
-    } catch (error) {
-      await this.db.update(learningEvaluations).set({
-        applicationStatus: 'failed',
-        applicationError: error instanceof Error ? error.message : 'plan_application_failed'
-      }).where(eq(learningEvaluations.id, proposalId));
-      throw error;
-    }
-    const updated = (await this.db.select().from(learningEvaluations)
-      .where(eq(learningEvaluations.id, proposalId)).limit(1))[0];
-    return mapPlanAdjustmentProposal(updated);
   }
 
   async rejectProposal(proposalId: string): Promise<PlanAdjustmentProposal> {

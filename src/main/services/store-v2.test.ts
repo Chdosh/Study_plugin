@@ -63,6 +63,48 @@ describe('StudyStore V2 business ownership', () => {
     expect(sessionAfter.status).toBe('ended');
   });
 
+  it('keeps Task closure idempotent without allowing a different result to overwrite it', async () => {
+    const { guide } = await createLearningUnit(store);
+    await store.confirmLearningGuide(guide.id);
+    const first = guide.tasks[0];
+    const second = guide.tasks[1];
+
+    await store.closeTask(first.id, 'partial', '本轮先完成核心部分', '从练习继续');
+    await expect(
+      store.closeTask(first.id, 'partial', '本轮先完成核心部分', '从练习继续')
+    ).resolves.toBeUndefined();
+    await expect(
+      store.closeTask(first.id, 'completed', '后来改变了判断')
+    ).rejects.toThrow('不能覆盖');
+
+    const firstAfter = (await db.select().from(learningTasks)
+      .where(eq(learningTasks.id, first.id)))[0];
+    const runtime = await store.getLearningRuntimeSnapshot();
+    expect(firstAfter.closureKind).toBe('partial');
+    expect(firstAfter.closureReason).toBe('本轮先完成核心部分');
+    expect(runtime.dailyGuideTask?.id).toBe(second.id);
+  });
+
+  it('marks the Roadmap Stage ready for review when its final Guide is closed', async () => {
+    const { guide, roadmap } = await createLearningUnit(store);
+    await store.confirmLearningGuide(guide.id);
+
+    for (const task of guide.tasks) {
+      await store.closeTask(task.id, 'completed');
+    }
+
+    const storedGuide = (await db.select().from(learningGuides)
+      .where(eq(learningGuides.id, guide.id)))[0];
+    const storedPlanItem = (await db.select().from(nearTermPlanItems)
+      .where(eq(nearTermPlanItems.id, guide.nearTermPlanItemId!)))[0];
+    const storedStage = (await db.select().from(roadmapStages)
+      .where(eq(roadmapStages.id, roadmap[0].id)))[0];
+
+    expect(storedGuide.status).toBe('closed');
+    expect(storedPlanItem.status).toBe('completed');
+    expect(storedStage.status).toBe('ready_for_review');
+  });
+
   it('enforces one unfinished Focus Session globally', async () => {
     const { guide } = await createLearningUnit(store);
     await store.confirmLearningGuide(guide.id);
@@ -90,24 +132,28 @@ describe('StudyStore V2 business ownership', () => {
     const task = guide.tasks[0];
     const action = task.actions[0];
     const session = await store.startSession(task.id);
-    const submission = await store.createSubmission(action.id, session.id, '这是我的显式成果');
-    expect(submission.stepId).toBe(task.id);
-    expect(submission.dailyGuideActionId).toBeNull();
+    const submission = await store.createSubmission({
+      taskId: task.id,
+      stepId: action.id,
+      sessionId: session.id,
+      content: '这是我的显式成果'
+    });
+    expect(submission.stepId).toBe(action.id);
+    expect(submission.dailyGuideActionId).toBe(action.id);
     expect(submission.applicationStatus).toBeNull();
 
     const result = await store.saveEvaluationAndDecision({
       submission,
       evaluationOutput: {
         result: 'passed',
-        mastery: 100,
         evidence: ['能说明基本概念'],
         correctParts: ['概念正确'],
         misconceptions: ['边界条件不清楚'],
         missingRequirements: ['补充失败路径'],
         feedback: '需要补充失败路径',
-        recommendedAction: 'complete_task',
-        decision: 'advance'
+        recommendedAction: 'complete_task'
       },
+      direction: 'advance',
       decisionOutput: {
         decision: 'complete_task',
         reason: '成果已经达到当前 Task 目标',
@@ -125,20 +171,8 @@ describe('StudyStore V2 business ownership', () => {
     expect(taskAfter.status).toBe('active');
     expect(taskAfter.closureKind).toBeNull();
     expect(evaluation.selfNote).toBe('用户尚未覆盖失败路径');
-    expect(evaluation.recommendationDecision).toBe('pending');
+    expect(evaluation.recommendationDecision).toBeNull();
     expect(evaluation.applicationStatus).toBeNull();
-
-    await store.decideEvaluationRecommendation(result.evaluation.id, 'accepted', '成果已达到完成标准');
-    const taskAfterDecision = (await db.select().from(learningTasks)
-      .where(eq(learningTasks.id, task.id)))[0];
-    const sessionAfterDecision = (await db.select().from(focusSessions)
-      .where(eq(focusSessions.id, session.id)))[0];
-    const applied = (await db.select().from(learningEvaluations)
-      .where(eq(learningEvaluations.id, result.evaluation.id)))[0];
-    expect(taskAfterDecision.closureKind).toBe('completed');
-    expect(sessionAfterDecision.status).toBe('active');
-    expect(applied.recommendationDecision).toBe('accepted');
-    expect(applied.recommendationDecisionReason).toBe('成果已达到完成标准');
 
     await store.recordEvaluationCorrection(
       result.evaluation.id,
@@ -151,27 +185,26 @@ describe('StudyStore V2 business ownership', () => {
     expect(correctionRows).toHaveLength(1);
     expect(correctionRows[0].source).toBe('user_correction');
     expect(correctionKnowledge.some((item) => item.sourceType === 'correction')).toBe(true);
-    expect(applied.applicationStatus).toBe('applied');
+    expect(evaluation.applicationStatus).toBeNull();
   });
 
   it('derives qualitative mastery from durable evidence without a mastery table', async () => {
     const { guide } = await createLearningUnit(store);
     await store.confirmLearningGuide(guide.id);
     const task = guide.tasks[0];
-    const firstSubmission = await store.createSubmission(task.id, null, '第一份独立成果');
+    const firstSubmission = await store.createSubmission({ taskId: task.id, content: '第一份独立成果' });
     const first = await store.saveEvaluationAndDecision({
       submission: firstSubmission,
       evaluationOutput: {
         result: 'passed',
-        mastery: 90,
         evidence: ['独立完成'],
         correctParts: ['能够应用泛型约束'],
         misconceptions: [],
         missingRequirements: [],
         feedback: '通过',
-        recommendedAction: 'advance',
-        decision: 'advance'
+        recommendedAction: 'advance'
       },
+      direction: 'advance',
       decisionOutput: {
         decision: 'advance',
         reason: '继续',
@@ -198,20 +231,19 @@ describe('StudyStore V2 business ownership', () => {
     let items = await store.getKnowledgeItemsForGoal({ goalId: guide.goalId });
     expect(items[0].masteryState).toBe('can_apply');
 
-    const secondSubmission = await store.createSubmission(task.id, null, '第二份独立成果');
+    const secondSubmission = await store.createSubmission({ taskId: task.id, content: '第二份独立成果' });
     const second = await store.saveEvaluationAndDecision({
       submission: secondSubmission,
       evaluationOutput: {
         result: 'passed',
-        mastery: 90,
         evidence: ['再次独立完成'],
         correctParts: ['能够应用泛型约束'],
         misconceptions: [],
         missingRequirements: [],
         feedback: '再次通过',
-        recommendedAction: 'advance',
-        decision: 'advance'
+        recommendedAction: 'advance'
       },
+      direction: 'advance',
       decisionOutput: {
         decision: 'advance',
         reason: '继续',
@@ -264,6 +296,113 @@ describe('StudyStore V2 business ownership', () => {
       'updatedAt',
       'version'
     ]);
+  });
+
+  it('does not restore an archived Goal and Guide from a stale current_learning_context pointer', async () => {
+    const { guide } = await createLearningUnit(store);
+    await store.confirmLearningGuide(guide.id);
+
+    await db.update(learningGuides).set({ status: 'archived' })
+      .where(eq(learningGuides.id, guide.id));
+    await db.update(goals).set({ status: 'archived' })
+      .where(eq(goals.id, guide.goalId));
+
+    const snapshot = await store.getLearningRuntimeSnapshot();
+    const archivedGuide = await store.getDailyGuideById(guide.id);
+    const context = (await db.select().from(currentLearningContext)
+      .where(eq(currentLearningContext.id, 'default')))[0];
+
+    expect(archivedGuide?.sessionStatus).toBe('archived');
+    expect(snapshot.goal).toBeNull();
+    expect(snapshot.dailyGuide).toBeNull();
+    expect(snapshot.dailyGuideTask).toBeNull();
+    expect(snapshot.dailyGuideAction).toBeNull();
+    expect(context.goalId).toBeNull();
+    expect(context.guideId).toBeNull();
+    expect(context.taskId).toBeNull();
+    expect(context.actionId).toBeNull();
+  });
+
+  it('lists and restores an archived Guide with open Tasks without reopening closed history', async () => {
+    const { guide } = await createLearningUnit(store);
+    await store.confirmLearningGuide(guide.id);
+    const firstTask = guide.tasks[0];
+    const nextTask = guide.tasks[1];
+    await store.closeTask(firstTask.id, 'partial', '先完成基础部分', '继续练习');
+    await store.archiveActiveGoalsAndRestart();
+
+    const resumable = await store.listResumableGuides();
+    expect(resumable).toEqual([expect.objectContaining({
+      guideId: guide.id,
+      taskTitle: nextTask.title,
+      completedTaskCount: 0,
+      totalTaskCount: 2
+    })]);
+
+    const restored = await store.restoreArchivedGuide(guide.id);
+    expect(restored.dailyGuideTask?.id).toBe(nextTask.id);
+    expect(restored.dailyGuideAction?.id).toBe(nextTask.actions[0].id);
+    await expect(store.restoreArchivedGuide(guide.id)).resolves.toMatchObject({
+      dailyGuideTask: { id: nextTask.id }
+    });
+
+    const storedGoal = (await db.select().from(goals).where(eq(goals.id, guide.goalId)))[0];
+    const storedGuide = (await db.select().from(learningGuides).where(eq(learningGuides.id, guide.id)))[0];
+    const storedFirstTask = (await db.select().from(learningTasks).where(eq(learningTasks.id, firstTask.id)))[0];
+    expect(storedGoal.status).toBe('active');
+    expect(storedGuide.status).toBe('active');
+    expect(storedFirstTask.status).toBe('closed');
+    expect(storedFirstTask.closureKind).toBe('partial');
+  });
+
+  it('does not list or restore a fully closed archived Guide', async () => {
+    const { guide } = await createLearningUnit(store);
+    await store.confirmLearningGuide(guide.id);
+    await store.closeTask(guide.tasks[0].id, 'completed');
+    await store.closeTask(guide.tasks[1].id, 'completed');
+    await store.archiveActiveGoalsAndRestart();
+
+    expect(await store.listResumableGuides()).toEqual([]);
+    await expect(store.restoreArchivedGuide(guide.id)).rejects.toThrow('全部收口');
+  });
+
+  it('rejects restoring an archived Guide while a Session is unfinished', async () => {
+    const { goal, guide } = await createLearningUnit(store);
+    await store.confirmLearningGuide(guide.id);
+    const session = await store.startSession(guide.tasks[0].id);
+    await db.update(learningGuides).set({ status: 'archived' }).where(eq(learningGuides.id, guide.id));
+    await db.update(goals).set({ status: 'archived' }).where(eq(goals.id, goal.id));
+
+    await expect(store.restoreArchivedGuide(guide.id)).rejects.toThrow('未结束的 Session');
+    await store.completeSession(session.id);
+  });
+
+  it('derives provider health from any configured external AI service', async () => {
+    await store.saveAiReview({
+      kind: 'provider_check',
+      provider: 'configured_ai',
+      model: 'custom-model',
+      inputSnapshot: {},
+      output: { ok: true },
+      outputSchemaVersion: 'provider-check.v1',
+      status: 'completed',
+      recordType: 'run'
+    });
+    await store.saveAiReview({
+      kind: 'ask_user',
+      provider: 'local',
+      model: 'local',
+      inputSnapshot: {},
+      output: {},
+      outputSchemaVersion: 'ask-user.v1',
+      status: 'completed',
+      recordType: 'run'
+    });
+
+    await expect(store.getLatestAiProviderDiagnostic()).resolves.toMatchObject({
+      status: 'completed',
+      model: 'custom-model'
+    });
   });
 
   it('inserts an idempotent optional supplement into the current Guide and returns to the original Action', async () => {
@@ -323,8 +462,12 @@ describe('StudyStore V2 business ownership', () => {
     expect(actions[1].id).toBe(originalActionId);
     expect((await db.select().from(aiReviews).where(eq(aiReviews.id, reviewId)))[0]).toBeTruthy();
 
-    const afterCompletion = await store.completeCurrentAction();
+    const afterCompletion = await store.completeCurrentAction(inserted.id);
     expect(afterCompletion.dailyGuideAction?.id).toBe(originalActionId);
+    const afterRepeatedCompletion = await store.completeCurrentAction(inserted.id);
+    expect(afterRepeatedCompletion.dailyGuideAction?.id).toBe(originalActionId);
+    expect((await db.select().from(learningActions)
+      .where(eq(learningActions.id, originalActionId)))[0].status).toBe('planned');
   });
 
   it('falls back only to a uniquely recoverable level', async () => {
@@ -431,9 +574,7 @@ async function createLearningUnit(store: StudyStore) {
           deliverable: '闭包解释',
           doneWhen: ['包含例子'],
           quickHint: '关注函数与外部变量',
-          evaluationMode: 'ai',
-          submissionPolicy: 'once_after_task',
-          carryoverAllowed: true
+          evaluationMode: 'ai'
         },
         {
           title: '闭包练习',
@@ -448,9 +589,7 @@ async function createLearningUnit(store: StudyStore) {
           deliverable: '计数器代码',
           doneWhen: ['连续调用结果递增'],
           quickHint: '返回内部函数',
-          evaluationMode: 'ai',
-          submissionPolicy: 'once_after_task',
-          carryoverAllowed: true
+          evaluationMode: 'ai'
         }
       ]
     }

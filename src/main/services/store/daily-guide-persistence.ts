@@ -38,11 +38,13 @@ export class DailyGuidePersistence {
     const guide = await this.getDailyGuideById(guideId);
     if (!guide) throw new Error(`Learning guide not found: ${guideId}`);
     const confirmedAt = nowIso();
-    await this.db.update(learningGuides).set({
-      status: 'active',
-      confirmedAt
-    }).where(eq(learningGuides.id, guideId));
-    await this.currentLearningContext.makeGuideCurrent(guideId);
+    await this.db.transaction(async (tx) => {
+      await tx.update(learningGuides).set({
+        status: 'active',
+        confirmedAt
+      }).where(eq(learningGuides.id, guideId));
+      await this.currentLearningContext.makeGuideCurrent(guideId, tx);
+    });
     const updated = await this.getDailyGuideById(guideId);
     if (!updated) throw new Error('Learning guide confirmation failed.');
     return updated;
@@ -280,7 +282,7 @@ export class DailyGuidePersistence {
         .where(eq(learningActions.taskId, task.id)).orderBy(asc(learningActions.position));
       tasks.push(mapDailyGuideTask(task, actions.map(mapDailyGuideAction)));
     }
-    return mapDailyGuide(guide, [], tasks);
+    return mapDailyGuide(guide, tasks);
   }
 
   private async getGoal(goalId: string): Promise<LearningGoal | null> {

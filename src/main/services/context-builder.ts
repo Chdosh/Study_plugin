@@ -1,4 +1,11 @@
-import type { LearnerFact, LearningRuntimeSnapshot } from '../../shared/types';
+import type {
+  DailyGuide,
+  DailyGuideTask,
+  LearnerFact,
+  LearningGoal,
+  LearningRuntimeSnapshot,
+  LearningSubmission
+} from '../../shared/types';
 import type { StudyStore } from './store';
 
 export type LearningAiOperation =
@@ -77,11 +84,34 @@ export class ContextBuilder {
 
   async build(operation: LearningAiOperation, extra: Record<string, unknown> = {}): Promise<BuiltLearningContext> {
     const snapshot = await this.store.getLearningRuntimeSnapshot();
-    const contextSourceIds = collectSourceIds(snapshot);
+    const evaluationTask = operation === 'evaluate_submission'
+      ? extra.evaluationTask as DailyGuideTask | undefined
+      : undefined;
+    const evaluationSubmission = operation === 'evaluate_submission'
+      ? extra.evaluationSubmission as LearningSubmission | undefined
+      : undefined;
+    const evaluationGoal = operation === 'evaluate_submission'
+      ? extra.evaluationGoal as LearningGoal | undefined
+      : undefined;
+    const evaluationGuide = operation === 'evaluate_submission'
+      ? extra.evaluationGuide as DailyGuide | undefined
+      : undefined;
+    const contextSourceIds = [...new Set([
+      ...collectSourceIds(snapshot),
+      evaluationTask?.id,
+      evaluationSubmission?.id
+    ].filter((id): id is string => Boolean(id)))];
     const meta: Record<string, ContextSourceMeta> = {};
     const full: Record<string, unknown> = {
       operation,
-      goal: snapshot.goal
+      goal: evaluationGoal
+        ? {
+            id: evaluationGoal.id,
+            title: evaluationGoal.title,
+            description: truncateField(evaluationGoal.description, 300),
+            status: evaluationGoal.status
+          }
+        : snapshot.goal
         ? {
             id: snapshot.goal.id,
             title: snapshot.goal.title,
@@ -89,7 +119,14 @@ export class ContextBuilder {
             status: snapshot.goal.status
           }
         : null,
-      guide: snapshot.dailyGuide
+      guide: evaluationGuide
+        ? {
+            id: evaluationGuide.id,
+            date: evaluationGuide.date,
+            todayGoal: evaluationGuide.todayGoal,
+            status: evaluationGuide.status
+          }
+        : snapshot.dailyGuide
         ? {
             id: snapshot.dailyGuide.id,
             date: snapshot.dailyGuide.date,
@@ -97,8 +134,10 @@ export class ContextBuilder {
             status: snapshot.dailyGuide.status
           }
         : null,
-      guideTask: snapshot.dailyGuideTask
-        ? this.pruneTask(snapshot.dailyGuideTask, operation)
+      guideTask: evaluationTask
+        ? this.pruneTask(evaluationTask, operation)
+        : snapshot.dailyGuideTask
+          ? this.pruneTask(snapshot.dailyGuideTask, operation)
         : null,
       guideAction: snapshot.dailyGuideAction
         ? {
@@ -129,14 +168,22 @@ export class ContextBuilder {
             }))
           }
         : null,
-      latestSubmission: snapshot.latestSubmission
+      latestSubmission: evaluationSubmission
+        ? {
+            id: evaluationSubmission.id,
+            content: truncateField(evaluationSubmission.content, 500),
+            createdAt: evaluationSubmission.createdAt
+          }
+        : snapshot.latestSubmission
         ? {
             id: snapshot.latestSubmission.id,
             content: truncateField(snapshot.latestSubmission.content, 500),
             createdAt: snapshot.latestSubmission.createdAt
           }
         : null,
-      latestEvaluation: evaluationRelevant(operation)
+      latestEvaluation: operation === 'evaluate_submission'
+        ? null
+        : evaluationRelevant(operation)
         ? foldIfStale(snapshot.latestEvaluation, operation)
         : null,
       latestDecision: evaluationRelevant(operation)
@@ -167,10 +214,12 @@ export class ContextBuilder {
       if (key in extra) context[key] = sanitizeExtraField(extra[key]);
     }
 
-    const facts = snapshot.goal?.id ? await this.store.listFactsForGoal(snapshot.goal.id) : [];
-    const relevantFacts = facts.filter((fact) => fact.scope !== 'task' || fact.taskId === snapshot.dailyGuideTask?.id);
-    const evaluationHistory = snapshot.dailyGuideTask?.id
-      ? await this.store.getEvaluationsForTask(snapshot.dailyGuideTask.id)
+    const contextGoalId = evaluationGoal?.id ?? snapshot.goal?.id;
+    const contextTaskId = evaluationTask?.id ?? snapshot.dailyGuideTask?.id;
+    const facts = contextGoalId ? await this.store.listFactsForGoal(contextGoalId) : [];
+    const relevantFacts = facts.filter((fact) => fact.scope !== 'task' || fact.taskId === contextTaskId);
+    const evaluationHistory = contextTaskId
+      ? await this.store.getEvaluationsForTask(contextTaskId)
       : [];
     const selectedFacts = selectConfirmedFacts(relevantFacts);
     const { conflicts, arbitratedContext } = arbitrateContext(snapshot, relevantFacts, evaluationHistory);

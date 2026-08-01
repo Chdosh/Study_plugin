@@ -1,7 +1,6 @@
 import type {
   DailyGuide,
   DailyGuideAction,
-  DailyGuideBlock,
   DailyGuideTask,
   GoalBrief,
   GoalIntake,
@@ -100,18 +99,10 @@ export function mapDailyGuideTask(
   row: typeof learningTasks.$inferSelect,
   actions: DailyGuideAction[]
 ): DailyGuideTask {
-  const completedActions = actions.filter((item) => item.status === 'done').map((item) => item.id);
-  const remainingActions = actions.filter((item) => item.status === 'planned').map((item) => item.id);
-  const terminal = actions.filter((item) => item.status !== 'planned').length;
-  const status: DailyGuideTask['status'] =
-    row.status === 'closed'
-      ? row.closureKind === 'completed' ? 'done' : 'skipped'
-      : row.status;
   return {
     id: row.id,
     guideId: row.guideId,
     roadmapStageId: row.roadmapStageId,
-    legacyPlanBlockId: null,
     title: row.title,
     objective: row.objective,
     scope: row.scope,
@@ -125,17 +116,10 @@ export function mapDailyGuideTask(
     doneWhen: parseStringArray(row.doneWhenJson),
     quickHint: row.quickHint,
     evaluationMode: row.evaluationMode,
-    submissionPolicy: 'once_after_task',
-    carryoverAllowed: true,
-    status,
+    status: row.status,
     closureKind: row.closureKind,
     closureReason: row.closureReason,
-    progressPercent: actions.length === 0 ? 0 : Math.round((terminal / actions.length) * 100),
-    completedActions,
-    remainingActions,
-    currentAction: actions.find((item) => item.status === 'planned') ?? null,
     nextStartPoint: row.nextStartPoint,
-    totalElapsedMinutes: 0,
     position: row.position,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt
@@ -144,7 +128,6 @@ export function mapDailyGuideTask(
 
 export function mapDailyGuide(
   row: typeof learningGuides.$inferSelect,
-  blocks: DailyGuideBlock[] = [],
   tasks: DailyGuideTask[] = []
 ): DailyGuide {
   const status: DailyGuide['status'] =
@@ -152,11 +135,10 @@ export function mapDailyGuide(
   return {
     id: row.id,
     goalId: row.goalId,
-    planId: row.goalId,
     nearTermPlanItemId: row.nearTermPlanItemId,
     date: row.suggestedDate ?? row.createdAt.slice(0, 10),
     status,
-    sessionStatus: row.status === 'active' ? 'active' : row.status === 'closed' ? 'closed' : 'draft',
+    sessionStatus: row.status,
     weekFocus: row.weekFocus,
     todayGoal: row.learningGoal,
     deliverables: parseStringArray(row.deliverablesJson),
@@ -165,8 +147,7 @@ export function mapDailyGuide(
     tomorrowActions: parseStringArray(row.nextActionsJson),
     createdAt: row.createdAt,
     confirmedAt: row.confirmedAt,
-    tasks,
-    blocks
+    tasks
   };
 }
 
@@ -178,7 +159,6 @@ export function mapSession(row: typeof focusSessions.$inferSelect): StudySession
     endedAt: row.endedAt,
     durationMinutes: row.status === 'ended' ? Math.floor(row.durationSeconds / 60) : null,
     status: row.status === 'ended' ? 'completed' : row.status,
-    focusScore: null,
     notes: row.notes
   };
 }
@@ -229,14 +209,14 @@ export function mapSubmission(row: typeof learningSubmissions.$inferSelect): Lea
   return {
     id: row.id,
     taskId: row.taskId,
-    stepId: row.taskId,
-    dailyGuideActionId: null,
+    stepId: row.stepId,
+    dailyGuideActionId: row.stepId,
     sessionId: row.sessionId,
     content: row.content,
-    evaluationStatus: 'waiting',
+    evaluationStatus: (row.evaluationStatus ?? 'waiting') as LearningSubmission['evaluationStatus'],
     applicationStatus: null,
-    applicationError: null,
-    appliedAt: null,
+    applicationError: row.lastEvaluationError ?? null,
+    appliedAt: row.lastEvaluationAt ?? null,
     createdAt: row.createdAt
   };
 }

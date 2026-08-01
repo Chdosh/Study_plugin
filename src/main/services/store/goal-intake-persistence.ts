@@ -1,10 +1,9 @@
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import type {
   GoalBrief,
   GoalIntake,
   GoalIntakeMessage,
   GoalIntakeState,
-  HistoryIntakeSummary,
   LearningGoal
 } from '../../../shared/types';
 import type { GoalIntakeAgentOutput } from '../../../shared/schemas';
@@ -17,7 +16,7 @@ import {
 } from '../../db/schema';
 import { createId, nowIso } from '../id';
 import { resolveGoalDueDate } from '../../domain/goal-deadline';
-import type { RuntimePersistence } from './runtime-persistence';
+import type { CurrentLearningContextPersistence } from './current-learning-context';
 import {
   mapGoal,
   mapGoalIntake,
@@ -34,31 +33,8 @@ export class GoalIntakePersistence {
 
   constructor(
     private readonly db: Database,
-    private readonly runtime: RuntimePersistence
+    private readonly currentLearningContext: CurrentLearningContextPersistence
   ) {}
-
-  async listGoalIntakes(): Promise<HistoryIntakeSummary[]> {
-    const rows = await this.db.select().from(goalIntakes).orderBy(desc(goalIntakes.createdAt));
-    const goalIds = [...new Set(rows.map((r) => r.goalId).filter(Boolean))] as string[];
-    const goalRows = goalIds.length ? await this.db.select().from(goals).where(inArray(goals.id, goalIds)) : [];
-    const goalMap = new Map(goalRows.map((g) => [g.id, g.title]));
-    const counts = await Promise.all(
-      rows.map((row) =>
-        this.db.select({ count: sql<number>`count(*)` }).from(goalIntakeMessages)
-          .where(eq(goalIntakeMessages.intakeId, row.id))
-          .then((r) => Number(r[0]?.count ?? 0))
-      )
-    );
-    return rows.map((row, i) => ({
-      intake: mapGoalIntake(row),
-      goalTitle: row.goalId ? (goalMap.get(row.goalId) ?? '') : '',
-      messageCount: counts[i]
-    }));
-  }
-
-  getGoalIntakeById(intakeId: string): Promise<GoalIntakeState> {
-    return this.getGoalIntakeState(intakeId);
-  }
 
   async getCurrentGoalIntake(): Promise<GoalIntakeState> {
     const existing = await this.db.select().from(goalIntakes).orderBy(desc(goalIntakes.createdAt));
@@ -185,33 +161,50 @@ export class GoalIntakePersistence {
 
   async archiveActiveGoalsAndRestart(): Promise<GoalIntakeState> {
     const now = nowIso();
-    const activeGoalRows = await this.db
-      .select()
-      .from(goals)
-      .where(eq(goals.status, 'active'));
-    const activeGoalIds = activeGoalRows.map((goal) => goal.id);
+    const intakeId = createId('goal_intake');
+    await this.db.transaction(async (tx) => {
+      const activeGoalRows = await tx
+        .select({ id: goals.id })
+        .from(goals)
+        .where(eq(goals.status, 'active'));
+      const activeGoalIds = activeGoalRows.map((goal) => goal.id);
 
-    if (activeGoalIds.length > 0) {
-      await this.db
-        .update(learningGuides)
-        .set({ status: 'archived' })
-        .where(inArray(learningGuides.goalId, activeGoalIds));
-      await this.db
-        .update(goals)
-        .set({ status: 'archived', updatedAt: now })
-        .where(inArray(goals.id, activeGoalIds));
-      await this.runtime.updateState({
-        activeGoalId: null,
-        activeStageId: null,
-        activeDailyTaskId: null,
-        activeStepId: null,
-        activeQuestionThreadId: null,
-        sessionStatus: 'idle'
+      if (activeGoalIds.length > 0) {
+        await tx
+          .update(learningGuides)
+          .set({ status: 'archived' })
+          .where(inArray(learningGuides.goalId, activeGoalIds));
+        await tx
+          .update(goals)
+          .set({ status: 'archived', updatedAt: now })
+          .where(inArray(goals.id, activeGoalIds));
+      }
+
+      await this.currentLearningContext.writeInTransaction(tx, {
+        goalId: null,
+        guideId: null,
+        taskId: null,
+        actionId: null
       });
-    }
-
-    const intake = await this.createCollectingIntake(RESTART_GREETING);
-    return this.getGoalIntakeState(intake.id);
+      await tx.insert(goalIntakes).values({
+        id: intakeId,
+        status: 'collecting',
+        goalId: null,
+        briefJson: null,
+        createdAt: now,
+        updatedAt: now,
+        confirmedAt: null
+      });
+      await tx.insert(goalIntakeMessages).values({
+        id: createId('goal_intake_message'),
+        intakeId,
+        role: 'assistant',
+        content: RESTART_GREETING,
+        createdAt: now
+      });
+    });
+    this.cachedActiveIntakeId = intakeId;
+    return this.getGoalIntakeState(intakeId);
   }
 
   private async getGoalIntakeState(intakeId: string): Promise<GoalIntakeState> {
@@ -283,14 +276,14 @@ export class GoalIntakePersistence {
       createdAt: now,
       updatedAt: now
     };
-    await this.db.insert(goals).values(row);
-    await this.runtime.updateState({
-      activeGoalId: row.id,
-      activeStageId: null,
-      activeDailyTaskId: null,
-      activeStepId: null,
-      activeQuestionThreadId: null,
-      sessionStatus: 'idle'
+    await this.db.transaction(async (tx) => {
+      await tx.insert(goals).values(row);
+      await this.currentLearningContext.writeInTransaction(tx, {
+        goalId: row.id,
+        guideId: null,
+        taskId: null,
+        actionId: null
+      });
     });
     return mapGoal(row);
   }
