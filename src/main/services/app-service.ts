@@ -1,9 +1,33 @@
 import type { BrowserWindow } from 'electron';
 import { ipcChannels } from '../../shared/ipc';
 import { localDateIso } from '../../shared/date';
-import type { AppSettings, CloseTaskInput, DailyPlanBlock, GenerateRollingPlanResult, GoalBrief, Id, KnowledgeItem, KnowledgeItemStatus, LearnerFactScope, LearnerFactSource, LearningOverviewState, LearningPreparationState, PlanProposalInput, PrepareCurrentLearningUnitResult, ReviewResult, RuntimeAuditResult, StartNextSessionResult, StudySession } from '../../shared/types';
+
+import { hasCompleteAiConfiguration } from '../../shared/types';
+import type {
+  AiProviderStatus,
+  AppSettings,
+  DailyGuideAction,
+  GenerateRollingPlanResult,
+  GoalBrief,
+  Id,
+  KnowledgeItem,
+  KnowledgeItemStatus,
+  LearnerFactScope,
+  LearnerFactSource,
+  LearningEvaluationNotification,
+  LearningOverviewState,
+  LearningPreparationState,
+  LearningSubmission,
+  LearningSubmissionResult,
+  PlanProposalInput,
+  PrepareCurrentLearningUnitResult,
+  ReviewResult,
+  RuntimeAuditResult,
+  StudySession,
+  UpdateAppSettingsInput
+} from '../../shared/types';
 import { AiClient } from '../ai/ai-client';
-import { CategorizedError } from '../ai/categorized-error';
+import { CategorizedError, describeError } from '../ai/categorized-error';
 import { AgentLoop } from '../agent/agent-loop';
 import { AiAgentTurnModel } from '../agent/agent-turn-model';
 import type { AgentContext, AgentRunAudit, AgentToolName } from '../agent/agent-types';
@@ -52,6 +76,18 @@ export class AppService {
   async initialize(): Promise<void> {
     await this.agentLoop.recoverInterruptedRuns();
     this.startupRuntimeAudit = await this.runRuntimeAudit();
+    await this.advancePreviouslySubmittedTask();
+    void this.recoverPendingEvaluations();
+  }
+
+  private async recoverPendingEvaluations(): Promise<void> {
+    const pending = await this.store.getSubmissionsNeedingEvaluation();
+    for (const submissionId of pending) {
+      const submission = await this.store.getSubmissionById(submissionId);
+      if (submission) {
+        await this.evaluateInBackground(submission);
+      }
+    }
   }
 
   private coalesce<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -72,12 +108,33 @@ export class AppService {
     return promise;
   }
 
-  getSettings() {
-    return this.settings.getAppSettings();
+  async getSettings(): Promise<AppSettings> {
+    const settings = await this.settings.getAppSettings();
+    return {
+      ...settings,
+      aiProviderStatus: await this.getAiProviderStatus(settings)
+    };
   }
 
-  updateSettings(patch: Partial<AppSettings> & { deepseekApiKey?: string }) {
-    return this.settings.updateSettings(patch);
+  async updateSettings(
+    patch: UpdateAppSettingsInput
+  ): Promise<AppSettings> {
+    const before = await this.settings.getAppSettings();
+    const updated = await this.settings.updateSettings(patch);
+    const aiConfigChanged = (
+      (typeof patch.aiBaseUrl === 'string'
+        && patch.aiBaseUrl !== before.aiBaseUrl)
+      || (typeof patch.aiModel === 'string'
+        && patch.aiModel !== before.aiModel)
+      || Boolean(patch.aiApiKey?.trim())
+    );
+    if (aiConfigChanged) {
+      await this.store.putSetting('aiConfigUpdatedAt', new Date().toISOString());
+    }
+    return {
+      ...updated,
+      aiProviderStatus: await this.getAiProviderStatus(updated)
+    };
   }
 
   async getCurrentOnboarding() {
@@ -99,74 +156,104 @@ export class AppService {
     return this.modules.conversation.cancelGoalIntakeQuestion();
   }
 
-  async confirmOnboardingGoal(briefPatch?: Partial<GoalBrief>) {
-    return this.modules.conversation.confirmGoalIntake(briefPatch);
-  }
+  generateInitialLearningPlan(briefPatch?: Partial<GoalBrief>): Promise<LearningOverviewState> {
+    return this.coalesce('initial-learning-plan', async () => {
+      const current = await this.store.getActiveGuide();
+      if (current.guide?.tasks.length) {
+        return this.getOverview();
+      }
 
-  listHistory() {
-    return this.store.listGoalIntakes();
-  }
-
-  getHistoryIntake(intakeId: Id) {
-    return this.store.getGoalIntakeById(intakeId);
-  }
-
-  async generateLayeredPlan(goalId: Id) {
-    return this.modules.planning.generateLayeredPlan(goalId);
+      const { goal } = await this.modules.conversation.confirmGoalIntake(briefPatch);
+      const plan = await this.modules.planning.generateLayeredPlan(goal.id);
+      await this.modules.execution.confirmGuide(plan.guide.id);
+      return this.getOverview();
+    });
   }
 
   async confirmLearningGuide(guideId: Id) {
-    const existing = await this.store.getDailyGuideById(guideId);
-    if (existing && existing.status === 'confirmed') {
-      return existing;
-    }
-    return this.store.confirmLearningGuide(guideId);
+    return this.modules.execution.confirmGuide(guideId);
   }
 
   async resetLearningWorkspace() {
     const active = await this.getActiveSession();
-    if (active?.session.status === 'active') {
-      const paused = await this.store.getRuntimePersistence().pauseSession(active.session.id);
-      await this.pushSessionState(paused);
+    if (active) {
+      await this.modules.execution.endSession(active.id);
     }
     return this.store.archiveActiveGoalsAndRestart();
-  }
-
-  async startNextSession(goalId?: Id): Promise<StartNextSessionResult> {
-    return this.modules.planning.advanceLearningDay(
-      { goalId },
-      {
-        startAgentTurn: <TInput, TOutput>(params: {
-          toolName: AgentToolName;
-          input: TInput;
-          context: AgentContext;
-          audit: AgentRunAudit;
-        }) => this.modules.learningTurn.startTool<TInput, TOutput>(params),
-        getRuntimeSettings: () => this.settings.getRuntimeSettings(),
-        createTraceId,
-        todayIso,
-        generateReview: (guideId) => this.generateReviewForClosedGuide(guideId)
-      }
-    ).catch((error) => {
-      if (error instanceof CategorizedError) throw error;
-      throw new CategorizedError('validation_error', error instanceof Error ? error.message : String(error));
-    });
-  }
-
-  private async generateReviewForClosedGuide(guideId: string): Promise<ReviewResult> {
-    return this.modules.review.generateForGuide(guideId);
   }
 
   async generateReview(date: string) {
     return this.modules.review.generateCurrent(date);
   }
 
-  async getPreparationState(): Promise<LearningPreparationState> {
-    const today = await this.store.getActiveGuide();
-    if (!today.goal) return 'needs_goal';
+  private async getAiProviderStatus(settings: AppSettings): Promise<AiProviderStatus> {
+    if (!hasCompleteAiConfiguration(settings)) {
+      const missing = [
+        !settings.hasAiApiKey ? 'API Key' : '',
+        !settings.aiBaseUrl.trim() ? '服务地址' : '',
+        !settings.aiModel.trim() ? '模型名称' : ''
+      ].filter(Boolean);
+      return {
+        state: 'unverified',
+        checkedAt: null,
+        model: settings.aiModel || null,
+        errorCategory: 'missing_config',
+        message: `AI 配置不完整：缺少${missing.join('、')}。`
+      };
+    }
+    const [diagnostic, configUpdatedAt] = await Promise.all([
+      this.store.getLatestAiProviderDiagnostic(),
+      this.store.getSetting('aiConfigUpdatedAt')
+    ]);
+    const checkedAt = diagnostic?.completedAt ?? diagnostic?.createdAt ?? null;
+    if (!diagnostic || (configUpdatedAt && (!checkedAt || checkedAt < configUpdatedAt))) {
+      return {
+        state: 'unverified',
+        checkedAt: null,
+        model: settings.aiModel,
+        errorCategory: null,
+        message: '配置已保存，将在下一次 AI 请求后更新连接状态。'
+      };
+    }
+    if (diagnostic.status === 'completed') {
+      return {
+        state: 'available',
+        checkedAt,
+        model: diagnostic.model,
+        errorCategory: null,
+        message: '最近一次 AI 请求成功。'
+      };
+    }
+    const described = describeError(diagnostic.errorMessage ?? 'AI 请求失败');
+    const errorCategory = diagnostic.errorCategory ?? described.category;
+    const isSchemaViolation = errorCategory === 'schema_violation'
+      || described.category === 'schema_violation'
+      || /结构不完整|格式校验|schema/i.test(diagnostic.errorMessage ?? '');
+    if (isSchemaViolation) {
+      return {
+        state: 'available',
+        checkedAt,
+        model: diagnostic.model,
+        errorCategory: 'schema_violation',
+        message: 'AI 服务可连接，但最近一次业务输出未通过格式校验。'
+      };
+    }
+    return {
+      state: 'failed',
+      checkedAt,
+      model: diagnostic.model,
+      errorCategory,
+      message: described.message
+    };
+  }
+
+  private async getPreparationStatus(
+    today: Awaited<ReturnType<StudyStore['getActiveGuide']>>
+  ): Promise<{ state: LearningPreparationState; errorMessage?: string }> {
+    if (!today.goal) return { state: 'needs_goal' };
 
     const goalId = today.goal.id;
-    if (this.modules.planning.isPreparing(goalId)) return 'generating';
+    if (this.modules.planning.isPreparing(goalId)) return { state: 'generating' };
     const usedNearTermPlanItemIds = await this.store.getUsedNearTermPlanItemIds(goalId);
     const hasRecoverablePlanDay = today.shortPlan.some((day) =>
       day.sessionStatus === 'active' && !usedNearTermPlanItemIds.has(day.id)
@@ -179,18 +266,28 @@ export class AppService {
     const guide = today.guide;
     const stageReviewRequired = today.roadmap.some((stage) => stage.status === 'ready_for_review');
     if (guide) {
-      if (guide.sessionStatus === 'draft') return 'generation_failed';
-      if (guide.status === 'completed' || guide.sessionStatus === 'closed') {
-        if (stageReviewRequired) return 'stage_review_required';
-        return hasAvailablePlanDay ? 'completed' : 'plan_exhausted';
+      if (guide.sessionStatus === 'draft' && guide.tasks.length === 0) {
+        const failure = await this.store.getLatestAiProviderDiagnostic({
+          goalId,
+          kinds: ['roadmap', 'short_plan', 'daily_guide']
+        });
+        return {
+          state: 'generation_failed',
+          errorMessage: failure?.errorMessage
+            ?? '当前 Learning Guide 生成中断，目标和近期计划已保留。'
+        };
       }
-      return 'active';
+      if (guide.status === 'completed' || guide.sessionStatus === 'closed') {
+        if (stageReviewRequired) return { state: 'stage_review_required' };
+        return { state: hasAvailablePlanDay ? 'completed' : 'plan_exhausted' };
+      }
+      return { state: 'active' };
     }
 
-    if (stageReviewRequired) return 'stage_review_required';
-    if (!hasRecoverablePlanDay && !hasAvailablePlanDay) return 'plan_exhausted';
+    if (stageReviewRequired) return { state: 'stage_review_required' };
+    if (!hasRecoverablePlanDay && !hasAvailablePlanDay) return { state: 'plan_exhausted' };
 
-    return 'ready_to_generate';
+    return { state: 'ready_to_generate' };
   }
 
   async prepareCurrentLearningUnit(forceRetry = false): Promise<PrepareCurrentLearningUnitResult> {
@@ -233,10 +330,18 @@ export class AppService {
     });
   }
 
+  listResumableGuides() {
+    return this.store.listResumableGuides();
+  }
+
+  async restoreArchivedGuide(guideId: Id) {
+    return this.modules.execution.restoreArchivedGuide(guideId);
+  }
+
   async getOverview(): Promise<LearningOverviewState> {
-    const [today, preparationState, context] = await Promise.all([
-      this.store.getActiveGuide(),
-      this.getPreparationState(),
+    const today = await this.store.getActiveGuide();
+    const [preparation, context] = await Promise.all([
+      this.getPreparationStatus(today),
       this.store.getCurrentLearningContext()
     ]);
     const pendingEvaluations = today.goal
@@ -256,8 +361,8 @@ export class AppService {
         currentStage,
         todayIso()
       ),
-      stageConflict: context.stageConflict,
-      preparationState,
+      preparationState: preparation.state,
+      errorMessage: preparation.errorMessage,
       pendingEvaluations
     };
   }
@@ -292,21 +397,19 @@ export class AppService {
     return {
       ...result,
       checkedAt: new Date().toISOString(),
-      requiresUserAction: result.conflicts.length > 0,
-      guideChoices,
-      learningUnitChoices: []
+      guideChoices
     };
   }
 
   async selectCurrentGuide(guideId: Id): Promise<RuntimeAuditResult> {
     this.startupRuntimeAudit = null;
-    await this.store.selectCurrentGuide(guideId);
+    await this.modules.execution.selectGuide(guideId);
     return this.runRuntimeAudit();
   }
 
   async resolveLearningUnit(guideId: Id, decision: 'restore' | 'skip'): Promise<RuntimeAuditResult> {
     this.startupRuntimeAudit = null;
-    await this.store.resolveAmbiguousLearningUnit(guideId, decision);
+    await this.modules.execution.resolveLearningUnit(guideId, decision);
     return this.runRuntimeAudit();
   }
 
@@ -330,67 +433,50 @@ export class AppService {
     return this.modules.planning.confirmPlanChange(proposalId);
   }
 
-  async rejectPlanProposal(proposalId: Id) {
-    return this.modules.planning.rejectPlanChange(proposalId);
-  }
-
   async confirmRoadmapStage(goalId: Id, stageId: Id) {
     return this.modules.planning.confirmRoadmapStage(goalId, stageId);
   }
 
   async startSession(taskId: Id) {
-    const session = await this.store.getRuntimePersistence().startSession(taskId);
+    const session = await this.modules.execution.startSession(taskId);
     this.getMainWindow()?.flashFrame(true);
     await this.pushSessionState(session);
     return session;
   }
 
   async pauseSession(sessionId: Id) {
-    const session = await this.store.getRuntimePersistence().pauseSession(sessionId);
+    const session = await this.modules.execution.pauseSession(sessionId);
     await this.pushSessionState(session);
     return session;
   }
 
-  async getActiveSession(): Promise<{ session: StudySession; block: DailyPlanBlock | null } | null> {
-    let context = await this.store.getCurrentLearningContext();
-    if (!context.session) {
-      const sessions = await this.store.listSessions();
-      if (sessions.some((session) => session.status === 'active' || session.status === 'paused')) {
-        await this.store.auditRuntimeConsistency();
-        context = await this.store.getCurrentLearningContext();
-      }
-    }
-    return context.session ? { session: context.session, block: null } : null;
-  }
-
-  async getAccumulatedSeconds(blockId: string, excludeSessionId?: string): Promise<number> {
-    return this.store.getAccumulatedSeconds(blockId, excludeSessionId);
+  async getActiveSession(): Promise<StudySession | null> {
+    return this.modules.execution.getActiveSession();
   }
 
   getLearningState() {
-    return this.store.getRuntimePersistence().getSnapshot();
+    return this.modules.execution.getState();
   }
 
   async teachCurrentStep(promptProfileId?: Id) {
-    const snapshot = await this.store.getRuntimePersistence().getSnapshot();
-    const action = snapshot.dailyGuideAction;
-    if (!action) {
-      throw new CategorizedError(
-        'validation_error',
-        '当前没有可展开的学习步骤。请先进入一个可执行的学习任务。'
-      );
-    }
-    const turn = await this.modules.learningTurn.start({
-      intent: 'continue_teaching',
-      promptProfileId
-    });
-    return {
-      runId: turn.runId,
-      action,
-      artifacts: turn.artifacts,
-      contextSourceIds: turn.contextSourceIds,
-      pendingInteraction: turn.pendingInteraction
-    };
+    const actionId = this.store.getActiveStepId() ?? 'none';
+    return this.coalesce(
+      `teach:${actionId}`,
+      async () => {
+        const snapshot = await this.modules.execution.getState();
+        const turn = await this.modules.learningTurn.start({
+          intent: 'continue_teaching',
+          promptProfileId
+        });
+        return {
+          runId: turn.runId,
+          action: snapshot.dailyGuideAction!,
+          artifacts: turn.artifacts,
+          contextSourceIds: turn.contextSourceIds,
+          pendingInteraction: turn.pendingInteraction
+        };
+      }
+    );
   }
 
   async resumeLearningTurn(
@@ -402,14 +488,7 @@ export class AppService {
     if (!trimmed) {
       throw new CategorizedError('user_input_error', '回答不能为空。');
     }
-    const snapshot = await this.store.getRuntimePersistence().getSnapshot();
-    const action = snapshot.dailyGuideAction;
-    if (!action) {
-      throw new CategorizedError(
-        'validation_error',
-        '当前学习步骤已经变化，原问题没有被自动套用。'
-      );
-    }
+    const snapshot = await this.modules.execution.getState();
     const turn = await this.modules.learningTurn.resume({
       intent: 'continue_teaching',
       pendingInteractionId,
@@ -418,7 +497,7 @@ export class AppService {
     });
     return {
       runId: turn.runId,
-      action,
+      action: snapshot.dailyGuideAction!,
       artifacts: turn.artifacts,
       contextSourceIds: turn.contextSourceIds,
       pendingInteraction: turn.pendingInteraction
@@ -429,65 +508,12 @@ export class AppService {
     return this.modules.learningTurn.cancel(pendingInteractionId);
   }
 
-  completeCurrentAction() {
-    return this.store.getRuntimePersistence().completeCurrentAction();
+  completeCurrentAction(actionId: Id) {
+    return this.modules.execution.completeAction(actionId);
   }
 
-  skipCurrentAction() {
-    return this.store.getRuntimePersistence().skipCurrentAction();
-  }
-
-  async closeCurrentTask(input: CloseTaskInput) {
-    const current = await this.store.getRuntimePersistence().getSnapshot();
-    if (current.dailyGuideTask?.id !== input.taskId) {
-      throw new Error('当前 Task 已经变化，请确认最新状态后再收口。');
-    }
-    await this.store.getRuntimePersistence().closeTask(
-      input.taskId,
-      input.closureKind,
-      input.closureReason,
-      input.nextStartPoint
-    );
-    let snapshot = await this.store.getRuntimePersistence().getSnapshot();
-    if (!snapshot.dailyGuideTask) {
-      const prepared = await this.modules.planning.advanceLearningDay(
-        {},
-        {
-          startAgentTurn: <TInput, TOutput>(params: {
-            toolName: AgentToolName;
-            input: TInput;
-            context: AgentContext;
-            audit: AgentRunAudit;
-          }) => this.modules.learningTurn.startTool<TInput, TOutput>(params),
-          getRuntimeSettings: () => this.settings.getRuntimeSettings(),
-          createTraceId,
-          todayIso,
-          generateReview: (guideId) => this.generateReviewForClosedGuide(guideId)
-        }
-      );
-      if (prepared.preparationState === 'active') {
-        await this.store.auditRuntimeConsistency();
-        snapshot = await this.store.getRuntimePersistence().getSnapshot();
-      } else if (prepared.preparationState === 'generation_failed') {
-        throw new CategorizedError(
-          'validation_error',
-          `当前 Task 已收口并保存在记录中，但下一学习单元生成失败：${prepared.errorMessage ?? '请重试生成。'}`
-        );
-      } else if (prepared.preparationState === 'generating') {
-        throw new CategorizedError('validation_error', '当前 Task 已收口，下一学习单元正在生成，请稍后重新检查。');
-      }
-    }
-    return snapshot;
-  }
-
-  async terminateLearning() {
-    const runtime = this.store.getRuntimePersistence();
-    const unfinished = (await runtime.listSessions())
-      .find((session) => session.status === 'active' || session.status === 'paused');
-    if (unfinished) {
-      await runtime.completeSession(unfinished.id);
-    }
-    return runtime.getSnapshot();
+  skipCurrentAction(actionId: Id) {
+    return this.modules.execution.skipAction(actionId);
   }
 
   askStepQuestion(question: string, promptProfileId?: Id) {
@@ -536,30 +562,6 @@ export class AppService {
     return this.store.getLearningRuntimeSnapshot();
   }
 
-  async createBranch(kind: 'question' | 'debug' | 'practice', anchor: { goalId: Id; taskId: Id; actionId: Id | null }, initialContent?: string) {
-    return this.modules.branch.open(kind, anchor, initialContent);
-  }
-
-  async appendBranchMessage(threadId: Id, role: 'user' | 'assistant', content: string) {
-    return this.modules.branch.append(threadId, role, content);
-  }
-
-  async closeBranch(threadId: Id, strategy: string, options?: { summary?: string; factProposal?: any; promoteTaskId?: Id }) {
-    return this.modules.branch.close(threadId, strategy as any, options);
-  }
-
-  async promoteBranch(threadId: Id, taskId: Id, summary?: string) {
-    return this.modules.branch.promote(threadId, { taskId, summary });
-  }
-
-  async getBranchThread(threadId: Id) {
-    return this.modules.branch.getThread(threadId);
-  }
-
-  async getBranchMessages(threadId: Id) {
-    return this.modules.branch.getMessages(threadId);
-  }
-
   submitLearningResult(content: string, promptProfileId?: Id) {
     const trimmed = content.trim();
     if (!trimmed) {
@@ -578,17 +580,40 @@ export class AppService {
       throw new Error('当前没有可提交结果的 Task。');
     }
     const active = await this.getActiveSession();
-    const submission = await this.store.createSubmission(before.dailyGuideTask.id, active?.session.id ?? null, content);
-    if (active?.session.status === 'active') {
-      const paused = await this.store.pauseSession(active.session.id);
-      await this.pushSessionState(paused);
+    const submission = await this.store.createSubmission({
+      taskId: before.dailyGuideTask.id,
+      stepId: before.dailyGuideAction?.id ?? null,
+      sessionId: active?.id ?? null,
+      content
+    });
+    if (active) {
+      const ended = await this.modules.execution.endSession(active.id);
+      await this.pushSessionState(ended);
     }
-    return this.modules.evaluation.evaluate(submission, promptProfileId);
+    await this.store.closeTask(
+      before.dailyGuideTask.id,
+      'completed',
+      '用户已提交学习成果'
+    );
+    const result: LearningSubmissionResult = {
+      submission,
+      state: await this.store.getLearningRuntimeSnapshot()
+    };
+    void this.evaluateInBackground(submission, promptProfileId, true);
+    return result;
   }
 
   async endSession(sessionId: Id) {
-    const session = await this.store.getRuntimePersistence().completeSession(sessionId);
+    const session = await this.modules.execution.endSession(sessionId);
     return session;
+  }
+
+  recordEvaluationCorrection(evaluationId: Id, reason: string) {
+    return this.store.recordEvaluationCorrection(evaluationId, reason);
+  }
+
+  async decidePlanAdjustment(proposalId: Id, status: 'accepted' | 'rejected') {
+    return this.store.decidePlanAdjustment(proposalId, status);
   }
 
   decideEvaluationRecommendation(
@@ -599,34 +624,71 @@ export class AppService {
     return this.store.decideEvaluationRecommendation(evaluationId, decision, reason);
   }
 
-  recordEvaluationCorrection(evaluationId: Id, reason: string) {
-    return this.store.recordEvaluationCorrection(evaluationId, reason);
-  }
-
-  retrySubmissionEvaluation(submissionId: Id, promptProfileId?: Id) {
-    return this.coalesce(
-      `retry-evaluation:${submissionId}`,
-      () => this.modules.evaluation.retry(submissionId, promptProfileId)
-    );
-  }
-
-  decidePlanAdjustment(proposalId: Id, status: 'accepted' | 'rejected') {
-    return this.store.decidePlanAdjustment(proposalId, status);
+  async retrySubmissionEvaluation(submissionId: Id): Promise<LearningSubmission> {
+    return this.coalesce(`evaluation:${submissionId}`, async () => {
+      const submission = await this.store.getSubmissionById(submissionId);
+      if (!submission) {
+        throw new CategorizedError('user_input_error', '找不到要重试的学习成果。');
+      }
+      if (submission.evaluationStatus === 'completed') return submission;
+      await this.runEvaluation(submission, undefined, true);
+      return (await this.store.getSubmissionById(submissionId)) ?? submission;
+    });
   }
 
   async pushSessionState(session: StudySession): Promise<void> {
     const win = this.getMainWindow();
     if (win && !win.isDestroyed()) {
-      win.webContents.send(ipcChannels.sessionStateChanged, { session, block: null });
+      win.webContents.send(ipcChannels.sessionStateChanged, session);
     }
   }
 
-  listPrompts() {
-    return this.store.listPromptProfiles();
+  private async advancePreviouslySubmittedTask(): Promise<void> {
+    const snapshot = await this.store.getLearningRuntimeSnapshot();
+    if (!snapshot.dailyGuideTask || !snapshot.latestSubmission) return;
+    const active = await this.getActiveSession();
+    if (active?.taskId === snapshot.dailyGuideTask.id) {
+      const ended = await this.modules.execution.endSession(active.id);
+      await this.pushSessionState(ended);
+    }
+    await this.store.closeTask(
+      snapshot.dailyGuideTask.id,
+      'completed',
+      '用户已提交学习成果'
+    );
   }
 
-  updatePrompt(profileId: Id, content: string) {
-    return this.store.updatePrompt(profileId, content);
+  private async evaluateInBackground(
+    submission: LearningSubmission,
+    promptProfileId?: Id,
+    triggeredByUser = false
+  ): Promise<void> {
+    return this.coalesce(
+      `evaluation:${submission.id}`,
+      () => this.runEvaluation(submission, promptProfileId, triggeredByUser)
+    );
+  }
+
+  private async runEvaluation(
+    submission: LearningSubmission,
+    promptProfileId?: Id,
+    triggeredByUser = false
+  ): Promise<void> {
+    await this.store.markEvaluationEvaluating(submission.id);
+    let notification: LearningEvaluationNotification;
+    try {
+      const result = await this.modules.evaluation.evaluate(submission, promptProfileId);
+      await this.store.markEvaluationCompleted(submission.id);
+      notification = { status: 'completed', result, triggeredByUser };
+    } catch (error) {
+      const message = describeError(error).message;
+      await this.store.markEvaluationFailed(submission.id, message);
+      notification = { status: 'failed', submissionId: submission.id, message, triggeredByUser };
+    }
+    const win = this.getMainWindow();
+    if (win && !win.isDestroyed()) {
+      win.webContents.send(ipcChannels.learningEvaluationFinished, notification);
+    }
   }
 
   proposeLearnerFact(goalId: string, fact: { scope: LearnerFactScope; taskId?: string; key: string; value: string; source: LearnerFactSource; confidence?: number }) {

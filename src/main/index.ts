@@ -20,6 +20,13 @@ function createMainWindow(): BrowserWindow {
     minWidth: 600,
     minHeight: 640,
     title: '学习管家',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#F8F6F1',
+      symbolColor: '#2A2624',
+      height: 40
+    },
+    backgroundColor: '#F8F6F1',
     show: false,
     autoHideMenuBar: true,
     webPreferences: {

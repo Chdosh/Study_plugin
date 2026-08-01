@@ -39,27 +39,37 @@ describe('AppService V2 submission flow', () => {
     await removeTempDir(root);
   });
 
-  it('submits and evaluates at Task level after the final Action becomes terminal', async () => {
+  it('submits, closes the Task and Session, then evaluates in the background', async () => {
     const session = await appService.startSession('task-1');
-    await appService.completeCurrentAction();
+    await appService.completeCurrentAction('action-1');
     const beforeSubmission = await appService.getLearningState();
     expect(beforeSubmission.dailyGuideAction).toBeNull();
 
     const result = await appService.submitLearningResult('我完成了闭包说明和运行验证。');
     const submissions = await db.select().from(learningSubmissions);
-    const evaluations = await db.select().from(learningEvaluations);
+    const evaluations = await waitForEvaluation(db);
     const task = (await db.select().from(learningTasks)
       .where(eq(learningTasks.id, 'task-1')))[0];
     const storedSession = (await db.select().from(focusSessions)
       .where(eq(focusSessions.id, session.id)))[0];
 
-    expect(result.submission.stepId).toBe('task-1');
+    expect(result.submission.stepId).toBeNull();
+    expect(result.submission.taskId).toBe('task-1');
     expect(submissions[0]?.taskId).toBe('task-1');
     expect(evaluations).toHaveLength(1);
-    expect(task.status).toBe('active');
-    expect(storedSession.status).toBe('paused');
+    expect(task.status).toBe('closed');
+    expect(storedSession.status).toBe('ended');
   });
 });
+
+async function waitForEvaluation(db: Database): Promise<Array<typeof learningEvaluations.$inferSelect>> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const evaluations = await db.select().from(learningEvaluations);
+    if (evaluations.length > 0) return evaluations;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return db.select().from(learningEvaluations);
+}
 
 async function insertLearningUnit(db: Database): Promise<void> {
   const now = '2026-07-23T00:00:00.000Z';
@@ -129,10 +139,10 @@ async function insertLearningUnit(db: Database): Promise<void> {
 function createFakeSettingsService(): SettingsService {
   return {
     getRuntimeSettings: async () => ({
-      deepseekBaseUrl: 'https://example.invalid',
-      deepseekModel: 'fake-deepseek',
-      deepseekApiKey: 'test-key',
-      hasDeepseekApiKey: true,
+      aiBaseUrl: 'https://example.invalid',
+      aiModel: 'fake-ai-model',
+      aiApiKey: 'test-key',
+      hasAiApiKey: true,
       autoLaunch: false,
       defaultBlockMinutes: 10,
       dailyStudyWindows: [{ start: '20:00', end: '22:00' }]

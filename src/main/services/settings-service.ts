@@ -1,27 +1,43 @@
 import { app, safeStorage } from 'electron';
-import type { AppSettings, LearningStyle, StudyWindow } from '../../shared/types';
+import type {
+  AppSettings,
+  LearningStyle,
+  StudyWindow,
+  UpdateAppSettingsInput
+} from '../../shared/types';
 import type { StudyStore } from './store';
 
 const defaultWindows: StudyWindow[] = [{ start: '20:00', end: '22:00' }];
+// These are legacy physical database keys. Keep them behind this adapter so
+// runtime and UI code never use a provider-specific business configuration.
+const legacyAiSettingKeys = {
+  baseUrl: 'deepseekBaseUrl',
+  model: 'deepseekModel',
+  encryptedApiKey: 'deepseekApiKeyEncrypted'
+} as const;
+
+export interface RuntimeSettings extends AppSettings {
+  aiApiKey: string | null;
+}
 
 export class SettingsService {
   constructor(private readonly store: StudyStore) {}
 
   async getAppSettings(): Promise<AppSettings> {
     const [baseUrl, model, autoLaunch, blockMinutes, windowsJson, encryptedKey, learningStyle] = await Promise.all([
-      this.store.getSetting('deepseekBaseUrl'),
-      this.store.getSetting('deepseekModel'),
+      this.store.getSetting(legacyAiSettingKeys.baseUrl),
+      this.store.getSetting(legacyAiSettingKeys.model),
       this.store.getSetting('autoLaunch'),
       this.store.getSetting('defaultBlockMinutes'),
       this.store.getSetting('dailyStudyWindows'),
-      this.store.getSetting('deepseekApiKeyEncrypted'),
+      this.store.getSetting(legacyAiSettingKeys.encryptedApiKey),
       this.store.getSetting('learningStyle')
     ]);
 
     return {
-      deepseekBaseUrl: baseUrl ?? 'https://api.deepseek.com',
-      deepseekModel: model ?? 'deepseek-chat',
-      hasDeepseekApiKey: Boolean(encryptedKey),
+      aiBaseUrl: baseUrl ?? '',
+      aiModel: model ?? '',
+      hasAiApiKey: Boolean(encryptedKey),
       autoLaunch: autoLaunch === 'true',
       defaultBlockMinutes: Number(blockMinutes ?? 10),
       dailyStudyWindows: parseWindows(windowsJson),
@@ -29,20 +45,20 @@ export class SettingsService {
     };
   }
 
-  async getRuntimeSettings() {
+  async getRuntimeSettings(): Promise<RuntimeSettings> {
     const settings = await this.getAppSettings();
     return {
       ...settings,
-      deepseekApiKey: await this.getDeepseekApiKey()
+      aiApiKey: await this.getAiApiKey()
     };
   }
 
-  async updateSettings(patch: Partial<AppSettings> & { deepseekApiKey?: string }): Promise<AppSettings> {
-    if (typeof patch.deepseekBaseUrl === 'string') {
-      await this.store.putSetting('deepseekBaseUrl', patch.deepseekBaseUrl);
+  async updateSettings(patch: UpdateAppSettingsInput): Promise<AppSettings> {
+    if (typeof patch.aiBaseUrl === 'string') {
+      await this.store.putSetting(legacyAiSettingKeys.baseUrl, patch.aiBaseUrl.trim());
     }
-    if (typeof patch.deepseekModel === 'string') {
-      await this.store.putSetting('deepseekModel', patch.deepseekModel);
+    if (typeof patch.aiModel === 'string') {
+      await this.store.putSetting(legacyAiSettingKeys.model, patch.aiModel.trim());
     }
     if (typeof patch.defaultBlockMinutes === 'number') {
       await this.store.putSetting('defaultBlockMinutes', String(patch.defaultBlockMinutes));
@@ -59,14 +75,17 @@ export class SettingsService {
     if (typeof patch.learningStyle === 'string') {
       await this.store.putSetting('learningStyle', patch.learningStyle);
     }
-    if (typeof patch.deepseekApiKey === 'string' && patch.deepseekApiKey.trim()) {
-      await this.store.putSetting('deepseekApiKeyEncrypted', encryptSecret(patch.deepseekApiKey.trim()));
+    if (typeof patch.aiApiKey === 'string' && patch.aiApiKey.trim()) {
+      await this.store.putSetting(
+        legacyAiSettingKeys.encryptedApiKey,
+        encryptSecret(patch.aiApiKey.trim())
+      );
     }
     return this.getAppSettings();
   }
 
-  private async getDeepseekApiKey(): Promise<string | null> {
-    const encrypted = await this.store.getSetting('deepseekApiKeyEncrypted');
+  private async getAiApiKey(): Promise<string | null> {
+    const encrypted = await this.store.getSetting(legacyAiSettingKeys.encryptedApiKey);
     if (!encrypted) return null;
     return decryptSecret(encrypted);
   }
