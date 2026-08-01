@@ -78,6 +78,35 @@ export const databaseMigrations: DatabaseMigration[] = [
       DELETE FROM schema_migrations
         WHERE id = '2026-07-24-task-closure-reason';
     `
+  },
+  {
+    id: '2026-07-29-submission-step-evaluation-status',
+    sql: `
+      ALTER TABLE learning_submissions
+        ADD COLUMN step_id TEXT REFERENCES learning_actions(id);
+      ALTER TABLE learning_submissions
+        ADD COLUMN evaluation_status TEXT NOT NULL DEFAULT 'waiting'
+        CHECK (evaluation_status IN ('waiting', 'evaluating', 'completed', 'failed'));
+      ALTER TABLE learning_submissions
+        ADD COLUMN evaluation_attempt_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE learning_submissions
+        ADD COLUMN last_evaluation_error TEXT;
+      ALTER TABLE learning_submissions
+        ADD COLUMN last_evaluation_at TEXT;
+      CREATE INDEX IF NOT EXISTS idx_learning_submissions_eval_status
+        ON learning_submissions(evaluation_status)
+        WHERE evaluation_status IN ('waiting', 'failed');
+    `,
+    rollbackSql: `
+      DROP INDEX IF EXISTS idx_learning_submissions_eval_status;
+      ALTER TABLE learning_submissions DROP COLUMN IF EXISTS last_evaluation_at;
+      ALTER TABLE learning_submissions DROP COLUMN IF EXISTS last_evaluation_error;
+      ALTER TABLE learning_submissions DROP COLUMN IF EXISTS evaluation_attempt_count;
+      ALTER TABLE learning_submissions DROP COLUMN IF EXISTS evaluation_status;
+      ALTER TABLE learning_submissions DROP COLUMN IF EXISTS step_id;
+      DELETE FROM schema_migrations
+        WHERE id = '2026-07-29-submission-step-evaluation-status';
+    `
   }
 ];
 

@@ -185,9 +185,16 @@ export const conversationMessages = sqliteTable('conversation_messages', {
 export const learningSubmissions = sqliteTable('learning_submissions', {
   id: text('id').primaryKey(),
   taskId: text('task_id').notNull().references(() => learningTasks.id),
+  stepId: text('step_id').references(() => learningActions.id),
   goalId: text('goal_id').references(() => goals.id),
   sessionId: text('session_id').references(() => focusSessions.id),
   content: text('content').notNull(),
+  evaluationStatus: text('evaluation_status', {
+    enum: ['waiting', 'evaluating', 'completed', 'failed']
+  }).notNull().default('waiting'),
+  evaluationAttemptCount: integer('evaluation_attempt_count').notNull().default(0),
+  lastEvaluationError: text('last_evaluation_error'),
+  lastEvaluationAt: text('last_evaluation_at'),
   createdAt: text('created_at').notNull()
 });
 
