@@ -1,38 +1,108 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { SendHorizontal } from 'lucide-react';
 import type { KnowledgeItem, QuestionAnswerResult } from '../../../../shared/types';
 
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 function ChatTab({
-  onAskQuestion
+  onAskQuestion,
+  questionAnswer,
+  isAsking
 }: {
   onAskQuestion: (question: string) => void;
+  questionAnswer?: QuestionAnswerResult | null;
+  isAsking?: boolean;
 }): JSX.Element {
   const [input, setInput] = useState('');
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isAsking]);
+
+  useEffect(() => {
+    if (questionAnswer && messages.length > 0) {
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage.role === 'user') {
+        setMessages((prev) => [
+          ...prev,
+          { id: `assistant-${Date.now()}`, role: 'assistant', content: questionAnswer.answer }
+        ]);
+      }
+    }
+  }, [questionAnswer]);
 
   function send(): void {
     const value = input.trim();
     if (!value) return;
+    setMessages((prev) => [
+      ...prev,
+      { id: `user-${Date.now()}`, role: 'user', content: value }
+    ]);
     setInput('');
     onAskQuestion(value);
   }
 
   return (
     <>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <div style={{
-            width: 22, height: 22, borderRadius: '50%',
-            background: 'var(--color-bg-surface-muted)',
-            display: 'grid', placeItems: 'center', fontSize: 10, flexShrink: 0
-          }}>A</div>
-          <div style={{
-            maxWidth: '85%', padding: '10px 14px', borderRadius: 12,
-            background: 'var(--color-bg-surface-muted)', fontSize: 13, lineHeight: 1.65,
-            borderBottomLeftRadius: 3
-          }}>
-            你好！我是你的 AI 学习助手。随时可以问我关于当前步骤的问题。
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, overflowY: 'auto' }}>
+        {messages.length === 0 && (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{
+              width: 22, height: 22, borderRadius: '50%',
+              background: 'var(--color-bg-surface-muted)',
+              display: 'grid', placeItems: 'center', fontSize: 10, flexShrink: 0
+            }}>A</div>
+            <div style={{
+              maxWidth: '85%', padding: '10px 14px', borderRadius: 12,
+              background: 'var(--color-bg-surface-muted)', fontSize: 13, lineHeight: 1.65,
+              borderBottomLeftRadius: 3
+            }}>
+              你好！我是你的 AI 学习助手。随时可以问我关于当前步骤的问题。
+            </div>
           </div>
-        </div>
+        )}
+        {messages.map((msg) => (
+          <div key={msg.id} style={{ display: 'flex', gap: 8, justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
+            {msg.role === 'assistant' && <div style={{
+              width: 22, height: 22, borderRadius: '50%',
+              background: 'var(--color-bg-surface-muted)',
+              display: 'grid', placeItems: 'center', fontSize: 10, flexShrink: 0
+            }}>A</div>}
+            <div style={{
+              maxWidth: '85%', padding: '10px 14px', borderRadius: 12,
+              background: msg.role === 'user' ? 'var(--color-primary)' : 'var(--color-bg-surface-muted)',
+              color: msg.role === 'user' ? 'white' : 'var(--color-text)',
+              fontSize: 13, lineHeight: 1.65,
+              borderBottomRightRadius: msg.role === 'user' ? 3 : 12,
+              borderBottomLeftRadius: msg.role === 'assistant' ? 3 : 12
+            }}>
+              {msg.content}
+            </div>
+          </div>
+        ))}
+        {isAsking && (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{
+              width: 22, height: 22, borderRadius: '50%',
+              background: 'var(--color-bg-surface-muted)',
+              display: 'grid', placeItems: 'center', fontSize: 10, flexShrink: 0
+            }}>A</div>
+            <div style={{
+              maxWidth: '85%', padding: '10px 14px', borderRadius: 12,
+              background: 'var(--color-bg-surface-muted)', fontSize: 13, lineHeight: 1.65,
+              borderBottomLeftRadius: 3, color: 'var(--color-text-subtle)'
+            }}>
+              正在思考...
+            </div>
+          </div>
+        )}
+        <div ref={messagesEndRef} />
       </div>
       <div className="teacher-input" style={{ marginTop: 'auto' }}>
         <div className="teacher-input-box">
@@ -104,8 +174,7 @@ export function TeacherSidebar({
   onAskQuestion,
   contextSummary,
   questionAnswer,
-  activeThreadId,
-  onResolveQuestion
+  isAsking
 }: {
   knowledgeItems: KnowledgeItem[];
   collapsed: boolean;
@@ -113,8 +182,7 @@ export function TeacherSidebar({
   onAskQuestion: (question: string) => void;
   contextSummary?: string;
   questionAnswer?: QuestionAnswerResult | null;
-  activeThreadId?: string | null;
-  onResolveQuestion?: (threadId: string) => void;
+  isAsking?: boolean;
 }): JSX.Element {
   const [activeTab, setActiveTab] = useState<'chat' | 'context'>('chat');
 
@@ -141,7 +209,7 @@ export function TeacherSidebar({
       <div className="teacher-body">
         {contextSummary && <p className="teacher-context-line" title={contextSummary}>当前上下文：{contextSummary}</p>}
         {activeTab === 'chat' ? (
-          <><ChatTab onAskQuestion={onAskQuestion} />{questionAnswer && <div className="teacher-answer"><strong>导师回答</strong><p>{questionAnswer.answer}</p>{activeThreadId && onResolveQuestion && <button type="button" className="secondary-action" onClick={() => onResolveQuestion(activeThreadId)}>结束问题，返回当前行动</button>}</div>}</>
+          <ChatTab onAskQuestion={onAskQuestion} questionAnswer={questionAnswer} isAsking={isAsking} />
         ) : (
           <ContextTab knowledgeItems={knowledgeItems} />
         )}

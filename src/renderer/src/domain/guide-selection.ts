@@ -2,7 +2,6 @@ import type { DailyGuideTask, LearningRuntimeSnapshot, StudySession } from '../.
 
 export interface CurrentGuideTaskSelection {
   task: DailyGuideTask | null;
-  planBlockId: string | null;
 }
 
 export function getCurrentGuideTaskSelection(
@@ -15,7 +14,7 @@ export function getCurrentGuideTaskSelection(
   const findTask = (taskId: string | null): DailyGuideTask | null => {
     if (!taskId) return null;
     const found = tasks.find((item) => item.id === taskId) ?? null;
-    if (found?.status === 'done') return null;
+    if (found?.status === 'closed') return null;
     return found;
   };
 
@@ -31,5 +30,5 @@ export function getCurrentGuideTaskSelection(
       ?? null;
   }
 
-  return { task, planBlockId: task?.legacyPlanBlockId ?? null };
+  return { task };
 }

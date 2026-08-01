@@ -1,24 +1,3 @@
-/* Shared components — borderless Claude style */
-
-.icon-button {
-  position: relative;
-  width: var(--control-height-sm);
-  height: var(--control-height-sm);
-  display: inline-grid;
-  place-items: center;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-text-primary);
-  cursor: pointer;
-}
-
-.icon-button:hover {
-  background: var(--color-bg-surface-muted);
-}
-
-/* ── Buttons ── */
-
 .primary-action,
 .secondary-action,
 .text-action {
@@ -73,12 +52,6 @@
   color: var(--color-text-primary);
 }
 
-.secondary-action.small {
-  min-height: var(--control-height-xs);
-  padding: var(--button-padding-xs);
-  font-size: var(--font-size-xs);
-}
-
 .primary-action:disabled,
 .secondary-action:disabled,
 .text-action:disabled {
@@ -90,115 +63,11 @@
   width: 100%;
 }
 
-/* ── Card / Surface (borderless) ── */
-
-.surface,
-.context-card,
-.context-section {
+.surface {
   min-width: 0;
   box-sizing: border-box;
-}
-
-.surface {
   padding: var(--card-padding);
 }
-
-.context-card,
-.context-section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--card-padding);
-}
-
-.context-card h3,
-.context-section h3 {
-  margin: 0;
-  color: var(--color-text-primary);
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-semibold);
-}
-
-.context-card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-/* ── Inputs ── */
-
-.input,
-.input-textarea {
-  width: 100%;
-  padding: var(--input-padding-y) var(--input-padding-x);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-surface);
-  color: var(--color-text-primary);
-  font: inherit;
-  line-height: var(--line-height-relaxed);
-  transition: border-color .15s, box-shadow .15s;
-}
-
-.input {
-  min-height: var(--control-height-md);
-}
-
-.input-textarea {
-  min-height: var(--textarea-min-height);
-  resize: vertical;
-}
-
-.input:focus,
-.input-textarea:focus {
-  border-color: var(--color-primary);
-  outline: 0;
-  box-shadow: 0 0 0 3px var(--color-primary-surface);
-}
-
-.assistant-field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  color: var(--color-text-primary);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-}
-
-.assistant-field textarea,
-.settings-card textarea,
-.review-note-card textarea {
-  width: 100%;
-  min-height: var(--textarea-min-height);
-  padding: var(--input-padding-y) var(--input-padding-x);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-surface);
-  color: var(--color-text-primary);
-  font: inherit;
-  resize: vertical;
-  line-height: var(--line-height-relaxed);
-  transition: border-color .15s, box-shadow .15s;
-}
-
-.assistant-field textarea:focus,
-.settings-card textarea:focus,
-.review-note-card textarea:focus {
-  border-color: var(--color-primary);
-  outline: 0;
-  box-shadow: 0 0 0 3px var(--color-primary-surface);
-}
-
-.assistant-field small {
-  position: absolute;
-  right: var(--space-3);
-  bottom: var(--space-3);
-  color: var(--color-text-subtle);
-  font-weight: var(--font-weight-regular);
-}
-
-/* ── State Panel ── */
 
 .state-panel {
   display: flex;
@@ -226,8 +95,6 @@
 .state-panel.ai-unavailable {
   color: var(--color-warning);
 }
-
-/* ── Message content ── */
 
 .message-content {
   display: flex;
@@ -278,8 +145,6 @@
   line-height: 1.4;
 }
 
-/* ── Feedback ── */
-
 .inline-feedback {
   display: inline-flex;
   align-items: center;
@@ -306,8 +171,6 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* ── Misc ── */
-
 .micro-hint {
   display: flex;
   align-items: flex-start;
@@ -317,16 +180,6 @@
   line-height: var(--line-height-normal);
 }
 
-.section-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: var(--space-3);
-  margin-bottom: var(--space-3);
-}
-
-.section-heading h2,
-.section-heading h3,
 .surface h2 {
   margin: 0;
   color: var(--color-text-primary);
@@ -334,20 +187,6 @@
   line-height: 1.3;
   font-weight: var(--font-weight-semibold);
 }
-
-.section-heading p {
-  margin: var(--space-1) 0 0;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-normal);
-}
-
-@keyframes notice-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
-}
-
-/* ── Modal ── */
 
 .modal-overlay {
   position: fixed;
@@ -383,13 +222,6 @@ button:disabled {
 
 button:disabled:hover {
   opacity: var(--disabled-opacity);
-}
-
-.bar-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 32px;
 }
 
 @media (max-width: 760px) {

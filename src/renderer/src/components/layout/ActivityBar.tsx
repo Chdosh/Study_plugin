@@ -32,7 +32,7 @@ export function ActivityBar({
         </button>
       ))}
       <div className="ab-spacer" />
-      {sessionLabel ? <button type="button" className="ab-session-status" title={`当前 Session：${sessionLabel}`} aria-label={`当前 Session：${sessionLabel}`} onClick={() => onSelect('study')}><Clock3 size={15} /><span className="ab-session-dot" /></button> : <div className="ab-status" title="本地运行中" />}
+      {sessionLabel ? <button type="button" className="ab-session-status" title={`当前学习：${sessionLabel}`} aria-label={`当前学习：${sessionLabel}`} onClick={() => onSelect('study')}><Clock3 size={15} /><span className="ab-session-dot" /></button> : <div className="ab-status" title="本地运行中" />}
     </div>
   );
 }

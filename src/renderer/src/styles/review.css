@@ -3,6 +3,15 @@
 .records-header h1 { margin: 0; color: var(--color-text-primary); font-size: var(--font-size-2xl); font-weight: var(--font-weight-bold); }
 .records-header p { max-width: 680px; margin: 8px 0 0; color: var(--color-text-secondary); font-size: var(--font-size-sm); line-height: var(--line-height-normal); }
 .records-loading { display: inline-flex; align-items: center; gap: 8px; color: var(--color-text-subtle); font-size: var(--font-size-sm); }
+.records-history-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 16px; border: 1px solid var(--color-border-default); border-radius: var(--radius-lg); background: var(--color-bg-surface); }
+.records-history-toolbar label { color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+.records-history-toolbar select { min-width: 260px; padding: 8px 10px; border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-surface); color: var(--color-text-primary); font: inherit; }
+.records-history-readonly { color: var(--color-text-subtle); font-size: var(--font-size-sm); }
+.records-history-recovery { display: grid; gap: 12px; padding: 16px 20px; border: 1px solid var(--color-primary-border); border-radius: var(--radius-lg); background: var(--color-primary-surface); }
+.records-history-recovery > div:first-child { display: grid; gap: 4px; }
+.records-history-recovery p { margin: 0; color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+.records-history-recovery-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 10px; border-top: 1px solid var(--color-primary-border); color: var(--color-text-primary); font-size: var(--font-size-sm); }
+.records-history-recovery-row small { color: var(--color-text-subtle); }
 
 .records-pending { display: grid; gap: 0; overflow: hidden; border: 1px solid var(--color-primary-border); border-radius: var(--radius-lg); background: var(--color-bg-surface); box-shadow: var(--shadow-soft); }
 .records-pending > header { padding: 20px 24px 14px; }
@@ -66,4 +75,6 @@
   .records-pending-row { grid-template-columns: 38px minmax(0, 1fr); }
   .records-pending-row > button,
   .records-pending-buttons { grid-column: 2; justify-self: start; flex-wrap: wrap; }
+  .records-history-recovery-row { align-items: flex-start; flex-direction: column; }
+  .records-history-toolbar select { min-width: min(100%, 320px); }
 }

@@ -1,28 +1,18 @@
 import { useState } from 'react';
 import {
-  AlertTriangle,
   CheckCircle2,
   Circle,
   CircleDot,
-  Lock,
-  TrendingUp
+  Lock
 } from 'lucide-react';
-import type { KnowledgeItem, NearTermPlanItem, RoadmapStage } from '../../../../shared/types';
+import type { NearTermPlanItem, RoadmapStage } from '../../../../shared/types';
 
 export function RoadmapTree({
   stages,
-  nearTermPlanItems,
-  knowledgeItems,
-  collapsed,
-  onToggleCollapse,
-  onSelectTask
+  nearTermPlanItems
 }: {
   stages: RoadmapStage[];
   nearTermPlanItems: NearTermPlanItem[];
-  knowledgeItems: KnowledgeItem[];
-  collapsed: boolean;
-  onToggleCollapse: () => void;
-  onSelectTask?: (taskId: string) => void;
 }): JSX.Element {
   const [expandedStages, setExpandedStages] = useState<Set<string>>(
     new Set(stages.filter((s) => s.status === 'active').map((s) => s.id))
@@ -36,8 +26,6 @@ export function RoadmapTree({
       return next;
     });
   }
-
-  if (collapsed) return <></>;
 
   function getPlanStatus(items: NearTermPlanItem[]): 'done' | 'active' | 'pending' | 'locked' {
     if (items.length === 0) return 'pending';
@@ -55,11 +43,7 @@ export function RoadmapTree({
   }
 
   return (
-    <aside className="roadmap" style={{ display: collapsed ? 'none' : 'flex' }}>
-      <div className="roadmap-hdr">
-        <span>学习大纲</span>
-        <button className="collapse-btn" onClick={onToggleCollapse} title="折叠大纲">«</button>
-      </div>
+    <aside className="roadmap">
       <div className="roadmap-tree">
         {stages.map((stage) => {
           const items = nearTermPlanItems.filter((item) => item.roadmapStageId === stage.id);
@@ -80,8 +64,7 @@ export function RoadmapTree({
                   {items.map((item) => (
                     <div
                       key={item.id}
-                      className={`tree-node ${onSelectTask ? 'is-interactive' : ''}`}
-                      onClick={onSelectTask ? () => onSelectTask(item.id) : undefined}
+                      className="tree-node"
                       title={item.title}
                     >
                       <span className={`dot ${item.sessionStatus === 'completed' ? 'done' : item.sessionStatus === 'active' ? 'active' : 'pending'}`} />

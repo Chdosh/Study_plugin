@@ -18,7 +18,6 @@ function makeSnapshot(overrides: Partial<LearningRuntimeSnapshot> = {}): Learnin
     dailyGuide: {
       id: 'guide-1',
       goalId: 'goal-1',
-      planId: 'plan-1',
       nearTermPlanItemId: 'day-1',
       date: '2026-07-11',
       status: 'confirmed',
@@ -36,7 +35,6 @@ function makeSnapshot(overrides: Partial<LearningRuntimeSnapshot> = {}): Learnin
           id: 'task-1',
           guideId: 'guide-1',
           roadmapStageId: 'stage-1',
-          legacyPlanBlockId: null,
           title: '任务一',
           objective: '目标',
           scope: '范围',
@@ -49,56 +47,42 @@ function makeSnapshot(overrides: Partial<LearningRuntimeSnapshot> = {}): Learnin
           doneWhen: [],
           quickHint: '',
           evaluationMode: 'ai',
-          submissionPolicy: 'once_after_task',
-          carryoverAllowed: false,
           status: 'active',
           closureKind: null,
           closureReason: null,
-          progressPercent: 0,
-          completedActions: [],
-          remainingActions: ['act-1', 'act-2'],
-          currentAction: null,
           nextStartPoint: null,
-          totalElapsedMinutes: 0,
           position: 0,
           createdAt: '',
           updatedAt: ''
         }
       ],
-      blocks: []
     },
     dailyGuideTask: {
       id: 'task-1',
       guideId: 'guide-1',
       roadmapStageId: 'stage-1',
-      legacyPlanBlockId: null,
       title: '任务一',
       objective: '目标',
       scope: '范围',
       estimatedMinutes: { min: 20, target: 30, max: 40 },
-      actions: [],
+      actions: [
+        { id: 'act-1', taskId: 'task-1', title: '步骤1', instruction: '说明', checkpoint: '标准', requirement: 'optional', status: 'planned', progressNote: null, completedAt: null, origin: 'guide_generated', sourceAiReviewId: null, position: 0 },
+        { id: 'act-2', taskId: 'task-1', title: '步骤2', instruction: '说明', checkpoint: '标准', requirement: 'optional', status: 'planned', progressNote: null, completedAt: null, origin: 'guide_generated', sourceAiReviewId: null, position: 1 }
+      ],
       deliverable: '',
       doneWhen: [],
       quickHint: '',
       evaluationMode: 'ai',
-      submissionPolicy: 'once_after_task',
-      carryoverAllowed: false,
       status: 'active',
       closureKind: null,
       closureReason: null,
-      progressPercent: 0,
-      completedActions: [],
-      remainingActions: ['act-1', 'act-2'],
-      currentAction: null,
       nextStartPoint: null,
-      totalElapsedMinutes: 0,
       position: 0,
       createdAt: '',
       updatedAt: ''
     },
     dailyGuideAction: { id: 'act-1', taskId: 'task-1', title: '步骤1', instruction: '说明1', checkpoint: '标准1', requirement: 'optional', status: 'planned', progressNote: null, completedAt: null, origin: 'guide_generated', sourceAiReviewId: null, position: 0 },
     roadmapStage: { id: 'stage-1', goalId: 'goal-1', title: '阶段一', objective: '', direction: '', successCriteria: '', targetDate: null, status: 'active', position: 0, createdAt: '', updatedAt: '' },
-    stageConflict: null,
     questionThread: null,
     questionMessages: [],
     latestSubmission: null,
@@ -127,13 +111,14 @@ describe('computeCommandPolicy', () => {
     expect(policy.canTerminate).toBe(false);
   });
 
-  it('allows submitting evidence without starting a Focus Session', () => {
+  it('keeps start as the only normal-flow command before a Focus Session', () => {
     const snapshot = makeSnapshot({ state: { ...makeSnapshot().state, sessionStatus: 'idle' } });
     const policy = computeCommandPolicy(snapshot);
 
     expect(policy.canStart).toBe(true);
-    expect(policy.canSubmit).toBe(true);
-    expect(policy.canCloseTask).toBe(true);
+    expect(policy.canSubmit).toBe(false);
+    expect(policy.primaryCommand).toBe('start');
+    expect(policy).not.toHaveProperty('canCloseTask');
   });
 
   it('enables pause and complete action when session active', () => {
@@ -148,12 +133,14 @@ describe('computeCommandPolicy', () => {
     expect(policy.sessionStatus).toBe('active');
   });
 
-  it('allows submitting evidence before every Action is terminal', () => {
+  it('keeps the current Action as the single primary command while learning', () => {
     const snapshot = makeSnapshot({ state: { ...makeSnapshot().state, sessionStatus: 'active' } });
     const policy = computeCommandPolicy(snapshot);
 
     expect(policy.canCompleteAction).toBe(true);
     expect(policy.canSubmit).toBe(true);
+    expect(policy.primaryCommand).toBe('complete_action');
+    expect(policy).not.toHaveProperty('canCloseTask');
   });
 
   it('enables resume and terminate when session paused', () => {
@@ -166,7 +153,7 @@ describe('computeCommandPolicy', () => {
     expect(policy.sessionStatus).toBe('paused');
   });
 
-  it('allows submit after the final action while the task remains active until evaluation passes', () => {
+  it('allows submit after the final action before submission advances the task', () => {
     const base = makeSnapshot();
     const completedActions = base.dailyGuide!.tasks[0].actions.map((action) => ({ ...action, status: 'done' as const }));
     const snapshot = makeSnapshot({
@@ -177,11 +164,7 @@ describe('computeCommandPolicy', () => {
           {
             ...base.dailyGuide!.tasks[0],
             status: 'active',
-            progressPercent: 100,
             actions: completedActions,
-            completedActions: completedActions.map((action) => action.id),
-            remainingActions: [],
-            currentAction: null,
             nextStartPoint: '行动步骤已完成，可以提交当前成果。'
           },
           {
@@ -195,11 +178,7 @@ describe('computeCommandPolicy', () => {
       dailyGuideTask: {
         ...base.dailyGuideTask!,
         status: 'active',
-        progressPercent: 100,
         actions: completedActions,
-        completedActions: completedActions.map((action) => action.id),
-        remainingActions: [],
-        currentAction: null,
         nextStartPoint: '行动步骤已完成，可以提交当前成果。'
       },
       dailyGuideAction: completedActions.at(-1) ?? null
@@ -208,8 +187,9 @@ describe('computeCommandPolicy', () => {
     expect(policy.canStart).toBe(false);
     expect(policy.canCompleteAction).toBe(false);
     expect(policy.canSkipAction).toBe(false);
-    expect(policy.canCloseTask).toBe(true);
     expect(policy.canSubmit).toBe(true);
+    expect(policy.primaryCommand).toBe('submit');
+    expect(policy).not.toHaveProperty('canCloseTask');
     expect(policy.sessionStatus).toBe('active');
   });
 
@@ -227,23 +207,7 @@ describe('computeCommandPolicy', () => {
     expect(policy.reasons.canStart).toBeTruthy();
   });
 
-  it('blocks learning commands when the shared context reports a stage conflict', () => {
-    const snapshot = makeSnapshot({
-      stageConflict: {
-        kind: 'task_day_mismatch',
-        message: '阶段不一致',
-        taskStage: { id: 'stage-2', title: '项目阶段' },
-        shortPlanDayStage: { id: 'stage-1', title: '基础阶段' }
-      }
-    });
-    const policy = computeCommandPolicy(snapshot);
-    expect(policy.canStart).toBe(false);
-    expect(policy.canCompleteAction).toBe(false);
-    expect(policy.canSubmit).toBe(false);
-    expect(policy.reasons.canStart).toContain('阶段归属');
-  });
-
-  it('allows starting the visible current task but blocks old Runtime commands when targets differ', () => {
+  it('does not start another visible task while a previous Session remains open', () => {
     const snapshot = makeSnapshot({
       state: { ...makeSnapshot().state, sessionStatus: 'active' }
     });
@@ -254,12 +218,14 @@ describe('computeCommandPolicy', () => {
       taskStatus: 'planned'
     });
 
-    expect(policy.canStart).toBe(true);
+    expect(policy.canStart).toBe(false);
     expect(policy.canPause).toBe(false);
     expect(policy.canCompleteAction).toBe(false);
     expect(policy.canSkipAction).toBe(false);
     expect(policy.canAskQuestion).toBe(false);
+    expect(policy.canTerminate).toBe(true);
     expect(policy.currentTaskId).toBe('task-2');
-    expect(policy.sessionStatus).toBe('not_started');
+    expect(policy.sessionStatus).toBe('active');
+    expect(policy.primaryCommand).toBe('end_session');
   });
 });

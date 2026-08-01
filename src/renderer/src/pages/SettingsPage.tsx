@@ -11,8 +11,8 @@ export function SettingsPage({
   runAction: (label: string, action: () => Promise<void>) => Promise<void>;
   onSaved: () => Promise<void>;
 }): JSX.Element {
-  const [baseUrl, setBaseUrl] = useState(settings.deepseekBaseUrl);
-  const [model, setModel] = useState(settings.deepseekModel);
+  const [baseUrl, setBaseUrl] = useState(settings.aiBaseUrl);
+  const [model, setModel] = useState(settings.aiModel);
   const [apiKey, setApiKey] = useState('');
   const [blockMinutes, setBlockMinutes] = useState(settings.defaultBlockMinutes);
   const [learningStyle, setLearningStyle] = useState(settings.learningStyle ?? 'detailed');
@@ -29,6 +29,13 @@ export function SettingsPage({
     byOperation: Record<string, { inputTokens: number; outputTokens: number; calls: number }>;
     byDate: Record<string, { inputTokens: number; outputTokens: number; calls: number }>;
   } | null>(null);
+  const providerStatus = settings.aiProviderStatus ?? {
+    state: 'unverified' as const,
+    checkedAt: null,
+    model: settings.aiModel,
+    errorCategory: null,
+    message: '配置尚未通过实际 AI 请求验证。'
+  };
 
   useEffect(() => {
     if (window.studyApp?.stats?.getTokenCost) {
@@ -69,9 +76,9 @@ export function SettingsPage({
     setSaveStatus('saving');
     try {
       await window.studyApp.settings.update({
-        deepseekBaseUrl: baseUrl,
-        deepseekModel: model,
-        deepseekApiKey: apiKey,
+        aiBaseUrl: baseUrl,
+        aiModel: model,
+        aiApiKey: apiKey,
         defaultBlockMinutes: blockMinutes,
         autoLaunch: settings.autoLaunch,
         dailyStudyWindows: settings.dailyStudyWindows,
@@ -87,8 +94,8 @@ export function SettingsPage({
   }
 
   const hasUnsavedChanges = Boolean(apiKey)
-    || baseUrl !== settings.deepseekBaseUrl
-    || model !== settings.deepseekModel
+    || baseUrl !== settings.aiBaseUrl
+    || model !== settings.aiModel
     || blockMinutes !== settings.defaultBlockMinutes
     || learningStyle !== (settings.learningStyle ?? 'detailed');
 
@@ -107,13 +114,35 @@ export function SettingsPage({
           </div>
           <div className="settings-row">
             <span>API Key</span>
-            <span className={`status-badge ${settings.hasDeepseekApiKey ? 'success' : ''}`}>{settings.hasDeepseekApiKey ? '已配置' : '未配置'}</span>
+            <span className={`status-badge ${settings.hasAiApiKey ? 'success' : ''}`}>{settings.hasAiApiKey ? '已配置' : '未配置'}</span>
           </div>
+          <div className="settings-row">
+            <span>AI 连接</span>
+            <span className={`status-badge ${
+              providerStatus.state === 'available'
+                ? 'success'
+                : providerStatus.state === 'failed'
+                  ? 'failed'
+                  : ''
+            }`}>
+              {providerStatus.state === 'available'
+                ? '最近可用'
+                : providerStatus.state === 'failed'
+                  ? '最近失败'
+                  : '等待验证'}
+            </span>
+          </div>
+          <p className={`settings-connection-detail ${providerStatus.state === 'failed' ? 'failed' : ''}`}>
+            {providerStatus.message}
+            {providerStatus.checkedAt
+              ? ` 最近检查：${new Date(providerStatus.checkedAt).toLocaleString()}`
+              : ''}
+          </p>
           <label className="settings-field">
             <input
               value={apiKey}
               onChange={(event) => setApiKey(event.target.value)}
-              placeholder={settings.hasDeepseekApiKey ? '输入新密钥以覆盖（已保存的密钥不会显示）' : '粘贴 DeepSeek API Key'}
+              placeholder={settings.hasAiApiKey ? '输入新密钥以覆盖（已保存的密钥不会显示）' : '粘贴当前 AI 服务的 API Key'}
               type="password"
               autoComplete="off"
             />

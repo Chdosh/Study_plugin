@@ -1,4 +1,8 @@
 import type { LearningRuntimeSnapshot } from '../../../shared/types';
+import {
+  deriveLearningFlow,
+  type LearningPrimaryCommand
+} from '../../../shared/learning-flow';
 
 export type SessionStatus = 'not_started' | 'active' | 'paused' | 'completed';
 
@@ -8,10 +12,10 @@ export interface CommandPolicy {
   canResume: boolean;
   canCompleteAction: boolean;
   canSkipAction: boolean;
-  canCloseTask: boolean;
   canAskQuestion: boolean;
   canSubmit: boolean;
   canTerminate: boolean;
+  primaryCommand: LearningPrimaryCommand;
   reasons: Partial<Record<keyof Omit<CommandPolicy, 'reasons'>, string>>;
   currentTaskId: string | null;
   currentActionId: string | null;
@@ -21,7 +25,7 @@ export interface CommandPolicy {
 export interface VisibleCommandTarget {
   guideId: string;
   taskId: string;
-  taskStatus: 'planned' | 'active' | 'done' | 'skipped' | 'deferred';
+  taskStatus: 'planned' | 'active' | 'deferred' | 'closed';
 }
 
 export function computeCommandPolicy(
@@ -34,10 +38,10 @@ export function computeCommandPolicy(
     canResume: false,
     canCompleteAction: false,
     canSkipAction: false,
-    canCloseTask: false,
     canAskQuestion: false,
     canSubmit: false,
     canTerminate: false,
+    primaryCommand: 'none',
     reasons: {},
     currentTaskId: null,
     currentActionId: null,
@@ -48,26 +52,29 @@ export function computeCommandPolicy(
     return { ...blank, reasons: { canStart: '暂无学习状态' } };
   }
 
-  if (snapshot.stageConflict) {
-    return { ...blank, reasons: { canStart: '当前任务的阶段归属需要先确认' } };
-  }
-
   const targetMismatch = Boolean(visibleTarget && (
     snapshot.dailyGuide?.id !== visibleTarget.guideId ||
     snapshot.dailyGuideTask?.id !== visibleTarget.taskId
   ));
   if (visibleTarget && targetMismatch) {
-    const canStart = visibleTarget.taskStatus === 'planned' || visibleTarget.taskStatus === 'active';
+    const hasOpenSession =
+      snapshot.state.sessionStatus === 'active' || snapshot.state.sessionStatus === 'paused';
+    const canStart = !hasOpenSession
+      && (visibleTarget.taskStatus === 'planned' || visibleTarget.taskStatus === 'active');
     return {
       ...blank,
       canStart,
-      reasons: canStart ? {} : { canStart: '当前任务已结束' },
+      canTerminate: hasOpenSession,
+      primaryCommand: canStart ? 'start' : hasOpenSession ? 'end_session' : 'none',
+      reasons: canStart ? {} : { canStart: '请先处理当前未结束的学习过程。' },
       currentTaskId: visibleTarget.taskId,
-      sessionStatus: 'not_started'
+      sessionStatus: snapshot.state.sessionStatus === 'active'
+        ? 'active'
+        : snapshot.state.sessionStatus === 'paused' ? 'paused' : 'not_started'
     };
   }
 
-  const { state, dailyGuide, dailyGuideTask, dailyGuideAction } = snapshot;
+  const { state, dailyGuide, dailyGuideTask } = snapshot;
   const sessionStatus: SessionStatus =
     state.sessionStatus === 'idle' || !state.sessionStatus
       ? 'not_started'
@@ -86,7 +93,7 @@ export function computeCommandPolicy(
   }
 
   const allTasksTerminal = dailyGuide.tasks.every((task) =>
-    task.status === 'done' || task.status === 'skipped'
+    task.status === 'closed'
   );
   if (allTasksTerminal) {
     reasons.canStart = '当前学习单元中的 Task 均已结束';
@@ -99,25 +106,23 @@ export function computeCommandPolicy(
     };
   }
 
-  const taskTerminal = dailyGuideTask.status === 'done' || dailyGuideTask.status === 'skipped';
-  const actionDone = !dailyGuideAction || dailyGuideAction.status !== 'planned';
-  const allActionsTerminal = dailyGuideTask.actions.length > 0
-    && dailyGuideTask.actions.every((action) => action.status === 'done' || action.status === 'skipped');
+  const derived = deriveLearningFlow(snapshot);
+  const {
+    canStart,
+    canPause,
+    canResume,
+    canCompleteAction,
+    canSkipAction,
+    canAskQuestion,
+    canSubmit,
+    canTerminate,
+    primaryCommand
+  } = derived;
 
-  const canStart = !allTasksTerminal && sessionStatus !== 'active';
-  const canPause = sessionStatus === 'active';
-  const canResume = sessionStatus === 'paused';
-  const canCompleteAction = sessionStatus === 'active' && !taskTerminal && !actionDone;
-  const canSkipAction = sessionStatus === 'active' && !taskTerminal && !actionDone;
-  const canCloseTask = !taskTerminal;
-  const canAskQuestion = sessionStatus === 'active' || sessionStatus === 'paused';
-  const canSubmit = !taskTerminal;
-  const canTerminate = sessionStatus === 'paused' || sessionStatus === 'active';
-
-  if (!canStart && !taskTerminal && sessionStatus === 'active') {
+  if (!canStart && sessionStatus === 'active') {
     reasons.canStart = '已有进行中的会话';
   }
-  if (!canCompleteAction && !canSkipAction && actionDone && !taskTerminal) {
+  if (!canCompleteAction && !canSkipAction && !derived.currentActionId) {
     reasons.canCompleteAction = '当前没有可执行的操作';
   }
 
@@ -127,13 +132,13 @@ export function computeCommandPolicy(
     canResume,
     canCompleteAction,
     canSkipAction,
-    canCloseTask,
     canAskQuestion,
     canSubmit,
-    canTerminate: canTerminate || false,
+    canTerminate,
+    primaryCommand,
     reasons,
     currentTaskId: dailyGuideTask.id,
-    currentActionId: dailyGuideAction?.id ?? null,
+    currentActionId: derived.currentActionId,
     sessionStatus
   };
 }
