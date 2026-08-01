@@ -29,23 +29,6 @@ const stringArrayFromAiSchema = z.preprocess((value) => {
   return value;
 }, z.array(z.string()).default([]));
 
-const percentNumberFromAiSchema = z.preprocess((value) => {
-  if (typeof value === 'string') {
-    const match = value.match(/-?\d+(\.\d+)?/);
-    if (match) {
-      const n = Number(match[0]);
-      if (Number.isFinite(n)) {
-        return Math.max(0, Math.min(100, Math.round(n)));
-      }
-    }
-    return value;
-  }
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.max(0, Math.min(100, Math.round(value)));
-  }
-  return value;
-}, z.number().int().min(0).max(100));
-
 const evaluationResultFromAiSchema = z.preprocess((value) => {
   if (typeof value !== 'string') return value;
   const normalized = value.trim().toLowerCase();
@@ -56,7 +39,17 @@ const evaluationResultFromAiSchema = z.preprocess((value) => {
   return value;
 }, z.enum(['passed', 'partial', 'failed', 'unclear']));
 
-const recommendedActionFromAiSchema = z.preprocess((value) => {
+const recommendedActionValues = [
+  'advance',
+  'explain_again',
+  'remediate',
+  'practice',
+  'simplify',
+  'complete_task',
+  'request_user_decision'
+] as const;
+
+function normalizeRecommendedAction(value: unknown): unknown {
   if (typeof value !== 'string') return value;
   const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
   const aliases: Record<string, string> = {
@@ -71,6 +64,8 @@ const recommendedActionFromAiSchema = z.preprocess((value) => {
     重新解释: 'explain_again',
     补充讲解: 'explain_again',
     remediation: 'remediate',
+    retry: 'remediate',
+    resubmit: 'remediate',
     fix: 'remediate',
     补救: 'remediate',
     纠偏: 'remediate',
@@ -79,6 +74,8 @@ const recommendedActionFromAiSchema = z.preprocess((value) => {
     练习: 'practice',
     增加练习: 'practice',
     easier: 'simplify',
+    lower_difficulty: 'simplify',
+    simplify_task: 'simplify',
     simplify_step: 'simplify',
     降低难度: 'simplify',
     简化: 'simplify',
@@ -95,15 +92,12 @@ const recommendedActionFromAiSchema = z.preprocess((value) => {
     需要用户决定: 'request_user_decision'
   };
   return aliases[normalized] ?? value;
-}, z.enum([
-  'advance',
-  'explain_again',
-  'remediate',
-  'practice',
-  'simplify',
-  'complete_task',
-  'request_user_decision'
-]));
+}
+
+const recommendedActionFromAiSchema = z.preprocess(
+  normalizeRecommendedAction,
+  z.enum(recommendedActionValues)
+);
 
 const booleanFromAiSchema = z.preprocess((value) => {
   if (typeof value === 'boolean') return value;
@@ -254,9 +248,7 @@ export const dailyGuideAgentOutputSchema = z.object({
       deliverable: z.string().min(1),
       doneWhen: stringArrayFromAiSchema,
       quickHint: z.string().min(1),
-      evaluationMode: z.enum(['local', 'ai']).default('ai'),
-      submissionPolicy: z.enum(['once_after_task']).default('once_after_task'),
-      carryoverAllowed: booleanFromAiSchema.default(true)
+      evaluationMode: z.enum(['local', 'ai']).default('ai')
     })
   ).min(1).max(4)
 });
@@ -274,24 +266,49 @@ export const teachStepAgentOutputSchema = z.object({
 
 export const answerStepQuestionAgentOutputSchema = z.object({
   answer: z.string().min(1),
-  relationToCurrentStep: z.string().min(1),
+  relationToCurrentStep: z.string().min(1).default('这个问题与当前学习步骤直接相关。'),
   example: z.string().default(''),
   resolved: z.boolean().default(false),
-  returnToStepInstruction: z.string().min(1),
+  returnToStepInstruction: z.string().min(1).default('回答后请返回当前步骤继续学习。'),
   resolutionSummary: z.string().default('')
 });
 
-export const submissionEvaluationAgentOutputSchema = z.object({
+export const submissionEvaluationAgentOutputSchema = z.preprocess((value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const output = { ...(value as Record<string, unknown>) };
+  const normalizedAction = normalizeRecommendedAction(output.recommendedAction);
+  if (recommendedActionValues.includes(normalizedAction as typeof recommendedActionValues[number])) {
+    output.recommendedAction = normalizedAction;
+    return output;
+  }
+  const parsedResult = evaluationResultFromAiSchema.safeParse(output.result);
+  if (parsedResult.success) {
+    output.recommendedAction = parsedResult.data === 'passed'
+      ? 'complete_task'
+      : 'request_user_decision';
+  }
+  return output;
+}, z.object({
   result: evaluationResultFromAiSchema,
-  mastery: percentNumberFromAiSchema,
   evidence: stringArrayFromAiSchema,
   correctParts: stringArrayFromAiSchema,
   misconceptions: stringArrayFromAiSchema,
   missingRequirements: stringArrayFromAiSchema,
   feedback: z.string().min(1),
-  recommendedAction: recommendedActionFromAiSchema,
-  decision: z.enum(['advance', 'stay', 'remediate', 'replan']).default('stay')
-});
+  recommendedAction: recommendedActionFromAiSchema
+}).superRefine((value, ctx) => {
+  const recommendsCompletion =
+    value.recommendedAction === 'advance' || value.recommendedAction === 'complete_task';
+  if ((value.result === 'passed') !== recommendsCompletion) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['recommendedAction'],
+      message: value.result === 'passed'
+        ? '通过的评价必须建议完成或推进当前 Task。'
+        : '未通过的评价不能建议完成或推进当前 Task。'
+    });
+  }
+}));
 
 export const nextStepDecisionAgentOutputSchema = z.object({
   decision: recommendedActionFromAiSchema,

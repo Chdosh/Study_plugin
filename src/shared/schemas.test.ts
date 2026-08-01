@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  answerStepQuestionAgentOutputSchema,
   dailyGuideAgentOutputSchema,
   goalIntakeAgentOutputSchema,
   nextStepDecisionAgentOutputSchema,
@@ -9,10 +10,22 @@ import {
 } from './schemas';
 
 describe('AI output schemas', () => {
+  it('accepts a concise question answer and supplies non-factual UI guidance defaults', () => {
+    expect(answerStepQuestionAgentOutputSchema.parse({
+      answer: '暂存区让你精确选择本次提交包含哪些改动。'
+    })).toEqual({
+      answer: '暂存区让你精确选择本次提交包含哪些改动。',
+      relationToCurrentStep: '这个问题与当前学习步骤直接相关。',
+      example: '',
+      resolved: false,
+      returnToStepInstruction: '回答后请返回当前步骤继续学习。',
+      resolutionSummary: ''
+    });
+  });
+
   it('normalizes string fields in submission evaluation output from AI', () => {
     const result = submissionEvaluationAgentOutputSchema.parse({
       result: '通过',
-      mastery: '90%',
       evidence: { point: '解释了缓存作用' },
       correctParts: '提到了浏览器缓存和共享缓存',
       misconceptions: '',
@@ -21,13 +34,81 @@ describe('AI output schemas', () => {
       recommendedAction: '完成任务'
     });
 
-    expect(result.mastery).toBe(90);
     expect(result.result).toBe('passed');
     expect(result.evidence).toEqual(['{"point":"解释了缓存作用"}']);
     expect(result.correctParts).toEqual(['提到了浏览器缓存和共享缓存']);
     expect(result.misconceptions).toEqual([]);
     expect(result.missingRequirements).toEqual([]);
     expect(result.recommendedAction).toBe('complete_task');
+  });
+
+  it('rejects a non-passing evaluation that recommends completing the Task', () => {
+    const result = submissionEvaluationAgentOutputSchema.safeParse({
+      result: 'failed',
+      evidence: ['提交未满足验收标准'],
+      correctParts: [],
+      misconceptions: ['核心概念仍有误解'],
+      missingRequirements: ['补充可验证结果'],
+      feedback: '需要继续修改',
+      recommendedAction: 'complete_task'
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it.each([
+    ['retry', 'remediate'],
+    ['resubmit', 'remediate'],
+    ['lower_difficulty', 'simplify'],
+    ['simplify_task', 'simplify']
+  ])('normalizes submission recommendation %s to %s', (recommendedAction, expected) => {
+    const result = submissionEvaluationAgentOutputSchema.parse({
+      result: 'failed',
+      evidence: [],
+      correctParts: [],
+      misconceptions: [],
+      missingRequirements: ['需要继续修改'],
+      feedback: '请根据反馈继续完善。',
+      recommendedAction
+    });
+
+    expect(result.recommendedAction).toBe(expected);
+  });
+
+  it('uses a safe deterministic action when the submission recommendation is unknown or missing', () => {
+    const failed = submissionEvaluationAgentOutputSchema.parse({
+      result: 'partial',
+      evidence: [],
+      correctParts: [],
+      misconceptions: [],
+      missingRequirements: [],
+      feedback: '还需要用户确认下一步。',
+      recommendedAction: '请降低难度后重新提交'
+    });
+    const passed = submissionEvaluationAgentOutputSchema.parse({
+      result: 'passed',
+      evidence: [],
+      correctParts: [],
+      misconceptions: [],
+      missingRequirements: [],
+      feedback: '已经达到要求。'
+    });
+
+    expect(failed.recommendedAction).toBe('request_user_decision');
+    expect(passed.recommendedAction).toBe('complete_task');
+  });
+
+  it('still rejects a submission evaluation without core feedback', () => {
+    const result = submissionEvaluationAgentOutputSchema.safeParse({
+      result: 'passed',
+      evidence: [],
+      correctParts: [],
+      misconceptions: [],
+      missingRequirements: [],
+      recommendedAction: 'complete_task'
+    });
+
+    expect(result.success).toBe(false);
   });
 
   it('normalizes localized next-step decision output from AI', () => {
@@ -124,9 +205,7 @@ describe('AI output schemas', () => {
           deliverable: '功能清单',
           doneWhen: ['写出当前已完成能力'],
           quickHint: '只记录主流程截图',
-          evaluationMode: 'ai',
-          submissionPolicy: 'once_after_task',
-          carryoverAllowed: true
+          evaluationMode: 'ai'
         }
       ]
     });
@@ -156,9 +235,7 @@ describe('AI output schemas', () => {
           deliverable: '记录',
           doneWhen: ['完成记录'],
           quickHint: '先做再说',
-          evaluationMode: 'local',
-          submissionPolicy: 'once_after_task',
-          carryoverAllowed: true
+          evaluationMode: 'local'
         },
         {
           title: '任务二',
@@ -171,9 +248,7 @@ describe('AI output schemas', () => {
           deliverable: '占位',
           doneWhen: ['占位'],
           quickHint: '占位',
-          evaluationMode: 'ai',
-          submissionPolicy: 'once_after_task',
-          carryoverAllowed: true
+          evaluationMode: 'ai'
         },
         {
           title: '任务三',
@@ -186,9 +261,7 @@ describe('AI output schemas', () => {
           deliverable: '占位',
           doneWhen: ['占位'],
           quickHint: '占位',
-          evaluationMode: 'ai',
-          submissionPolicy: 'once_after_task',
-          carryoverAllowed: true
+          evaluationMode: 'ai'
         },
         {
           title: '任务四',
@@ -201,9 +274,7 @@ describe('AI output schemas', () => {
           deliverable: '占位',
           doneWhen: ['占位'],
           quickHint: '占位',
-          evaluationMode: 'ai',
-          submissionPolicy: 'once_after_task',
-          carryoverAllowed: true
+          evaluationMode: 'ai'
         }
       ]
     });
@@ -232,9 +303,7 @@ describe('AI output schemas', () => {
           deliverable: '产物',
           doneWhen: ['完成'],
           quickHint: '提示',
-          evaluationMode: 'local',
-          submissionPolicy: 'once_after_task',
-          carryoverAllowed: true
+          evaluationMode: 'local'
         }
       ]
     });
@@ -263,9 +332,7 @@ describe('AI output schemas', () => {
           deliverable: '产物',
           doneWhen: ['完成'],
           quickHint: '提示',
-          evaluationMode: 'local',
-          submissionPolicy: 'once_after_task',
-          carryoverAllowed: true
+          evaluationMode: 'local'
         }
       ]
     });
@@ -276,90 +343,6 @@ describe('AI output schemas', () => {
     expect(guide.tasks[0].actions[0].checkpoint).toBe('完成「准备环境」');
     expect(guide.tasks[0].actions[1].title).toBe('执行主路径');
     expect(guide.tasks[0].actions[2].title).toBe('写初稿');
-  });
-
-  it('rounds and clamps float mastery in submission evaluation', () => {
-    // 85.5 → round to 86
-    const r1 = submissionEvaluationAgentOutputSchema.parse({
-      result: 'passed',
-      mastery: 85.5,
-      evidence: [],
-      correctParts: [],
-      misconceptions: [],
-      missingRequirements: [],
-      feedback: 'ok',
-      recommendedAction: 'advance'
-    });
-    expect(r1.mastery).toBe(86);
-
-    // 100.8 → round to 101 → clamp to 100
-    const r2 = submissionEvaluationAgentOutputSchema.parse({
-      result: 'passed',
-      mastery: 100.8,
-      evidence: [],
-      correctParts: [],
-      misconceptions: [],
-      missingRequirements: [],
-      feedback: 'ok',
-      recommendedAction: 'advance'
-    });
-    expect(r2.mastery).toBe(100);
-
-    // -2 → round to -2 → clamp to 0
-    const r3 = submissionEvaluationAgentOutputSchema.parse({
-      result: 'passed',
-      mastery: -2,
-      evidence: [],
-      correctParts: [],
-      misconceptions: [],
-      missingRequirements: [],
-      feedback: 'ok',
-      recommendedAction: 'advance'
-    });
-    expect(r3.mastery).toBe(0);
-
-    // 85 stays 85
-    const r4 = submissionEvaluationAgentOutputSchema.parse({
-      result: 'passed',
-      mastery: 85,
-      evidence: [],
-      correctParts: [],
-      misconceptions: [],
-      missingRequirements: [],
-      feedback: 'ok',
-      recommendedAction: 'advance'
-    });
-    expect(r4.mastery).toBe(85);
-  });
-
-  it('rejects NaN mastery as invalid', () => {
-    expect(() =>
-      submissionEvaluationAgentOutputSchema.parse({
-        result: 'passed',
-        mastery: NaN,
-        evidence: [],
-        correctParts: [],
-        misconceptions: [],
-        missingRequirements: [],
-        feedback: 'ok',
-        recommendedAction: 'advance'
-      })
-    ).toThrow();
-  });
-
-  it('rejects non-numeric string mastery as invalid', () => {
-    expect(() =>
-      submissionEvaluationAgentOutputSchema.parse({
-        result: 'passed',
-        mastery: 'abc',
-        evidence: [],
-        correctParts: [],
-        misconceptions: [],
-        missingRequirements: [],
-        feedback: 'ok',
-        recommendedAction: 'advance'
-      })
-    ).toThrow();
   });
 
   it('rounds float estimatedMinutes in daily guide', () => {
@@ -380,9 +363,7 @@ describe('AI output schemas', () => {
           deliverable: '产物',
           doneWhen: ['完成'],
           quickHint: '提示',
-          evaluationMode: 'ai',
-          submissionPolicy: 'once_after_task',
-          carryoverAllowed: true
+          evaluationMode: 'ai'
         }
       ]
     });
@@ -456,9 +437,7 @@ describe('AI output schemas', () => {
             deliverable: '产物',
             doneWhen: ['完成'],
             quickHint: '提示',
-            evaluationMode: 'ai',
-            submissionPolicy: 'once_after_task',
-            carryoverAllowed: true
+            evaluationMode: 'ai'
           }
         ]
       })
