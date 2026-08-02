@@ -14,26 +14,32 @@
   display: grid;
   grid-template-columns: var(--activity-bar-width) minmax(0, 1fr);
   align-items: center;
+  background: var(--color-bg-shell);
   color: var(--color-text-primary);
   -webkit-app-region: drag;
   -webkit-user-select: none;
   user-select: none;
 }
 
-.app-titlebar-mark {
-  width: var(--activity-bar-width);
-  height: var(--titlebar-height);
-  display: grid;
-  place-items: center;
-  color: var(--color-primary);
+.app-titlebar-section {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.app-titlebar-name {
+.app-titlebar-title {
   min-width: 0;
+  margin: 0;
+  padding: 0 var(--space-3);
   overflow: hidden;
   color: var(--color-text-primary);
   font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
+  font-weight: var(--font-weight-semibold);
   line-height: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -269,7 +275,6 @@
   font-family: inherit;
   color: var(--color-text-primary);
 }
-.teacher-input-box input:focus { outline: none; }
 .panel-expand-btn {
   position: fixed;
   z-index: 100;

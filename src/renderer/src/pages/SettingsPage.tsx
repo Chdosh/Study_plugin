@@ -102,7 +102,6 @@ export function SettingsPage({
   return (
     <section className="settings-layout">
       <header className="page-title-block">
-        <h1>设置</h1>
         <p>管理 AI 模型、学习偏好、已确认的学习上下文与本地数据。</p>
       </header>
 

@@ -248,13 +248,23 @@ export default function App(): JSX.Element {
       ? shellLearningStatus.label
       : activeSession.status === 'paused' ? '已暂停' : '进行中'
     : null;
+  const learningContextTitle = [todayGuide?.goal?.title, todayGuide?.currentStage?.title]
+    .filter((item): item is string => Boolean(item))
+    .join(' / ');
+  const shellPageTitle = view === 'overview'
+    ? learningContextTitle || '当前学习'
+    : view === 'study'
+      ? learningState?.dailyGuideTask?.title ?? '当前任务'
+      : view === 'records'
+        ? '记录'
+        : '设置';
 
   if (!settings) {
     return (
       <AppWindowFrame>
         <div className="boot">
           <Timer size={24} />
-          <span>正在加载学习管家</span>
+          <span>正在加载</span>
           {bootError && (
             <div className="boot-error">
               <strong>启动失败</strong>
@@ -273,6 +283,7 @@ export default function App(): JSX.Element {
     <>
     <AppShell
       current={view}
+      pageTitle={shellPageTitle}
       teacherCollapsed={teacherCollapsed}
       onToggleTeacher={() => setTeacherCollapsed((c) => !c)}
       onSelectView={setView}

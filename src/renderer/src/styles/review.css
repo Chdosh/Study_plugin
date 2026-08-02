@@ -1,7 +1,6 @@
 .records-page { width: 100%; max-width: 1180px; margin: 0 auto; display: grid; gap: 24px; padding-bottom: 32px; }
 .records-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
-.records-header h1 { margin: 0; color: var(--color-text-primary); font-size: var(--font-size-2xl); font-weight: var(--font-weight-bold); }
-.records-header p { max-width: 680px; margin: 8px 0 0; color: var(--color-text-secondary); font-size: var(--font-size-sm); line-height: var(--line-height-normal); }
+.records-header p { max-width: 680px; margin: 0; color: var(--color-text-secondary); font-size: var(--font-size-sm); line-height: var(--line-height-normal); }
 .records-loading { display: inline-flex; align-items: center; gap: 8px; color: var(--color-text-subtle); font-size: var(--font-size-sm); }
 .records-history-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 16px; border: 1px solid var(--color-border-default); border-radius: var(--radius-lg); background: var(--color-bg-surface); }
 .records-history-toolbar label { color: var(--color-text-secondary); font-size: var(--font-size-sm); }

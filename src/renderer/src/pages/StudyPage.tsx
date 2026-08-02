@@ -24,11 +24,6 @@ import { getCurrentGuideTaskSelection } from '../domain/guide-selection';
 import { computeCommandPolicy } from '../domain/command-policy';
 import { deriveLearningTaskStatus } from '../domain/learning-status';
 import { areAllActionsTerminal } from '../../../shared/learning-flow';
-function toCompactTitle(text: string, maxLength = 30): string {
-  const normalized = text.replace(/\s+/gu, ' ').trim();
-  const firstSegment = normalized.split(/[，。；、,.]/u).find(Boolean)?.trim() ?? normalized;
-  return firstSegment.length > maxLength ? `${firstSegment.slice(0, maxLength)}…` : firstSegment;
-}
 
 type FeedbackKind = 'success' | 'error';
 
@@ -102,7 +97,6 @@ export function StudyPage({
   const nextPlannedTask = taskDone && currentTask
     ? guide!.tasks.find((t) => t.status === 'planned' || t.status === 'active') ?? null
     : null;
-  const taskTitle = toCompactTitle(currentTask?.title ?? (allTasksDone ? '当前学习单元' : '当前任务'));
   const currentAction = taskActions.find((a) => a.status !== 'done' && a.status !== 'skipped') ?? null;
   const learningStatus = currentTask ? deriveLearningTaskStatus(currentTask) : null;
   const taskObjective = currentTask?.objective ?? '';
@@ -182,10 +176,6 @@ export function StudyPage({
   return (
     <section className="study-layout">
       <header className="study-page-header">
-        <div>
-          <span className="page-kicker">当前学习</span>
-          <h1>{taskTitle}</h1>
-        </div>
         <div className="study-header-actions">
           <span className={`focus-state-pill ${taskDone || allTasksDone ? 'completed' : sessionStatusClass}`}>{taskDone || allTasksDone ? '已完成' : sessionStatusText}</span>
           {activeSession?.status === 'active' ? (

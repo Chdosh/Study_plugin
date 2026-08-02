@@ -41,7 +41,7 @@ function GoalContextLine({
 }: {
   goalTitle: string;
   stageTitle: string | null;
-  contextLabel: string;
+  contextLabel?: string;
   status: string;
   statusClass: string;
 }): JSX.Element {
@@ -50,7 +50,7 @@ function GoalContextLine({
       <nav className="overview-goal-reference" aria-label="当前学习位置">
         <span>{goalTitle}</span>
         {stageTitle && <><i aria-hidden="true">/</i><span>{stageTitle}</span></>}
-        <><i aria-hidden="true">/</i><strong>{contextLabel}</strong></>
+        {contextLabel && <><i aria-hidden="true">/</i><strong>{contextLabel}</strong></>}
       </nav>
       <span className={`task-status ${statusClass}`}>{status}</span>
     </div>
@@ -83,15 +83,11 @@ function TaskActionList({ actions }: { actions: DailyGuideAction[] }): JSX.Eleme
 function LearningPathSidebar({
   stages,
   currentStageId,
-  currentUnitTitle,
-  currentUnitProgress,
   showFull,
   onToggleFull
 }: {
   stages: RoadmapStage[];
   currentStageId: string | null;
-  currentUnitTitle: string | null;
-  currentUnitProgress: string;
   showFull: boolean;
   onToggleFull: () => void;
 }): JSX.Element | null {
@@ -103,7 +99,7 @@ function LearningPathSidebar({
   return (
     <section className="overview-reference-card overview-route-card" aria-labelledby="learning-path-title">
       <header>
-        <h2 id="learning-path-title">学习进度</h2>
+        <h2 id="learning-path-title">学习路径</h2>
         <span>{stages.length} 个阶段</span>
       </header>
       <div className="overview-route-steps">
@@ -116,12 +112,8 @@ function LearningPathSidebar({
               <div>
                 <strong>{stage.title}</strong>
                 <small>{presentation.label}</small>
-                {presentation.isCurrentLearningUnit && (
-                  <div className="overview-route-current-detail">
-                    <span>{currentUnitProgress}</span>
-                    {currentUnitTitle && <span>当前：{currentUnitTitle}</span>}
-                    {stage.targetDate && <span>检查点：{stage.targetDate}</span>}
-                  </div>
+                {presentation.isCurrentLearningUnit && stage.targetDate && (
+                  <small className="overview-route-checkpoint">检查点：{stage.targetDate}</small>
                 )}
               </div>
             </article>
@@ -234,10 +226,6 @@ export function OverviewPage({
     );
   }, [availableGoals, goal?.id, temporaryLearning?.thread.goalId]);
   const currentNearTermPlanItem = nearTermPlanItems.find((item) => item.id === guide?.nearTermPlanItemId) ?? null;
-  const completedTaskCount = guide?.tasks.filter(
-    (task) => task.status === 'closed' && task.closureKind === 'completed'
-  ).length ?? 0;
-
   async function send(text: string): Promise<void> {
     const content = text.trim();
     if (!content) return;
@@ -273,10 +261,6 @@ export function OverviewPage({
       || preparationState === 'plan_exhausted';
     return (
       <section className="overview-dashboard">
-        <header className="overview-dashboard-title">
-          <h1>当前学习</h1>
-        </header>
-
         {preparationState === 'generation_failed' && (
           <section className="overview-pending" role="alert">
             <div>
@@ -336,8 +320,6 @@ export function OverviewPage({
             <LearningPathSidebar
               stages={roadmap}
               currentStageId={activeStage?.id ?? null}
-              currentUnitTitle={nextPlanItem?.title ?? null}
-              currentUnitProgress={preparationState === 'generating' ? '正在生成学习单元' : needsRecords ? '当前阶段等待处理' : '下一学习单元待生成'}
               showFull={showFullRoadmap}
               onToggleFull={() => setShowFullRoadmap((current) => !current)}
             />
@@ -589,10 +571,6 @@ export function OverviewPage({
 
   return (
     <section className="overview-dashboard">
-      <header className="overview-dashboard-title">
-        <h1>当前学习</h1>
-      </header>
-
       {goalProgress?.status === 'checkpoint_missed' && (
         <section className="overview-stage-conflict" role="status">
           <strong>阶段检查点已过</strong>
@@ -620,20 +598,29 @@ export function OverviewPage({
       <div className="overview-dashboard-grid">
         <div className="overview-primary-column">
           {currentTask ? (
-            <section className="overview-reference-card overview-task-card" aria-labelledby="current-task-title">
-              <GoalContextLine
-                goalTitle={goal?.title ?? guide.todayGoal}
-                stageTitle={activeStage?.title ?? null}
-                contextLabel="当前任务"
-                status={currentLearningStatus?.label ?? statusLabel(currentTask.status)}
-                statusClass={currentTask.status}
-              />
-              <div className="overview-task-main">
-                <div>
-                  <span className="section-label">当前任务</span>
-                  <h2 id="current-task-title">{currentTask.title}</h2>
-                  <p>{currentNearTermPlanItem?.focus || currentTask.objective}</p>
+            <section className="overview-reference-card overview-task-card" aria-label="当前任务">
+              <div className="overview-task-heading">
+                <h2>{currentTask.title}</h2>
+                <span className={`task-status ${currentTask.status}`}>
+                  {currentLearningStatus?.label ?? statusLabel(currentTask.status)}
+                </span>
+              </div>
+              <p className="overview-task-objective">{currentNearTermPlanItem?.focus || currentTask.objective}</p>
+              <p className="overview-task-conclusion">{taskConclusion}</p>
+              {actions.length > 0 && (
+                <div className="overview-actions-block">
+                  <div className="overview-actions-header">
+                    <strong>行动</strong>
+                    <span>{completedActionCount} / {actions.length} 已处理 · 约 {currentTask.estimatedMinutes.target} 分钟</span>
+                  </div>
+                  <TaskActionList actions={actions} />
                 </div>
+              )}
+              <div className="overview-task-footer">
+                <details className="overview-task-details">
+                  <summary><ListChecks size={16} />查看任务摘要<ChevronRight size={16} /></summary>
+                  <div><section><h3>目标与范围</h3><p>{currentTask.objective}</p><p>{currentTask.scope}</p></section><section><h3>预期产出</h3><p>{currentTask.deliverable}</p></section><section><h3>完成标准</h3><ul>{currentTask.doneWhen.map((item) => <li key={item}>{item}</li>)}</ul></section></div>
+                </details>
                 {guide.status === 'draft' ? (
                   <button className="primary-action overview-task-primary" type="button" onClick={() => void onConfirmGuide(guide.id)}><Play size={16} />开始学习</button>
                 ) : currentLearningStatus?.phase !== 'done' ? (
@@ -643,16 +630,6 @@ export function OverviewPage({
                   </button>
                 ) : null}
               </div>
-              <p className="overview-task-conclusion">{taskConclusion}</p>
-              <TaskActionList actions={actions} />
-              <div className="overview-task-summary" aria-label={`任务进度 ${completedActionCount}/${actions.length} 个行动`}>
-                <strong>{completedActionCount} / {actions.length} 个行动已处理</strong>
-                <span>约 {currentTask.estimatedMinutes.target} 分钟</span>
-              </div>
-              <details className="overview-task-details">
-                <summary><ListChecks size={16} />查看任务摘要<ChevronRight size={16} /></summary>
-                <div><section><h3>目标与范围</h3><p>{currentTask.objective}</p><p>{currentTask.scope}</p></section><section><h3>预期产出</h3><p>{currentTask.deliverable}</p></section><section><h3>完成标准</h3><ul>{currentTask.doneWhen.map((item) => <li key={item}>{item}</li>)}</ul></section></div>
-              </details>
             </section>
           ) : <section className="overview-reference-card overview-empty-task"><strong>当前没有可执行任务</strong><p>计划和历史记录仍然保留，请根据上方状态继续处理。</p></section>}
 
@@ -667,8 +644,6 @@ export function OverviewPage({
           <LearningPathSidebar
             stages={roadmap}
             currentStageId={activeStage?.id ?? null}
-            currentUnitTitle={currentTask?.title ?? null}
-            currentUnitProgress={`${completedTaskCount} / ${guide.tasks.length} 个任务完成`}
             showFull={showFullRoadmap}
             onToggleFull={() => setShowFullRoadmap((current) => !current)}
           />

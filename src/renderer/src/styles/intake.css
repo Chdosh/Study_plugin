@@ -22,20 +22,12 @@
   gap: var(--space-1);
   max-width: min(560px, 72%);
   padding: 16px 22px;
-  border: 0;
   border-radius: 14px;
   background: linear-gradient(180deg, #f2fbf8, #edf7f4);
-  box-shadow: none;
   animation: message-rise 0.18s ease-out both;
   position: relative;
   align-self: start;
   min-height: auto;
-}
-
-.intake-message span {
-  color: var(--color-text-muted);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-bold);
 }
 
 .intake-message p {
@@ -52,7 +44,6 @@
   justify-self: end;
   margin-left: auto;
   background: linear-gradient(180deg, #f7f7f7, #f1f1f1);
-  border-color: transparent;
   border-top-right-radius: var(--radius-sm);
   max-width: min(480px, 62%);
 }
@@ -87,7 +78,6 @@
   color: var(--color-text-primary);
   min-width: 0;
   justify-content: center;
-  border-color: var(--color-primary-border);
   box-sizing: border-box;
   width: min(100%, 760px);
   flex-wrap: wrap;
@@ -275,7 +265,6 @@
 }
 
 /* Blueprint: goal intake is one continuous conversation workspace. */
-.intake-workspace { grid-template-columns: minmax(0, 820px); justify-content: center; }
 .pending-agent-question {
   display: grid;
   gap: 0.25rem;

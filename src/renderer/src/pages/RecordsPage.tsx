@@ -204,7 +204,7 @@ export function RecordsPage({ review, todayGuide, learningState, availableGoals,
 
   return (
     <section className="records-page">
-      <header className="records-header"><div><h1>记录</h1><p>追溯学习过程、结果证据，以及计划如何随学习结果变化。</p></div>{loading && <span className="records-loading"><Loader2 className="spin" size={15} />正在整理记录</span>}</header>
+      <header className="records-header"><p>追溯学习过程、结果证据，以及计划如何随学习结果变化。</p>{loading && <span className="records-loading"><Loader2 className="spin" size={15} />正在整理记录</span>}</header>
 
       <section className="records-history-toolbar" aria-label="历史目标">
         <label htmlFor="records-goal-select">查看目标</label>
