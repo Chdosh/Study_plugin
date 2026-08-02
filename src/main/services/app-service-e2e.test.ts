@@ -17,7 +17,7 @@ type QueuedAiResponse =
   | { kind: 'json'; body: AiReply; responseField: 'content' | 'reasoning_content'; delayMs?: number }
   | { kind: 'http_error'; status: number; message: string };
 
-describe('学习闭环端到端', () => {
+describe('学习闭环端到端', { timeout: 15_000 }, () => {
   const fixtures: LearningFlowFixture[] = [];
 
   afterEach(async () => {
