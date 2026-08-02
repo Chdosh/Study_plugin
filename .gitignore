@@ -23,7 +23,12 @@ playwright-report/
 test-results/
 
 # Local review and design artifacts
+.agent/
+.agents/
 .audit/
+.code-review-graph/
+.codex/
+.opencode/
 .lavish/
 .superdesign/
 .playwright-cli/
@@ -32,3 +37,4 @@ output/
 docs/_legacy/
 docs/archive/
 *.corrupt
+.hallmark/
