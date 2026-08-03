@@ -671,7 +671,7 @@ function describeError(message: string): { category: string; message: string } {
   if (/AI API Key|API [Kk]ey|缺少|密钥/i.test(message)) {
     return { category: 'missing_config', message };
   }
-  if (/格式校验|校验问题|结构不完整|格式不完整|ZodError|invalid_type|invalid_union|schema_violation/i.test(message)) {
+  if (/格式校验|校验问题|结构不完整|格式不完整|ZodError|invalid_type|invalid_union|schema_violation|不是合法 JSON/i.test(message)) {
     return { category: 'schema_violation', message };
   }
   if (/timeout|超时|timed out|ECONNRESET/i.test(message)) {
