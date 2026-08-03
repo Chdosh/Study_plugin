@@ -56,6 +56,7 @@ export default function App(): JSX.Element {
   const [availableGoals, setAvailableGoals] = useState<LearningGoal[]>([]);
   const [resumableGuides, setResumableGuides] = useState<ResumableGuideSummary[]>([]);
   const [onboardingOperationPending, setOnboardingOperationPending] = useState(false);
+  const [planGenerating, setPlanGenerating] = useState(false);
   const [askingQuestion, setAskingQuestion] = useState(false);
   const [learningPending, setLearningPending] = useState(false);
   const [recordsReloadKey, setRecordsReloadKey] = useState(0);
@@ -134,12 +135,12 @@ export default function App(): JSX.Element {
   }
 
   async function generateInitialPlan(briefPatch?: Partial<GoalBrief>): Promise<void> {
-    setOnboardingOperationPending(true);
+    setPlanGenerating(true);
     try {
       await createAndActivateInitialPlan(briefPatch);
       await refresh();
     } finally {
-      setOnboardingOperationPending(false);
+      setPlanGenerating(false);
     }
   }
 
@@ -351,6 +352,7 @@ export default function App(): JSX.Element {
                 activeSession={activeSession}
                 learningState={learningState}
                 onboardingOperationPending={onboardingOperationPending}
+                planGenerating={planGenerating}
                 onSendOnboarding={async (content) => {
                   setOnboardingOperationPending(true);
                   let nextOnboarding: GoalIntakeState | null = null;
@@ -363,14 +365,7 @@ export default function App(): JSX.Element {
                   } finally {
                     setOnboardingOperationPending(false);
                   }
-                  if ((nextOnboarding as GoalIntakeState).intake.status === 'ready') {
-                    await runAction(
-                      '生成学习计划',
-                      () => generateInitialPlan((nextOnboarding as GoalIntakeState).intake.brief ?? undefined)
-                    );
-                  } else {
-                    await refresh();
-                  }
+                  await refresh();
                 }}
                 onGenerateInitialPlan={() => runAction(
                   '生成学习计划',

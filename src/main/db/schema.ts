@@ -17,6 +17,7 @@ export const goalIntakes = sqliteTable('goal_intakes', {
   status: text('status', { enum: ['collecting', 'ready', 'confirmed'] }).notNull().default('collecting'),
   goalId: text('goal_id').references(() => goals.id),
   briefJson: text('brief_json'),
+  questionsJson: text('questions_json'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   confirmedAt: text('confirmed_at')

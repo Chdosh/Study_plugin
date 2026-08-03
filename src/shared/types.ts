@@ -58,8 +58,15 @@ export interface GoalBrief {
   currentLevel: string;
   availableTime: string;
   deadline: string;
+  depth: string;
+  direction: string;
   constraints: string[];
   successCriteria: string[];
+}
+
+export interface GoalIntakeQuestion {
+  prompt: string;
+  options: string[];
 }
 
 export interface GoalIntake {
@@ -67,6 +74,7 @@ export interface GoalIntake {
   status: 'collecting' | 'ready' | 'confirmed';
   goalId: Id | null;
   brief: GoalBrief | null;
+  questions: GoalIntakeQuestion[];
   createdAt: string;
   updatedAt: string;
   confirmedAt: string | null;

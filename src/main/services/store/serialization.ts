@@ -5,6 +5,7 @@ import type {
   GoalBrief,
   GoalIntake,
   GoalIntakeMessage,
+  GoalIntakeQuestion,
   LearningEvaluation,
   LearningGoal,
   LearningRuntimeState,
@@ -46,10 +47,29 @@ export function mapGoalIntake(row: typeof goalIntakes.$inferSelect): GoalIntake 
     status: row.status,
     goalId: row.goalId,
     brief: row.briefJson ? parseGoalBrief(row.briefJson) : null,
+    questions: row.questionsJson ? parseGoalIntakeQuestions(row.questionsJson) : [],
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     confirmedAt: row.confirmedAt
   };
+}
+
+function parseGoalIntakeQuestions(raw: string): GoalIntakeQuestion[] {
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter((item): item is { prompt?: unknown; options?: unknown } => Boolean(item) && typeof item === 'object')
+      .map((item) => ({
+        prompt: typeof item.prompt === 'string' ? item.prompt : '',
+        options: Array.isArray(item.options)
+          ? item.options.filter((option): option is string => typeof option === 'string')
+          : []
+      }))
+      .filter((question) => question.prompt.length > 0);
+  } catch {
+    return [];
+  }
 }
 
 export function mapGoalIntakeMessage(row: typeof goalIntakeMessages.$inferSelect): GoalIntakeMessage {
@@ -306,6 +326,8 @@ export function mergeGoalBrief(current: GoalBrief | null, patch: Partial<GoalBri
     currentLevel: patch.currentLevel ?? current?.currentLevel ?? '',
     availableTime: patch.availableTime ?? current?.availableTime ?? '',
     deadline: patch.deadline ?? current?.deadline ?? '',
+    depth: patch.depth ?? current?.depth ?? '',
+    direction: patch.direction ?? current?.direction ?? '',
     constraints: patch.constraints ?? current?.constraints ?? [],
     successCriteria: patch.successCriteria ?? current?.successCriteria ?? []
   };

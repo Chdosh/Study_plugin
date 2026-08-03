@@ -1,8 +1,7 @@
 import OpenAI from 'openai';
 import { z } from 'zod';
+import { DEFAULT_AI_REQUEST_TIMEOUT_MS } from '../../shared/ai-request';
 import { CategorizedError, categorizeThrownError } from './categorized-error';
-
-const DEFAULT_AI_REQUEST_TIMEOUT_MS = 180_000;
 
 export interface AiJsonRequest<TSchema extends z.ZodTypeAny> {
   apiKey: string | null;

@@ -89,11 +89,15 @@ export class GoalIntakePersistence {
 
   async saveGoalIntakeAgentOutput(intakeId: string, output: GoalIntakeAgentOutput): Promise<GoalIntakeState> {
     await this.addGoalIntakeMessage(intakeId, 'assistant', output.reply);
+    const isReady = output.status === 'ready' || output.shouldForceStart;
     await this.db
       .update(goalIntakes)
       .set({
-        status: output.status === 'ready' || output.shouldForceStart ? 'ready' : 'collecting',
+        status: isReady ? 'ready' : 'collecting',
         briefJson: output.brief ? JSON.stringify(output.brief) : undefined,
+        questionsJson: isReady || output.questions.length === 0
+          ? null
+          : JSON.stringify(output.questions),
         updatedAt: nowIso()
       })
       .where(eq(goalIntakes.id, intakeId));

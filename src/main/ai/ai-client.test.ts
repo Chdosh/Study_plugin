@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
+import { DEFAULT_AI_REQUEST_TIMEOUT_MS } from '../../shared/ai-request';
 
 const openAiMocks = vi.hoisted(() => ({
   create: vi.fn()
@@ -91,7 +92,7 @@ describe('AiClient', () => {
     });
 
     expect(output).toEqual({ result: 'passed', evidence: ['ok'] });
-    expect(openAiMocks.create.mock.calls[0][1]).toEqual({ timeout: 180_000, maxRetries: 0 });
+    expect(openAiMocks.create.mock.calls[0][1]).toEqual({ timeout: DEFAULT_AI_REQUEST_TIMEOUT_MS, maxRetries: 0 });
   });
 
   it('throws after repair also fails schema validation', async () => {

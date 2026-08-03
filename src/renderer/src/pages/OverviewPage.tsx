@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import {
+  ArrowRight,
   CheckCircle2,
   ChevronRight,
   Circle,
   FileText,
   History,
+  Info,
   ListChecks,
   Minus,
   Play,
@@ -17,17 +19,22 @@ import type {
   AppSettings,
   DailyGuideAction,
   GoalIntakeState,
+  GoalProgressStatus,
   KnowledgeItem,
   LearningGoal,
   LearningRuntimeSnapshot,
+  NearTermPlanItem,
+  NearTermPlanItemStatus,
   QuestionAnswerResult,
   RoadmapStage,
   StudySession,
   LearningOverviewState
 } from '../../../shared/types';
 import { hasCompleteAiConfiguration } from '../../../shared/types';
+import { DEFAULT_AI_REQUEST_TIMEOUT_MS } from '../../../shared/ai-request';
 import { TypingDots } from '../components/ai/TypingDots';
 import { PendingAgentQuestion } from '../components/ai/PendingAgentQuestion';
+import { GoalIntakeQuestionForm } from '../components/ai/GoalIntakeQuestionForm';
 import { MessageContent } from '../components/ai/MessageContent';
 import { deriveLearningTaskStatus } from '../domain/learning-status';
 import { getRoadmapStagePresentation } from '../domain/roadmap-presentation';
@@ -83,11 +90,17 @@ function TaskActionList({ actions }: { actions: DailyGuideAction[] }): JSX.Eleme
 function LearningPathSidebar({
   stages,
   currentStageId,
+  items,
+  direction,
+  goalProgressStatus,
   showFull,
   onToggleFull
 }: {
   stages: RoadmapStage[];
   currentStageId: string | null;
+  items: NearTermPlanItem[];
+  direction?: string;
+  goalProgressStatus?: GoalProgressStatus;
   showFull: boolean;
   onToggleFull: () => void;
 }): JSX.Element | null {
@@ -95,17 +108,27 @@ function LearningPathSidebar({
   const activeIndex = Math.max(0, stages.findIndex((stage) => stage.id === currentStageId));
   const compactStart = Math.max(0, Math.min(activeIndex - 1, Math.max(0, stages.length - 3)));
   const visibleStages = showFull ? stages : stages.slice(compactStart, compactStart + 3);
+  const completedCount = stages.filter((stage) => stage.status === 'completed').length;
 
   return (
     <section className="overview-reference-card overview-route-card" aria-labelledby="learning-path-title">
       <header>
         <h2 id="learning-path-title">学习路径</h2>
-        <span>{stages.length} 个阶段</span>
+        <span>{completedCount} / {stages.length} 阶段已完成</span>
       </header>
+      <div className="overview-route-summary">
+        {goalProgressStatus && (
+          <span className={`goal-progress-chip ${goalProgressStatus}`}>
+            {goalProgressLabel(goalProgressStatus)}
+          </span>
+        )}
+        {direction && <p className="overview-route-direction">{direction}</p>}
+      </div>
       <div className="overview-route-steps">
         {visibleStages.map((stage) => {
           const index = stages.findIndex((item) => item.id === stage.id);
           const presentation = getRoadmapStagePresentation(stage, currentStageId);
+          const stageItems = items.filter((item) => item.roadmapStageId === stage.id);
           return (
             <article className={presentation.className} key={stage.id} aria-current={presentation.isCurrentLearningUnit ? 'step' : undefined}>
               <span className="overview-route-marker">{stage.status === 'completed' ? <CheckCircle2 size={17} /> : index + 1}</span>
@@ -114,6 +137,16 @@ function LearningPathSidebar({
                 <small>{presentation.label}</small>
                 {presentation.isCurrentLearningUnit && stage.targetDate && (
                   <small className="overview-route-checkpoint">检查点：{stage.targetDate}</small>
+                )}
+                {stageItems.length > 0 && (
+                  <ul className="overview-route-items">
+                    {stageItems.map((item) => (
+                      <li key={item.id} className={item.sessionStatus}>
+                        <span className="plan-item-status">{planItemStatusLabel(item.sessionStatus)}</span>
+                        <span>{item.title}</span>
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </div>
             </article>
@@ -128,6 +161,45 @@ function LearningPathSidebar({
       )}
     </section>
   );
+}
+
+function goalProgressLabel(status: GoalProgressStatus): string {
+  const labels: Record<GoalProgressStatus, string> = {
+    schedule_unset: '未设期限',
+    on_schedule: '进度正常',
+    checkpoint_missed: '错过检查点',
+    goal_due: '目标到期',
+    completed: '目标已完成'
+  };
+  return labels[status];
+}
+
+function planItemStatusLabel(status: NearTermPlanItemStatus): string {
+  const labels: Record<NearTermPlanItemStatus, string> = {
+    pending: '未开始',
+    active: '进行中',
+    completed: '已完成',
+    skipped: '已跳过'
+  };
+  return labels[status];
+}
+
+const GENERATION_SLOW_SECONDS = 30;
+const GENERATION_NEAR_TIMEOUT_SECONDS = Math.floor(DEFAULT_AI_REQUEST_TIMEOUT_MS / 1000 * 2 / 3);
+
+export function pendingGenerationLabel(planGenerating: boolean, elapsedSeconds: number): string {
+  if (planGenerating) {
+    return elapsedSeconds < GENERATION_SLOW_SECONDS
+      ? '目标已确认，正在生成完整学习计划'
+      : `目标已确认，正在生成完整学习计划（已等待 ${elapsedSeconds} 秒，仍在生成）`;
+  }
+  if (elapsedSeconds < GENERATION_SLOW_SECONDS) {
+    return 'AI 正在生成回答';
+  }
+  if (elapsedSeconds < GENERATION_NEAR_TIMEOUT_SECONDS) {
+    return `AI 正在生成回答（已等待 ${elapsedSeconds} 秒，仍在生成）`;
+  }
+  return `AI 响应较慢，已等待 ${elapsedSeconds} 秒；超时后会自动提示失败原因，可稍后重试`;
 }
 
 function PlanManagement({
@@ -171,6 +243,7 @@ export function OverviewPage({
   onSendOnboarding,
   onGenerateInitialPlan,
   onboardingOperationPending,
+  planGenerating,
   temporaryLearning,
   onAskTemporaryQuestion,
   onLinkTemporaryQuestionToGoal,
@@ -189,9 +262,10 @@ export function OverviewPage({
   todayGuide: LearningOverviewState | null;
   activeSession: StudySession | null;
   learningState: LearningRuntimeSnapshot | null;
-  onSendOnboarding: (content: string) => Promise<void>;
+onSendOnboarding: (content: string) => Promise<void>;
   onGenerateInitialPlan: () => Promise<void>;
   onboardingOperationPending: boolean;
+  planGenerating: boolean;
   temporaryLearning: QuestionAnswerResult | null;
   onAskTemporaryQuestion: (question: string, threadId?: string) => Promise<void>;
   onLinkTemporaryQuestionToGoal: (threadId: string, goalId: string) => Promise<void>;
@@ -211,11 +285,25 @@ export function OverviewPage({
   const [showFullRoadmap, setShowFullRoadmap] = useState(false);
   const [temporaryMessage, setTemporaryMessage] = useState('');
   const [temporaryGoalId, setTemporaryGoalId] = useState('');
+  const [pendingElapsedSeconds, setPendingElapsedSeconds] = useState(0);
 
   const guide = todayGuide?.guide ?? null;
   const roadmap = todayGuide?.roadmap ?? [];
   const goal = todayGuide?.goal ?? onboarding?.activeGoal ?? null;
   const nearTermPlanItems = todayGuide?.shortPlan ?? [];
+  const intakePending = onboardingOperationPending || planGenerating;
+  useEffect(() => {
+    if (!intakePending) {
+      setPendingElapsedSeconds(0);
+      return;
+    }
+    const startedAt = Date.now();
+    setPendingElapsedSeconds(0);
+    const timer = window.setInterval(() => {
+      setPendingElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [intakePending]);
   useEffect(() => {
     setTemporaryGoalId((current) =>
       current
@@ -239,12 +327,195 @@ export function OverviewPage({
   }
 
   const hasAiConfiguration = hasCompleteAiConfiguration(settings);
-  const intakePending = onboardingOperationPending;
   const hasConfirmedGoalWithoutGuide = onboarding?.intake.status === 'confirmed'
     && Boolean(onboarding.intake.goalId);
   const canGenerateInitialPlan = onboarding?.intake.status === 'ready'
     || hasConfirmedGoalWithoutGuide;
-  const latestAssistantMessageId = [...(onboarding?.messages ?? [])].reverse().find((item) => item.role === 'assistant')?.id ?? null;
+  const showQuestionForm = onboarding?.intake.status === 'collecting'
+    && (onboarding.intake.questions?.length ?? 0) > 0
+    && !intakePending;
+  const [summaryDismissed, setSummaryDismissed] = useState(false);
+  useEffect(() => {
+    if (onboarding?.intake.status === 'collecting') {
+      setSummaryDismissed(false);
+    }
+  }, [onboarding?.intake.status]);
+  const [showIntakeHistory, setShowIntakeHistory] = useState(false);
+const latestAssistantMessageId = [...(onboarding?.messages ?? [])].reverse().find((item) => item.role === 'assistant')?.id ?? null;
+
+  const renderIntakeChat = (detailed: boolean): JSX.Element => (
+    <>
+      <div className="intake-thread redesigned" aria-label="目标访谈记录">
+        {(onboarding?.messages ?? []).length === 0 && (
+          <div className="intake-message assistant">
+            <span className="intake-message-meta">学习管家</span>
+            <div className="message-content">你准备学习什么？可以直接说目标、期限、基础和通常可投入的时间。</div>
+          </div>
+        )}
+        {(onboarding?.messages ?? []).map((item) => (
+          <div className={item.role === 'assistant' ? 'intake-message assistant' : 'intake-message user'} key={item.id}>
+            <span className="intake-message-meta">{item.role === 'assistant' ? '学习管家' : '你的输入'}</span>
+            <div className="message-content">{item.content}</div>
+          </div>
+        ))}
+        {pendingUserMessage && (
+          <div className="intake-message user">
+            <span className="intake-message-meta">你的输入</span>
+            <div className="message-content">{pendingUserMessage}</div>
+          </div>
+        )}
+        {intakePending && (
+          <div className="intake-message assistant pending" aria-live="polite">
+            <span className="intake-message-meta">学习管家</span>
+            <div className="message-content">
+              <strong>{pendingGenerationLabel(planGenerating, pendingElapsedSeconds)}</strong>
+              <TypingDots />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {showQuestionForm && (
+        <GoalIntakeQuestionForm
+          questions={onboarding!.intake.questions}
+          disabled={!hasAiConfiguration}
+          onSubmit={(composed) => void send(composed)}
+        />
+      )}
+
+      {onboarding?.intake.status === 'ready'
+        && onboarding.intake.brief
+        && !summaryDismissed
+        && !intakePending
+        && (
+          <div className="summary-card">
+            <div className="summary-card-head">
+              <div>
+                <span className="summary-eyebrow">目标已确认</span>
+                <h3>{onboarding.intake.brief.title}</h3>
+              </div>
+              {onboarding.intake.brief.depth && (
+                <span className="badge">{onboarding.intake.brief.depth}</span>
+              )}
+            </div>
+            {onboarding.intake.brief.direction && (
+              <div className="summary-direction">
+                <span>学习方向</span>
+                <p>{onboarding.intake.brief.direction}</p>
+              </div>
+            )}
+            <div className="summary-fields">
+              <div className="summary-field">
+                <span>预期成果</span>
+                <strong>{onboarding.intake.brief.targetOutcome}</strong>
+              </div>
+              <div className="summary-field">
+                <span>当前基础</span>
+                <strong>{onboarding.intake.brief.currentLevel}</strong>
+              </div>
+              <div className="summary-field">
+                <span>时间投入</span>
+                <strong>{onboarding.intake.brief.availableTime}</strong>
+              </div>
+              <div className="summary-field">
+                <span>达成限期</span>
+                <strong>{onboarding.intake.brief.deadline || '未明确'}</strong>
+              </div>
+            </div>
+            <div className="summary-actions">
+              <button className="primary-action" type="button" disabled={!hasAiConfiguration} onClick={() => void onGenerateInitialPlan()}>
+                <Wand2 size={16} />
+                确认并生成计划
+                <ArrowRight size={16} />
+              </button>
+              <button className="secondary-action" type="button" onClick={() => setSummaryDismissed(true)}>
+                修改信息
+              </button>
+            </div>
+          </div>
+        )}
+
+      {onboarding?.pendingInteraction?.status === 'open' && !intakePending && (
+        <PendingAgentQuestion
+          interaction={onboarding.pendingInteraction}
+          onCancel={() => void onCancelPendingQuestion()}
+          onAnswer={(text) => void send(text)}
+        />
+      )}
+
+      {!showQuestionForm && (
+        <div className={`intake-input-dock${onboarding?.pendingInteraction?.status === 'open' && !intakePending ? ' collapsed' : ''}`}>
+        {onboarding?.pendingInteraction?.status === 'open' && !intakePending ? (
+          <>
+            <div className="intake-input-hint">
+              <Info size={14} />
+              <span>你也可以在下方直接回复，或补充更多细节...</span>
+            </div>
+            <div className="intake-input-box slim">
+              <FileText size={18} />
+              <textarea
+                value={message}
+                onChange={(event) => setMessage(event.target.value)}
+                placeholder="输入你的补充内容..."
+                aria-label="输入学习目标"
+                disabled={intakePending}
+              />
+              <button className="slim-send" type="button" disabled={!message.trim() || !hasAiConfiguration || intakePending} onClick={() => void send(message)}>
+                <SendHorizontal size={16} />
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="intake-input-box">
+              <FileText size={18} />
+              <textarea
+                value={message}
+                onChange={(event) => setMessage(event.target.value)}
+                placeholder="输入你的回答，或补充更多信息..."
+                aria-label="输入学习目标"
+                disabled={intakePending}
+              />
+            </div>
+            <div className="intake-actions">
+              {detailed && (
+                <button
+                  className="text-action"
+                  type="button"
+                  disabled={!message.trim() || !hasAiConfiguration || intakePending}
+                  onClick={() => {
+                    const question = message.trim();
+                    setMessage('');
+                    void onAskTemporaryQuestion(question);
+                  }}
+                >
+                  <Sparkles size={16} />
+                  临时学习这个问题
+                </button>
+              )}
+              {detailed && !intakePending && hasConfirmedGoalWithoutGuide && (
+                <button className="text-action" type="button" disabled={!hasAiConfiguration} onClick={() => void onGenerateInitialPlan()}>
+                  <Wand2 size={16} />
+                  生成完整学习计划
+                </button>
+              )}
+              {detailed && !intakePending && !canGenerateInitialPlan && (
+                <button className="text-action" type="button" disabled={!hasAiConfiguration} onClick={() => void send('请使用当前信息生成初步计划。')}>
+                  <Wand2 size={16} />
+                  使用当前信息生成完整计划
+                </button>
+              )}
+              <button className="primary-action" type="button" disabled={!message.trim() || !hasAiConfiguration || intakePending} onClick={() => void send(message)}>
+                <SendHorizontal size={16} />
+                {intakePending ? '等待回复' : '发送'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+      )}
+    </>
+  );
 
   if (!guide && goal && todayGuide) {
     const preparationState = todayGuide.preparationState;
@@ -320,11 +591,40 @@ export function OverviewPage({
             <LearningPathSidebar
               stages={roadmap}
               currentStageId={activeStage?.id ?? null}
+              items={nearTermPlanItems}
+              direction={onboarding?.intake.brief?.direction}
+              goalProgressStatus={todayGuide.goalProgress.status}
               showFull={showFullRoadmap}
               onToggleFull={() => setShowFullRoadmap((current) => !current)}
             />
           </aside>
         </div>
+
+        {(onboarding?.messages?.length ?? 0) > 0 && (
+          <section className="surface intake-chat-panel" aria-label="目标访谈记录">
+            <div className="current-step-heading">
+              <div>
+                <span className="focus-eyebrow">目标访谈</span>
+                <h2>访谈记录</h2>
+              </div>
+              <span className="micro-hint">历史对话仍保留，可继续补充信息。</span>
+            </div>
+            {showIntakeHistory ? (
+              <>
+                {renderIntakeChat(false)}
+                <div className="intake-history-collapsed">
+                  <div><History size={16} /><span>访谈记录已展开</span></div>
+                  <button type="button" onClick={() => setShowIntakeHistory(false)}>收起对话</button>
+                </div>
+              </>
+            ) : (
+              <div className="intake-history-collapsed">
+                <div><History size={16} /><span>访谈记录已收纳</span></div>
+                <button type="button" onClick={() => setShowIntakeHistory(true)}>查看历史对话</button>
+              </div>
+            )}
+          </section>
+        )}
 
         {showRestartConfirm && (
           <div className="modal-overlay" onClick={() => setShowRestartConfirm(false)}>
@@ -350,97 +650,26 @@ export function OverviewPage({
     return (
       <section className="intake-workspace">
         <div className="intake-main">
-          <div className="generation-path" aria-label="输出路径">
-            <Sparkles size={18} />
-            <span>将生成：</span>
-            <strong>长期大纲</strong>
-            <ChevronRight size={16} />
-            <strong>近期计划</strong>
-            <ChevronRight size={16} />
-            <strong>当前 Learning Guide</strong>
+          <div className="intake-header" aria-label="生成预览">
+            <div className="intake-header-row">
+              <div className="intake-header-title">
+                <span className="intake-header-icon"><Sparkles size={16} /></span>
+                <span>生成预览</span>
+              </div>
+              <div className="intake-progress">
+                <div className="step-progress-bar"><div /></div>
+                <span className="intake-progress-label">1 / 3 目标确认</span>
+              </div>
+            </div>
+            <div className="intake-steps">
+              <div className="step-chip active"><span className="step-chip-num">1</span><span>长期大纲</span></div>
+              <div className="step-chip"><span className="step-chip-num">2</span><span>近期计划</span></div>
+              <div className="step-chip"><span className="step-chip-num">3</span><span>Learning Guide</span></div>
+            </div>
           </div>
 
-          <section className="surface intake-chat-panel" aria-label="主动访谈">
-            <div className="intake-thread redesigned" aria-label="目标访谈记录">
-              {(onboarding?.messages ?? []).length === 0 && (
-                <div className="intake-message assistant">
-                  <span>AI</span>
-                  <div className="message-content">你准备学习什么？可以直接说目标、期限、基础和通常可投入的时间。</div>
-                </div>
-              )}
-              {(onboarding?.messages ?? []).map((item) => (
-                <div className={item.role === 'assistant' ? 'intake-message assistant' : 'intake-message user'} key={item.id}>
-                  <span>{item.role === 'assistant' ? 'AI' : '你'}</span>
-                  <div className="message-content">{item.content}</div>
-                </div>
-              ))}
-              {pendingUserMessage && (
-                <div className="intake-message user">
-                  <span>你</span>
-                  <div className="message-content">{pendingUserMessage}</div>
-                </div>
-              )}
-              {intakePending && (
-                <div className="intake-message assistant pending" aria-live="polite">
-                  <span>AI</span>
-                  <div>
-                    <strong>AI 正在生成完整学习计划</strong>
-                    <TypingDots />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {onboarding?.pendingInteraction?.status === 'open' && !intakePending && (
-              <PendingAgentQuestion
-                interaction={onboarding.pendingInteraction}
-                onCancel={() => void onCancelPendingQuestion()}
-              />
-            )}
-
-            <div className="intake-input-dock">
-              <div className="intake-input-box">
-                <FileText size={18} />
-                <textarea
-                  value={message}
-                  onChange={(event) => setMessage(event.target.value)}
-                  placeholder="输入你的回答，或补充更多信息..."
-                  aria-label="输入学习目标"
-                  disabled={intakePending}
-                />
-              </div>
-              <div className="intake-actions">
-                <button
-                  className="text-action"
-                  type="button"
-                  disabled={!message.trim() || !hasAiConfiguration || intakePending}
-                  onClick={() => {
-                    const question = message.trim();
-                    setMessage('');
-                    void onAskTemporaryQuestion(question);
-                  }}
-                >
-                  <Sparkles size={16} />
-                  临时学习这个问题
-                </button>
-                {!intakePending && canGenerateInitialPlan && (
-                  <button className="text-action" type="button" disabled={!hasAiConfiguration} onClick={() => void onGenerateInitialPlan()}>
-                    <Wand2 size={16} />
-                    生成完整学习计划
-                  </button>
-                )}
-                {!intakePending && !canGenerateInitialPlan && (
-                  <button className="text-action" type="button" disabled={!hasAiConfiguration} onClick={() => void send('请使用当前信息生成初步计划。')}>
-                    <Wand2 size={16} />
-                    使用当前信息生成完整计划
-                  </button>
-                )}
-                <button className="primary-action" type="button" disabled={!message.trim() || !hasAiConfiguration || intakePending} onClick={() => void send(message)}>
-                  <SendHorizontal size={16} />
-                  {intakePending ? '等待回复' : '发送'}
-                </button>
-              </div>
-            </div>
+<section className="surface intake-chat-panel" aria-label="主动访谈">
+            {renderIntakeChat(true)}
           </section>
           {temporaryLearning && (
             <section className="surface intake-chat-panel" aria-label="临时学习记录">
@@ -456,7 +685,7 @@ export function OverviewPage({
               <div className="intake-thread redesigned">
                 {temporaryLearning.messages.map((item) => (
                   <div className={item.role === 'assistant' ? 'intake-message assistant' : 'intake-message user'} key={item.id}>
-                    <span>{item.role === 'assistant' ? 'AI' : '你'}</span>
+                    <span className="intake-message-meta">{item.role === 'assistant' ? '学习管家' : '你的输入'}</span>
                     <div className="message-content"><MessageContent content={item.content} /></div>
                   </div>
                 ))}
@@ -617,7 +846,7 @@ export function OverviewPage({
                 </div>
               )}
               <div className="overview-task-footer">
-                <details className="overview-task-details">
+                <details className="overview-task-details" open>
                   <summary><ListChecks size={16} />查看任务摘要<ChevronRight size={16} /></summary>
                   <div><section><h3>目标与范围</h3><p>{currentTask.objective}</p><p>{currentTask.scope}</p></section><section><h3>预期产出</h3><p>{currentTask.deliverable}</p></section><section><h3>完成标准</h3><ul>{currentTask.doneWhen.map((item) => <li key={item}>{item}</li>)}</ul></section></div>
                 </details>
@@ -644,6 +873,9 @@ export function OverviewPage({
           <LearningPathSidebar
             stages={roadmap}
             currentStageId={activeStage?.id ?? null}
+            items={nearTermPlanItems}
+            direction={onboarding?.intake.brief?.direction}
+            goalProgressStatus={todayGuide?.goalProgress.status}
             showFull={showFullRoadmap}
             onToggleFull={() => setShowFullRoadmap((current) => !current)}
           />

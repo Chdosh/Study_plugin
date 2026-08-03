@@ -272,15 +272,24 @@ export class PlanningModule {
         error instanceof Error ? error : undefined
       );
     }
-    return this.store.saveLayeredPlan({
-      goal,
-      brief,
-      date,
-      windows,
-      roadmap: roadmapOutput,
-      shortPlan: shortPlanOutput,
-      dailyGuide: dailyGuideOutput
-    });
+try {
+      return await this.store.saveLayeredPlan({
+        goal,
+        brief,
+        date,
+        windows,
+        roadmap: roadmapOutput,
+        shortPlan: shortPlanOutput,
+        dailyGuide: dailyGuideOutput
+      });
+    } catch (error) {
+      if (error instanceof CategorizedError) throw error;
+      throw new CategorizedError(
+        'validation_error',
+        `学习计划保存失败：${error instanceof Error ? error.message : '未知错误'}。`,
+        error instanceof Error ? error : undefined
+      );
+    }
   }
 
   async prepareCurrentLearningUnit(

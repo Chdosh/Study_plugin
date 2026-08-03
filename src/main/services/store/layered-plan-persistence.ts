@@ -41,20 +41,20 @@ export class LayeredPlanPersistence {
     shortPlan: ShortPlanAgentOutput;
     dailyGuide: DailyGuideAgentOutput;
   }): Promise<{ goal: LearningGoal; roadmap: RoadmapStage[]; shortPlan: NearTermPlanItem[]; guide: DailyGuide }> {
-    validateRoadmapTargetDates(
+    const roadmap = validateRoadmapTargetDates(
       params.goal.dueDate,
       params.roadmap.stages,
       params.date
     );
     for (const item of params.shortPlan.items) {
-      if (item.roadmapStagePosition < 1 || item.roadmapStagePosition > params.roadmap.stages.length) {
+      if (item.roadmapStagePosition < 1 || item.roadmapStagePosition > roadmap.length) {
         throw new Error(`近期计划项 ${item.itemIndex} 引用了不存在的 Roadmap Stage。`);
       }
     }
     const now = nowIso();
     const result = await this.db.transaction(async (tx) => {
-      const roadmap: RoadmapStage[] = [];
-      for (const [position, stage] of params.roadmap.stages.entries()) {
+      const roadmapRows: RoadmapStage[] = [];
+      for (const [position, stage] of roadmap.entries()) {
         const row = {
           id: createId('stage'),
           goalId: params.goal.id,
@@ -69,12 +69,12 @@ export class LayeredPlanPersistence {
           updatedAt: now
         };
         await tx.insert(roadmapStages).values(row);
-        roadmap.push(row);
+        roadmapRows.push(row);
       }
       const shortPlan: NearTermPlanItem[] = [];
       let firstItemId: string | null = null;
       for (const item of params.shortPlan.items) {
-        const stage = roadmap[item.roadmapStagePosition - 1];
+        const stage = roadmapRows[item.roadmapStagePosition - 1];
         if (!stage) throw new Error('近期计划项无法映射到 Roadmap Stage。');
         const row = {
           id: createId('plan_item'),
@@ -94,7 +94,7 @@ export class LayeredPlanPersistence {
         firstItemId ??= row.id;
         shortPlan.push(mapNearTermPlanItem(row));
       }
-      if (!firstItemId || !roadmap[0]) throw new Error('分层计划缺少首个可执行项。');
+      if (!firstItemId || !roadmapRows[0]) throw new Error('分层计划缺少首个可执行项。');
       const guideId = createId('guide');
       await tx.insert(learningGuides).values({
         id: guideId,
@@ -117,7 +117,7 @@ export class LayeredPlanPersistence {
           id: taskId,
           goalId: params.goal.id,
           guideId,
-          roadmapStageId: roadmap[0].id,
+          roadmapStageId: roadmapRows[0].id,
           title: task.title,
           objective: task.objective,
           scope: task.scope,
@@ -165,7 +165,7 @@ export class LayeredPlanPersistence {
         }),
         createdAt: now
       });
-      return { roadmap, shortPlan, guideId };
+      return { roadmap: roadmapRows, shortPlan, guideId };
     });
     const guide = await this.getDailyGuideById(result.guideId);
     if (!guide) throw new Error('初始 Learning Guide 保存后无法读取。');
@@ -241,12 +241,9 @@ function validateRoadmapTargetDates(
   goalDueDate: string | null,
   stages: RoadmapAgentOutput['stages'],
   planDate: string
-): void {
+): RoadmapAgentOutput['stages'] {
   if (!goalDueDate) {
-    if (stages.some((stage) => stage.targetDate !== null)) {
-      throw new Error('Goal 没有截止日期，Roadmap 不得自行创建阶段日期。');
-    }
-    return;
+    return stages.map((stage) => ({ ...stage, targetDate: null }));
   }
   if (stages.some((stage) => stage.targetDate === null)) {
     throw new Error('有截止日期的 Goal 必须为每个 Roadmap Stage 提供检查点日期。');
@@ -262,4 +259,5 @@ function validateRoadmapTargetDates(
     }
     previous = targetDate;
   }
+  return stages;
 }

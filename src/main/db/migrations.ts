@@ -107,9 +107,21 @@ export const databaseMigrations: DatabaseMigration[] = [
       DELETE FROM schema_migrations
         WHERE id = '2026-07-29-submission-step-evaluation-status';
     `
+  },
+  {
+    id: '2026-08-04-goal-intake-questions',
+    sql: `
+      ALTER TABLE goal_intakes
+        ADD COLUMN questions_json TEXT;
+    `,
+    rollbackSql: `
+      ALTER TABLE goal_intakes DROP COLUMN questions_json;
+      DELETE FROM schema_migrations
+        WHERE id = '2026-08-04-goal-intake-questions';
+    `
   }
 ];
-
+  
 async function ensureMigrationTable(client: Client): Promise<void> {
   await client.executeMultiple(`
     CREATE TABLE IF NOT EXISTS schema_migrations (

@@ -138,8 +138,15 @@ export const goalBriefSchema = z.object({
   currentLevel: z.string().min(1),
   availableTime: z.string().min(1),
   deadline: z.string().default('未明确'),
+  depth: z.string().default(''),
+  direction: z.string().default(''),
   constraints: stringArrayFromAiSchema,
   successCriteria: stringArrayFromAiSchema
+});
+
+export const goalIntakeQuestionSchema = z.object({
+  prompt: z.string().min(1),
+  options: stringArrayFromAiSchema
 });
 
 export const goalIntakeAgentOutputSchema = z.object({
@@ -147,6 +154,8 @@ export const goalIntakeAgentOutputSchema = z.object({
   reply: z.string().min(1),
   brief: goalBriefSchema.nullable().default(null),
   missingInfo: stringArrayFromAiSchema,
+  options: stringArrayFromAiSchema,
+  questions: z.array(goalIntakeQuestionSchema).default([]),
   shouldForceStart: booleanFromAiSchema.default(false)
 });
 

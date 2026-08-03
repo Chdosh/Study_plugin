@@ -135,6 +135,24 @@ describe('AI output schemas', () => {
 
     expect(result.missingInfo).toEqual(['可用时间']);
     expect(result.shouldForceStart).toBe(false);
+    expect(result.questions).toEqual([]);
+  });
+
+  it('accepts a multi-question goal intake result with options per question', () => {
+    const result = goalIntakeAgentOutputSchema.parse({
+      status: 'need_more_info',
+      reply: '为更精准地了解你的需求，请回答以下问题。',
+      missingInfo: ['学习深度', '可用时间'],
+      brief: null,
+      questions: [
+        { prompt: '你想以哪种方式学习？', options: '快速了解架构' },
+        { prompt: '每天投入多少时间？', options: ['1-2 小时', '3-4 小时'] }
+      ]
+    });
+
+    expect(result.questions).toHaveLength(2);
+    expect(result.questions[0].options).toEqual(['快速了解架构']);
+    expect(result.questions[1].options).toHaveLength(2);
   });
 
   it('accepts a force-start goal intake result with a brief', () => {
@@ -156,6 +174,7 @@ describe('AI output schemas', () => {
 
     expect(result.shouldForceStart).toBe(true);
     expect(result.brief?.constraints).toEqual(['晚上学习，不能大改技术栈']);
+    expect(result.brief?.direction).toBe('');
   });
 
   it('accepts layered plan outputs for roadmap, short plan, and daily guide', () => {

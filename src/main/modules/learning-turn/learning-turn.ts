@@ -295,12 +295,24 @@ function isConversationEvaluation(value: unknown): value is {
     && record.misconceptions.every((item) => typeof item === 'string');
 }
 
-function operationInstruction(toolName: AgentToolName): string {
+export function operationInstruction(toolName: AgentToolName): string {
   switch (toolName) {
     case 'propose_goal':
-      return '根据访谈事实形成目标简报；信息不足时选择 ask_user，不要编造约束。';
+      return [
+        '根据访谈事实形成目标简报；信息不足时选择 ask_user，不要编造约束。',
+        'ready 判定：目标结果、当前基础、可用时间三要素已从访谈获得即 ready；截止日期不是必问项，缺失时按"未明确"处理。',
+        '用户说"直接开始"或"使用当前信息生成初步计划"时一律 ready，简报缺失字段填"未明确"，不得再追问。',
+        'ready 时把学习方向写进 brief.direction（2-3 句：总体思路、大致阶段走向、为什么这样安排；不写具体日期、任务清单或阶段细节）；ready 的 reply 只写一句话确认（例如"目标已确认，现在开始生成学习计划"），不要输出路线预览、阶段计划或讲解，也不要附带追加问题。',
+        'need_more_info 时一次通过 questions 字段输出 2-4 个最关键的问题（每个问题带 2-4 个 options 选项，选项不超过 15 字），让用户一次填完，不要逐条往返追问；不要重复问用户已经回答过的信息；只在确实只需要确认一个信息时才使用单问题 ask_user。',
+        '首次访谈先确认学习深度并写入 brief.depth，取值限定为："从零系统学"、"快速了解架构"、"专项深入"之一；用户没主动说深度时按默认"从零系统学"处理。'
+      ].join('\n');
     case 'propose_roadmap':
-      return '根据已确认目标生成少量分层 Roadmap 提案；有截止日期时为各阶段设置有序检查点日期，不生成每日计划，不直接改变正式计划。';
+      return [
+        '根据已确认目标生成少量分层 Roadmap 提案；有截止日期时为各阶段设置有序检查点日期，不生成每日计划，不直接改变正式计划。',
+        '目标深度为"快速了解架构"或目标结果包含"了解/概览/入门了解"时：只生成 1-2 个概览阶段，阶段聚焦概念与架构理解，不插入基础补齐（如 Python 全量学习），不安排动手项目阶段。',
+        '目标深度为"专项深入"时：只围绕该专项生成阶段，不铺开相邻领域的基础课程。',
+        '目标深度为"从零系统学"（或未标注深度）时：才生成完整的从基础到目标的阶段路径。'
+      ].join('\n');
     case 'propose_short_plan':
       return '生成近期粗粒度安排，保持阶段顺序，不直接应用计划。';
     case 'prepare_learning_guide':

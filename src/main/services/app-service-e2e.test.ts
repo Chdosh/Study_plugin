@@ -15,6 +15,7 @@ import type { LearningSubmission } from '../../shared/types';
 type AiReply = Record<string, unknown>;
 type QueuedAiResponse =
   | { kind: 'json'; body: AiReply; responseField: 'content' | 'reasoning_content'; delayMs?: number }
+  | { kind: 'raw'; content: string; responseField: 'content' | 'reasoning_content' }
   | { kind: 'http_error'; status: number; message: string };
 
 describe('学习闭环端到端', { timeout: 15_000 }, () => {
@@ -72,6 +73,201 @@ describe('学习闭环端到端', { timeout: 15_000 }, () => {
     expect(learning.goal?.id).toBe(overview.goal?.id);
     expect(learning.dailyGuideTask?.title).toBe('实现第一个功能');
     expect(overview.guide?.status).toBe('confirmed');
+  });
+
+  it('ready 但截止日期未明确时不再追问，直接进入 ready', async () => {
+    const fixture = await LearningFlowFixture.create();
+    fixtures.push(fixture);
+    fixture.ai.enqueue(toolReply('propose_goal', {
+      status: 'ready',
+      reply: '目标已经清楚，可以生成学习路径。',
+      brief: {
+        title: '掌握 TypeScript',
+        targetOutcome: '能够独立完成一个 TypeScript 项目',
+        currentLevel: '了解 JavaScript 基础',
+        availableTime: '每天两小时',
+        deadline: '未明确',
+        constraints: [],
+        successCriteria: ['完成可运行项目']
+      },
+      missingInfo: [],
+      shouldForceStart: false
+    }));
+
+    const onboarding = await fixture.app.sendOnboardingMessage('我想系统学习 TypeScript。');
+
+    expect(onboarding.intake.status).toBe('ready');
+    expect(onboarding.messages.at(-1)?.content).not.toContain('【补充目标截止日期】');
+    expect(onboarding.pendingInteraction).toBeNull();
+  });
+
+  it('脏输出：Markdown 包裹的 propose_goal JSON 能被自动修复并进入 ready', async () => {
+    const fixture = await LearningFlowFixture.create();
+    fixtures.push(fixture);
+    fixture.ai.enqueueRaw([
+      '好的，这是目标确认结果：',
+      '```json',
+      JSON.stringify(toolReply('propose_goal', {
+        status: 'ready',
+        reply: '目标已经清楚，可以生成学习路径。',
+        brief: {
+          title: '掌握 TypeScript',
+          targetOutcome: '能够独立完成一个 TypeScript 项目',
+          currentLevel: '了解 JavaScript 基础',
+          availableTime: '每天两小时',
+          deadline: '两个月',
+          constraints: [],
+          successCriteria: ['完成可运行项目']
+        },
+        missingInfo: [],
+        shouldForceStart: false
+      })),
+      '```',
+      '祝学习顺利！'
+    ].join('\n'));
+
+    const onboarding = await fixture.app.sendOnboardingMessage('我想系统学习 TypeScript。');
+
+    expect(onboarding.intake.status).toBe('ready');
+    expect(onboarding.intake.brief?.title).toBe('掌握 TypeScript');
+    expect(onboarding.pendingInteraction).toBeNull();
+  });
+
+  it('兜底路径：输出非法内容时落库文案如实说明生成失败，用户可继续访谈直至 ready', async () => {
+    const fixture = await LearningFlowFixture.create();
+    fixtures.push(fixture);
+    fixture.ai.enqueueRaw('这不是 JSON，只是一段模型胡话。');
+    fixture.ai.enqueueRaw('{}');
+
+    const failed = await fixture.app.sendOnboardingMessage('我想系统学习 TypeScript。');
+    expect(failed.intake.status).toBe('collecting');
+    const lastMessage = failed.messages.at(-1)?.content ?? '';
+    expect(lastMessage).toContain('生成失败');
+    expect(lastMessage).not.toContain('没能完整理解');
+
+    fixture.ai.enqueue(readyGoalReply());
+    const recovered = await fixture.app.sendOnboardingMessage('我每天可以学习两小时，目标是完成项目。');
+    expect(recovered.intake.status).toBe('ready');
+  });
+
+  it('U1 回归：ready 回复夹带长讲解和追加问题时，不触发追问链、直接 ready', async () => {
+    const fixture = await LearningFlowFixture.create();
+    fixtures.push(fixture);
+    fixture.ai.enqueue(toolReply('propose_goal', {
+      status: 'ready',
+      reply: [
+        '目标已确认：掌握 TypeScript。',
+        '',
+        '🗺️ 初步路线：',
+        '· 第 1 周：类型基础',
+        '· 第 2 周：项目实战',
+        '',
+        '⚠️ 真正开始前，请先回答我一个小问题：你写过哪些代码？'
+      ].join('\n'),
+      brief: {
+        title: '掌握 TypeScript',
+        targetOutcome: '能够独立完成一个 TypeScript 项目',
+        currentLevel: '了解 JavaScript 基础',
+        availableTime: '每天两小时',
+        deadline: '未明确',
+        constraints: [],
+        successCriteria: ['完成可运行项目']
+      },
+      missingInfo: [],
+      shouldForceStart: false
+    }));
+
+    const onboarding = await fixture.app.sendOnboardingMessage('我想系统学习 TypeScript。');
+
+    expect(onboarding.intake.status).toBe('ready');
+    expect(onboarding.pendingInteraction).toBeNull();
+    expect(onboarding.messages.at(-1)?.content).not.toContain('【补充目标截止日期】');
+  });
+
+  it('选项式追问：propose_goal 携带 options 时生成单选项追问，点击选项回答后进入 ready', async () => {
+    const fixture = await LearningFlowFixture.create();
+    fixtures.push(fixture);
+    fixture.ai.enqueue(toolReply('propose_goal', {
+      status: 'need_more_info',
+      reply: '你想以哪种方式学习 RAG 与 LangChain 架构？',
+      brief: null,
+      missingInfo: ['学习深度'],
+      options: ['从零系统学', '快速了解架构', '专项深入'],
+      shouldForceStart: false
+    }));
+
+    const waiting = await fixture.app.sendOnboardingMessage('我想简单了解一下 RAG 和 LangChain 等技术架构。');
+    expect(waiting.intake.status).toBe('collecting');
+    expect(waiting.pendingInteraction?.answerMode).toBe('single_choice');
+    expect(waiting.pendingInteraction?.options).toEqual(['从零系统学', '快速了解架构', '专项深入']);
+
+    fixture.ai.enqueue(toolReply('propose_goal', {
+      status: 'ready',
+      reply: '目标已确认，现在开始生成学习计划。',
+      brief: {
+        title: '了解 RAG 与 LangChain 架构',
+        targetOutcome: '能说清 RAG 与 LangChain 的整体架构和核心概念',
+        currentLevel: '几乎无编程基础',
+        availableTime: '每天两小时',
+        deadline: '未明确',
+        depth: '快速了解架构',
+        constraints: [],
+        successCriteria: ['能用自己的话讲清架构']
+      },
+      missingInfo: [],
+      shouldForceStart: false
+    }));
+    const answered = await fixture.app.sendOnboardingMessage('快速了解架构');
+    expect(answered.intake.status).toBe('ready');
+    expect(answered.intake.brief?.depth).toBe('快速了解架构');
+    expect(answered.pendingInteraction).toBeNull();
+  });
+
+  it('多问题表单：一次抛出多个问题，用户一次提交全部回答后进入 ready，questions 清空', async () => {
+    const fixture = await LearningFlowFixture.create();
+    fixtures.push(fixture);
+    fixture.ai.enqueue(toolReply('propose_goal', {
+      status: 'need_more_info',
+      reply: '为更精准地了解你的需求，请回答以下问题。',
+      brief: null,
+      missingInfo: ['学习深度', '可用时间', '目标结果'],
+      questions: [
+        { prompt: '你想以哪种方式学习？', options: ['从零系统学', '快速了解架构', '专项深入'] },
+        { prompt: '每天可以投入多少时间？', options: ['1-2 小时', '3-4 小时', '5 小时以上'] },
+        { prompt: '最终想达到什么结果？', options: ['独立完成项目', '能讲清原理'] }
+      ],
+      shouldForceStart: false
+    }));
+
+    const waiting = await fixture.app.sendOnboardingMessage('我想了解 RAG 与 LangChain 架构。');
+    expect(waiting.intake.status).toBe('collecting');
+    expect(waiting.intake.questions).toHaveLength(3);
+    expect(waiting.intake.questions[0].options).toEqual(['从零系统学', '快速了解架构', '专项深入']);
+    expect(waiting.pendingInteraction).toBeNull();
+
+    fixture.ai.enqueue(toolReply('propose_goal', {
+      status: 'ready',
+      reply: '目标已确认，现在开始生成学习计划。',
+      brief: {
+        title: '了解 RAG 与 LangChain 架构',
+        targetOutcome: '能说清 RAG 与 LangChain 的整体架构和核心概念',
+        currentLevel: '几乎无编程基础',
+        availableTime: '每天两小时',
+        deadline: '未明确',
+        depth: '快速了解架构',
+        direction: '先概览 AI 技术生态，再深入 RAG 与 LangChain 的核心原理。',
+        constraints: [],
+        successCriteria: ['能用自己的话讲清架构']
+      },
+      missingInfo: [],
+      shouldForceStart: false
+    }));
+    const answered = await fixture.app.sendOnboardingMessage('1. 快速了解架构\n2. 每天两小时\n3. 能讲清原理');
+    expect(answered.intake.status).toBe('ready');
+    expect(answered.intake.questions).toHaveLength(0);
+    expect(answered.intake.brief?.depth).toBe('快速了解架构');
+    expect(answered.intake.brief?.direction).toContain('概览');
+    expect(answered.pendingInteraction).toBeNull();
   });
 
   it('运行中的目标访谈不会把重复点击写成新的用户消息', async () => {
@@ -888,6 +1084,14 @@ class LocalAiServer {
     })));
   }
 
+  enqueueRaw(...contents: string[]): void {
+    this.queue.push(...contents.map((content) => ({
+      kind: 'raw' as const,
+      content,
+      responseField: 'content' as const
+    })));
+  }
+
   enqueueDelayed(delayMs: number, ...responses: AiReply[]): void {
     this.queue.push(...responses.map((body) => ({
       kind: 'json' as const,
@@ -917,11 +1121,13 @@ class LocalAiServer {
       response.end(JSON.stringify({ error: { message: next.message } }));
       return;
     }
-    if (next.delayMs) {
+    if (next.kind === 'json' && next.delayMs) {
       await new Promise((resolve) => setTimeout(resolve, next.delayMs));
     }
     response.writeHead(200, { 'content-type': 'application/json' });
-    const serialized = JSON.stringify(next.body);
+    const rawContent = next.kind === 'raw'
+      ? next.content
+      : JSON.stringify(next.body);
     response.end(JSON.stringify({
       id: `chatcmpl-${crypto.randomUUID()}`,
       object: 'chat.completion',
@@ -931,9 +1137,9 @@ class LocalAiServer {
         index: 0,
         message: {
           role: 'assistant',
-          content: next.responseField === 'content' ? serialized : null,
+          content: next.responseField === 'content' ? rawContent : null,
           ...(next.responseField === 'reasoning_content'
-            ? { reasoning_content: serialized }
+            ? { reasoning_content: rawContent }
             : {})
         },
         finish_reason: 'stop'
@@ -976,6 +1182,8 @@ function readyGoalReply(): AiReply {
       currentLevel: '了解 JavaScript 基础',
       availableTime: '每天两小时',
       deadline: '两个月',
+      depth: '从零系统学',
+      direction: '先补齐类型系统基础，再进入项目实战，最终完成可运行项目。',
       constraints: ['使用本地开发环境'],
       successCriteria: ['完成可运行项目']
     },

@@ -501,6 +501,72 @@ describe('StudyStore V2 business ownership', () => {
     expect(storedStage.status).toBe('completed');
     expect(storedGoal.status).toBe('done');
   });
+
+  it('Goal 无截止日期时，保存阶段日期会被归一为 null 而不是拒绝保存', async () => {
+    const goal = await store.createGoal('掌握闭包');
+    const brief = {
+      title: '掌握闭包',
+      targetOutcome: '能够解释并使用闭包',
+      currentLevel: '基础',
+      availableTime: '每天一小时',
+      deadline: '未明确',
+      depth: '',
+      direction: '',
+      constraints: [],
+      successCriteria: ['能独立完成练习']
+    };
+    const result = await store.saveLayeredPlan({
+      goal,
+      brief,
+      date: '2026-07-23',
+      windows: [{ start: '20:00', end: '21:00' }],
+      roadmap: {
+        goalSummary: '掌握闭包',
+        stages: [{
+          title: '理解基础',
+          objective: '理解词法作用域',
+          direction: '从概念到实践',
+          successCriteria: '能解释闭包',
+          targetDate: '2026-08-01'
+        }]
+      },
+      shortPlan: {
+        weekFocus: '闭包',
+        items: [{
+          itemIndex: 1,
+          roadmapStagePosition: 1,
+          title: '闭包入门',
+          focus: '词法作用域',
+          tasks: ['解释闭包'],
+          expectedOutput: '一段解释',
+          successCriteria: '解释准确'
+        }]
+      },
+      dailyGuide: {
+        date: '2026-07-23',
+        todayGoal: '理解闭包',
+        deliverables: ['解释与示例'],
+        boundaries: ['不涉及高级模式'],
+        acceptanceCriteria: ['解释准确'],
+        tomorrowActions: [],
+        tasks: [{
+          title: '理解闭包',
+          objective: '理解词法作用域',
+          scope: '概念',
+          estimatedMinutes: { min: 30, target: 45, max: 60 },
+          deliverable: '一段解释',
+          doneWhen: ['解释准确'],
+          quickHint: '从定义开始',
+          evaluationMode: 'ai',
+          actions: [{ title: '阅读概念', instruction: '通读定义', checkpoint: '能复述' }]
+        }]
+      }
+    });
+    expect(result.roadmap[0].targetDate).toBeNull();
+    const storedStage = (await db.select().from(roadmapStages)
+      .where(eq(roadmapStages.goalId, goal.id)))[0];
+    expect(storedStage.targetDate).toBeNull();
+  });
 });
 
 async function removeTempDir(path: string): Promise<void> {
@@ -523,6 +589,8 @@ async function createLearningUnit(store: StudyStore) {
     currentLevel: '基础',
     availableTime: '每天一小时',
     deadline: '',
+    depth: '',
+    direction: '',
     constraints: [],
     successCriteria: ['能独立完成练习']
   };

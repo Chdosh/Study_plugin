@@ -86,8 +86,8 @@ const proposeGoalFallbackSchema = z.preprocess(
       status: 'need_more_info',
       reply: typeof record.reply === 'string' && record.reply.trim()
         ? record.reply
-        : '我暂时没能完整理解你的目标，请再补充一些关键信息（例如想达成的结果、当前水平、可用时间）。',
-      missingInfo: ['目标结果', '当前水平', '可用时间'],
+        : '刚才生成失败，你的输入已保留。请再说一次，或直接说"开始"来使用当前信息生成计划。',
+      missingInfo: ['目标结果', '当前水平', '可用时间', '截止日期'],
       shouldForceStart: false,
       brief: null
     };
@@ -267,10 +267,12 @@ export function createBuiltinToolRegistry(
     effect: 'proposal',
     fallback: proposeGoalFallbackSchema,
     requestUser: (output) => output.status === 'need_more_info'
+      && (!output.questions || output.questions.length === 0)
       ? {
           question: output.reply,
           reason: '继续目标澄清需要用户补充关键信息。',
-          answerMode: 'free_text',
+          answerMode: output.options && output.options.length > 0 ? 'single_choice' : 'free_text',
+          options: output.options ?? [],
           canSkip: true,
           intent: 'continue_goal_intake'
         }

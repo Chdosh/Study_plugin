@@ -29,6 +29,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:contract": "vitest run src/main/ai/ai-provider-contract.test.ts",
+    "eval:ai": "vite-node src/main/ai/eval/cli.ts",
+    "eval:smoke": "vite-node src/main/ai/eval/cli.ts --mode smoke",
     "db:generate": "drizzle-kit generate",
     "db:upgrade-v2": "vite-node src/migration-v1-v2/cli.ts",
     "db:restore-v1": "vite-node src/migration-v1-v2/cli.ts restore"

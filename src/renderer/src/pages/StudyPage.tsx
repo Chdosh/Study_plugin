@@ -260,18 +260,46 @@ export function StudyPage({
               ))}
               {teaching.pendingInteraction?.status === 'open' && (
                 <div className="submission-composer">
-                  <label htmlFor="learning-turn-answer">补充信息</label>
-                  <textarea
-                    id="learning-turn-answer"
-                    value={turnAnswer}
-                    onChange={(event) => setTurnAnswer(event.target.value)}
-                    placeholder="回答后会继续同一个 Learning Turn"
-                  />
+                  {teaching.pendingInteraction.answerMode === 'single_choice'
+                    && teaching.pendingInteraction.options.length > 0
+                    && (
+                      <div className="pending-agent-options">
+                        {teaching.pendingInteraction.options.map((option) => (
+                          <button
+                            key={option}
+                            className="option-action"
+                            type="button"
+                            disabled={learningPending}
+                            onClick={() => {
+                              const pending = teaching.pendingInteraction!;
+                              void onResumeLearningTurn(
+                                pending.id,
+                                option,
+                                pending.expectedContextVersion
+                              );
+                            }}
+                          >
+                            {option}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  {teaching.pendingInteraction.answerMode !== 'single_choice' && (
+                    <>
+                      <label htmlFor="learning-turn-answer">补充信息</label>
+                      <textarea
+                        id="learning-turn-answer"
+                        value={turnAnswer}
+                        onChange={(event) => setTurnAnswer(event.target.value)}
+                        placeholder="回答后会继续同一个 Learning Turn"
+                      />
+                    </>
+                  )}
                   <div className="submission-actions">
                     <button
                       className="primary-action"
                       type="button"
-                      disabled={!turnAnswer.trim() || learningPending}
+                      disabled={teaching.pendingInteraction.answerMode === 'single_choice' || !turnAnswer.trim() || learningPending}
                       onClick={() => {
                         const pending = teaching.pendingInteraction!;
                         void onResumeLearningTurn(
