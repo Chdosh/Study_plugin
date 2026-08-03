@@ -54,7 +54,7 @@ export class AiAgentTurnModel implements AgentTurnModel {
     }
     return {
       toolName: decision.toolName as AgentToolName,
-      input: mounted.inputSchema?.parse(decision.input) ?? decision.input,
+      input: validateDecisionInput(decision.input, mounted),
       metrics
     };
   }
@@ -90,6 +90,7 @@ export class AiAgentTurnModel implements AgentTurnModel {
       // three provider-neutral shapes seen across OpenAI-compatible services:
       // direct object, legacy Agent envelope, or one named business wrapper.
       schema: responseSchema,
+      fallbackSchema: mounted.fallbackSchema,
       user: [
         `本轮学习意图：${request.intent}`,
         request.userInput ? `用户输入：${request.userInput}` : '',
@@ -138,6 +139,20 @@ function parseSingleToolInput(
   return directSchema.parse(response);
 }
 
+function validateDecisionInput(
+  input: unknown,
+  mounted: MountedAgentTool
+): unknown {
+  if (mounted.inputSchema) {
+    const main = mounted.inputSchema.safeParse(input);
+    if (main.success) return main.data;
+    const fallback = mounted.fallbackSchema?.safeParse(input);
+    if (fallback?.success) return fallback.data;
+    throw main.error;
+  }
+  return input;
+}
+
 function createDecisionSchema(tools: MountedAgentTool[]) {
   return z.object({
     toolName: z.string().min(1),
@@ -155,6 +170,7 @@ function createDecisionSchema(tools: MountedAgentTool[]) {
     if (!selected.inputSchema) return;
     const validated = selected.inputSchema.safeParse(decision.input);
     if (validated.success) return;
+    if (selected.fallbackSchema?.safeParse(decision.input).success) return;
     for (const issue of validated.error.issues) {
       context.addIssue({
         code: z.ZodIssueCode.custom,

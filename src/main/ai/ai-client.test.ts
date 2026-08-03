@@ -116,4 +116,37 @@ describe('AiClient', () => {
 
     expect(openAiMocks.create).toHaveBeenCalledTimes(2);
   });
+
+  it('reconstructs a usable object from the fallback schema when repair also fails', async () => {
+    openAiMocks.create
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: JSON.stringify({}) } }]
+      })
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: JSON.stringify({}) } }]
+      });
+
+    const fallbackSchema = z.object({
+      explanation: z.string().default('默认讲解'),
+      userAction: z.string().default('继续当前步骤'),
+      requiresSubmission: z.boolean().default(false)
+    });
+
+    const output = await new AiClient().generateJson({
+      apiKey: 'test-key',
+      baseUrl: 'http://127.0.0.1/v1',
+      model: 'test-model',
+      system: 'test-agent',
+      user: 'return teaching json',
+      schema: testSchema,
+      fallbackSchema
+    });
+
+    expect(output).toEqual({
+      explanation: '默认讲解',
+      userAction: '继续当前步骤',
+      requiresSubmission: false
+    });
+    expect(openAiMocks.create).toHaveBeenCalledTimes(2);
+  });
 });

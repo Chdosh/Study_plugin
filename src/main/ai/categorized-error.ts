@@ -46,9 +46,13 @@ export function describeError(error: unknown): {
 export function categorizeThrownError(error: unknown): CategorizedError {
   if (error instanceof CategorizedError) return error;
   if (error instanceof z.ZodError) {
+    const issues = error.issues
+      .slice(0, 5)
+      .map((issue) => `${issue.path.join('.') || '(root)'}:${issue.message}`)
+      .join('；');
     return new CategorizedError(
       'schema_violation',
-      'AI 返回内容未通过业务格式校验；原始数据已保留，请在对应记录中重试。',
+      `AI 返回内容未通过业务格式校验；原始数据已保留，请在对应记录中重试。校验问题：${issues}`,
       error
     );
   }

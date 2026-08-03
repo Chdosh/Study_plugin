@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { describeZodSchema } from '../schema-description';
 import {
   answerStepQuestionAgentOutputSchema,
   dailyGuideAgentOutputSchema,
@@ -44,6 +45,37 @@ const practiceArtifactSchema = z.object({
   successCriteria: z.string().min(1),
   userAction: z.string().min(1),
   requiresSubmission: z.boolean()
+});
+
+const teachingFallbackSchema = z.object({
+  explanation: z.string().default('本次讲解未能生成完整内容，请先阅读当前步骤的说明。'),
+  keyPoints: z.array(z.string()).default([]),
+  example: z.string().default(''),
+  commonMistake: z.string().default(''),
+  checkQuestion: z.string().default(''),
+  userAction: z.string().default('继续当前学习步骤。'),
+  requiresSubmission: z.boolean().default(false)
+});
+
+const quizFallbackSchema = z.object({
+  explanation: z.string().default('检查你对当前内容的理解。'),
+  questions: z.array(z.object({
+    prompt: z.string().default('请用自己的话复述刚才讲解的核心概念。'),
+    answerFormat: z.string().default('自由作答')
+  })).default([{
+    prompt: '请用自己的话复述刚才讲解的核心概念。',
+    answerFormat: '自由作答'
+  }]),
+  userAction: z.string().default('请回答上面的问题，然后继续本轮学习。'),
+  requiresSubmission: z.boolean().default(false)
+});
+
+const practiceFallbackSchema = z.object({
+  explanation: z.string().default('练习当前内容。'),
+  exercise: z.string().default('根据当前步骤的说明完成一个最小可验证的练习。'),
+  successCriteria: z.string().default('练习结果可被检查或记录。'),
+  userAction: z.string().default('完成练习后提交结果。'),
+  requiresSubmission: z.boolean().default(true)
 });
 
 const conversationEvaluationArtifactSchema = z.object({
@@ -109,6 +141,7 @@ export function createBuiltinToolRegistry(
     effect: AgentToolEffect;
     continuation?: 'continue' | 'complete' | 'pause';
     requestUser?: (output: any) => AskUserRequest | undefined;
+    fallback?: z.ZodTypeAny;
   }) => {
     registry.register({
       name: params.name,
@@ -116,7 +149,8 @@ export function createBuiltinToolRegistry(
       contexts: params.contexts,
       inputSchema: params.schema,
       outputSchema: params.schema,
-      inputDescription: params.inputDescription,
+      fallbackSchema: params.fallback,
+      inputDescription: withSchemaContract(params.inputDescription, params.schema),
       effect: params.effect,
       continuation: params.continuation ?? 'complete',
       execute: async (input) => ({
@@ -181,12 +215,16 @@ export function createBuiltinToolRegistry(
     description: '讲解当前内容或回答当前学习问题。',
     contexts: ['study'],
     inputSchema: explainToolInputSchema,
-    inputDescription: [
-      '只直接返回下面两种业务对象之一，不要添加 teaching、questionAnswer 或其他包装层：',
-      '回答用户问题时返回 {"answer":"问题答案，讲解要具体并配例子","relationToCurrentStep":"与当前 Action 的关系","example":"可选示例","resolved":true,"returnToStepInstruction":"返回主线的动作","resolutionSummary":"可选摘要"}；',
-      '主动讲解时返回 {"explanation":"结合当前 Action 的中文讲解，先讲核心概念，再给具体例子","keyPoints":["2-4 个要点"],"example":"一个具体例子，必须有","commonMistake":"常见误区，可选","checkQuestion":"一个小问题让用户自测理解，可选","userAction":"用户接下来可执行的一步","requiresSubmission":false}。',
-      '讲解要像真人导师：用大白话、例子先行、一次只讲一个核心概念，不要输出模板化套话。'
-    ].join(''),
+    fallbackSchema: teachingFallbackSchema,
+    inputDescription: withSchemaContract(
+      [
+        '只直接返回下面两种业务对象之一，不要添加 teaching、questionAnswer 或其他包装层：',
+        '回答用户问题时返回 {"answer":"问题答案，讲解要具体并配例子","relationToCurrentStep":"与当前 Action 的关系","example":"可选示例","resolved":true,"returnToStepInstruction":"返回主线的动作","resolutionSummary":"可选摘要"}；',
+        '主动讲解时返回 {"explanation":"结合当前 Action 的中文讲解，先讲核心概念，再给具体例子","keyPoints":["2-4 个要点"],"example":"一个具体例子，必须有","commonMistake":"常见误区，可选","checkQuestion":"一个小问题让用户自测理解，可选","userAction":"用户接下来可执行的一步","requiresSubmission":false}。',
+        '讲解要像真人导师：用大白话、例子先行、一次只讲一个核心概念，不要输出模板化套话。'
+      ].join(''),
+      explainToolInputSchema
+    ),
     effect: 'content',
     continuation: 'complete',
     execute: async (input) => ({
@@ -203,7 +241,8 @@ export function createBuiltinToolRegistry(
     schema: quizArtifactSchema,
     inputDescription: '{"explanation":"检查目的","questions":[{"prompt":"题目","answerFormat":"作答格式","hint":"可选提示"}],"userAction":"如何作答","requiresSubmission":false}',
     effect: 'content',
-    continuation: 'continue'
+    continuation: 'continue',
+    fallback: quizFallbackSchema
   });
   registerOutputTool({
     name: 'practice',
@@ -211,7 +250,8 @@ export function createBuiltinToolRegistry(
     contexts: ['study'],
     schema: practiceArtifactSchema,
     inputDescription: '{"explanation":"练习目的","exercise":"练习内容","successCriteria":"完成标准","userAction":"下一步","requiresSubmission":true}',
-    effect: 'content'
+    effect: 'content',
+    fallback: practiceFallbackSchema
   });
 
   registry.register({
@@ -314,4 +354,10 @@ function unwrapTaggedVariant(value: unknown, keys: string[]): unknown {
     if (nested && typeof nested === 'object' && !Array.isArray(nested)) return nested;
   }
   return value;
+}
+
+function withSchemaContract(inputDescription: string, schema: z.ZodTypeAny): string {
+  const contract = describeZodSchema(schema);
+  if (!contract) return inputDescription;
+  return `${inputDescription}\n业务对象结构（字段名必须精确匹配，类型与必填以此为准）：\n${contract}`;
 }

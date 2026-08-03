@@ -33,7 +33,8 @@ export class ToolRegistry {
         description: tool.description,
         inputDescription: tool.inputDescription ?? 'JSON object',
         effect: tool.effect ?? 'content',
-        inputSchema: tool.inputSchema
+        inputSchema: tool.inputSchema,
+        fallbackSchema: tool.fallbackSchema
       }));
   }
 

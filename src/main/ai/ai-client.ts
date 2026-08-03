@@ -14,6 +14,7 @@ export interface AiJsonRequest<TSchema extends z.ZodTypeAny> {
   timeoutMs?: number;
   traceId?: string;
   temperature?: number;
+  fallbackSchema?: z.ZodTypeAny;
   onMetrics?: (metrics: AiCallMetrics) => void;
 }
 
@@ -78,14 +79,14 @@ export class AiClient {
         });
         return result;
       } catch (schemaError) {
-        const repairedContent = await createJsonCompletion(client, request, [
+        const repairedContent = await createJsonCompletion(client, { ...request, temperature: 0.1 }, [
           {
             role: 'system',
             content: [
               request.system,
               '只返回合法 JSON，不要包含 Markdown 代码块。',
-              '你正在修复上一次 JSON 输出，使其符合应用要求。',
-              '不要新增事实；缺失字段只能根据原始用户请求和上一次输出提取，或使用安全的空字符串、空数组、null 和允许枚举值。'
+              '你正在修复上一次 JSON 输出，使其通过业务格式校验。',
+              '修复规则：逐条修正下面列出的每一个校验问题；报错路径的字段必须提供满足约束的真实内容；禁止用空字符串、空数组、null、0 或占位文本敷衍必填字段；不新增未要求的字段；保持顶层结构符合原始要求。'
             ].join('\n')
           },
           {
@@ -104,15 +105,36 @@ export class AiClient {
             ].join('\n')
           }
         ]);
-        const repaired = parseAndValidate(repairedContent, request.schema);
-        request.onMetrics?.({
-          traceId,
-          inputTokens: null,
-          outputTokens: null,
-          latencyMs: nowMs() - start,
-          errorCategory: null
-        });
-        return repaired;
+        try {
+          const repaired = parseAndValidate(repairedContent, request.schema);
+          request.onMetrics?.({
+            traceId,
+            inputTokens: null,
+            outputTokens: null,
+            latencyMs: nowMs() - start,
+            errorCategory: null
+          });
+          return repaired;
+        } catch (repairError) {
+          if (request.fallbackSchema) {
+            try {
+              const fallback = request.fallbackSchema.safeParse(parseJsonObject(repairedContent));
+              if (fallback.success) {
+                request.onMetrics?.({
+                  traceId,
+                  inputTokens: null,
+                  outputTokens: null,
+                  latencyMs: nowMs() - start,
+                  errorCategory: null
+                });
+                return fallback.data;
+              }
+            } catch {
+              // 修复输出连合法 JSON 都不是时，继续抛出原校验错误。
+            }
+          }
+          throw repairError;
+        }
       }
     } catch (error) {
       const latencyMs = nowMs() - start;

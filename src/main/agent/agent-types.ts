@@ -78,6 +78,7 @@ export interface AgentToolDefinition<TInput = unknown, TOutput = unknown> {
   contexts: AgentContextKind[];
   inputSchema?: z.ZodType<TInput>;
   outputSchema?: z.ZodType<TOutput>;
+  fallbackSchema?: z.ZodTypeAny;
   inputDescription?: string;
   effect?: AgentToolEffect;
   continuation?: AgentToolContinuation;
@@ -93,6 +94,7 @@ export interface MountedAgentTool {
   inputDescription: string;
   effect: AgentToolEffect;
   inputSchema?: z.ZodTypeAny;
+  fallbackSchema?: z.ZodTypeAny;
 }
 
 export interface AgentTurnToolResult {

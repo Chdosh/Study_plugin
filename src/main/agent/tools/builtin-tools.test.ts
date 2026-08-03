@@ -47,6 +47,20 @@ describe('built-in Agent Loop tools', () => {
     expect(mounted).not.toContain('propose_roadmap');
   });
 
+  it('为每个输出工具注入与 schema 一致的字段契约', () => {
+    const registry = createRegistry();
+    const explain = registry.get('explain');
+    expect(explain?.inputDescription).toContain('业务对象结构');
+    expect(explain?.inputDescription).toContain('非空字符串(必填)');
+    expect(explain?.fallbackSchema).toBeDefined();
+    const quiz = registry.get('quiz');
+    expect(quiz?.fallbackSchema).toBeDefined();
+    const practice = registry.get('practice');
+    expect(practice?.fallbackSchema).toBeDefined();
+    const roadmap = registry.get('propose_roadmap');
+    expect(roadmap?.inputDescription).toContain('业务对象结构');
+  });
+
   it('search_kb 只使用可信上下文中的 Goal ID', async () => {
     const search = vi.fn().mockResolvedValue([]);
     const registry = createBuiltinToolRegistry(search, vi.fn());

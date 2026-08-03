@@ -395,9 +395,7 @@ const teachingToolNames: ReadonlySet<string> = new Set([
   'propose_goal',
   'explain',
   'quiz',
-  'practice',
-  'evaluate',
-  'reflect'
+  'practice'
 ]);
 
 function stringValue(value: unknown): string {
