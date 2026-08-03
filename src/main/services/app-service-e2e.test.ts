@@ -104,8 +104,6 @@ describe('学习闭环端到端', { timeout: 15_000 }, () => {
     const fixture = await LearningFlowFixture.create();
     fixtures.push(fixture);
     fixture.ai.enqueueHttpError(503, 'provider unavailable');
-    fixture.ai.enqueueHttpError(503, 'provider unavailable');
-    fixture.ai.enqueueHttpError(503, 'provider unavailable');
 
     await expect(
       fixture.app.sendOnboardingMessage('我想一天掌握 Git 核心操作。')
@@ -128,8 +126,6 @@ describe('学习闭环端到端', { timeout: 15_000 }, () => {
     const ready = await fixture.app.sendOnboardingMessage('我想一天掌握 Git 核心操作。');
     expect(ready.intake.status).toBe('ready');
 
-    fixture.ai.enqueueHttpError(503, 'provider unavailable');
-    fixture.ai.enqueueHttpError(503, 'provider unavailable');
     fixture.ai.enqueueHttpError(503, 'provider unavailable');
     await expect(fixture.app.generateInitialLearningPlan()).rejects.toThrow('provider unavailable');
     const failed = await fixture.app.getCurrentOnboarding();
