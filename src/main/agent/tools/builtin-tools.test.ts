@@ -95,6 +95,41 @@ describe('built-in Agent Loop tools', () => {
     });
   });
 
+  it('propose_goal 兜底把任何状态归一为 need_more_info 并保留模型回复', () => {
+    const registry = createRegistry();
+    const fallback = registry.get('propose_goal')?.fallbackSchema;
+    const result = fallback?.safeParse({
+      status: 'ready',
+      reply: '好的，目标是掌握 TypeScript。',
+      brief: { title: '不完整' }
+    });
+    expect(result?.success).toBe(true);
+    expect(result?.data).toMatchObject({
+      status: 'need_more_info',
+      reply: '好的，目标是掌握 TypeScript。',
+      brief: null
+    });
+  });
+
+  it('ask_user 兜底把回答模式归一为 free_text 并保留提问内容', () => {
+    const registry = createRegistry();
+    const fallback = registry.get('ask_user')?.fallbackSchema;
+    const result = fallback?.safeParse({
+      question: '继续吗？',
+      answerMode: 'single_choice',
+      options: ['继续', '停止'],
+      canSkip: false,
+      intent: 'continue',
+      reason: '需要确认'
+    });
+    expect(result?.success).toBe(true);
+    expect(result?.data).toMatchObject({
+      answerMode: 'free_text',
+      canSkip: true,
+      question: '继续吗？'
+    });
+  });
+
   it('search_kb 只使用可信上下文中的 Goal ID', async () => {
     const search = vi.fn().mockResolvedValue([]);
     const registry = createBuiltinToolRegistry(search, vi.fn());

@@ -78,21 +78,55 @@ const practiceFallbackSchema = z.object({
   requiresSubmission: z.boolean().default(true)
 });
 
-const proposeGoalFallbackSchema = z.object({
-  status: z.literal('need_more_info').default('need_more_info'),
-  reply: z.string().default('我暂时没能完整理解你的目标，请再补充一些关键信息（例如想达成的结果、当前水平、可用时间）。'),
-  missingInfo: z.array(z.string()).default(['目标结果', '当前水平', '可用时间']),
-  shouldForceStart: z.boolean().default(false),
-  brief: z.unknown().default(null)
-});
+const proposeGoalFallbackSchema = z.preprocess(
+  (value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) value = {};
+    const record = value as Record<string, unknown>;
+    return {
+      status: 'need_more_info',
+      reply: typeof record.reply === 'string' && record.reply.trim()
+        ? record.reply
+        : '我暂时没能完整理解你的目标，请再补充一些关键信息（例如想达成的结果、当前水平、可用时间）。',
+      missingInfo: ['目标结果', '当前水平', '可用时间'],
+      shouldForceStart: false,
+      brief: null
+    };
+  },
+  z.object({
+    status: z.literal('need_more_info'),
+    reply: z.string().min(1),
+    missingInfo: z.array(z.string()).default([]),
+    shouldForceStart: z.boolean().default(false),
+    brief: z.null().default(null)
+  })
+);
 
-const askUserFallbackSchema = z.object({
-  question: z.string().default('我生成内容时遇到了困难，请稍后重试；也可以先告诉我你当前的想法或进度。'),
-  reason: z.string().default('生成失败，需要你确认后继续。'),
-  answerMode: z.literal('free_text').default('free_text'),
-  canSkip: z.boolean().default(true),
-  intent: z.string().default('recover_from_failure')
-});
+const askUserFallbackSchema = z.preprocess(
+  (value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) value = {};
+    const record = value as Record<string, unknown>;
+    return {
+      question: typeof record.question === 'string' && record.question.trim()
+        ? record.question
+        : '我生成内容时遇到了困难，请稍后重试；也可以先告诉我你当前的想法或进度。',
+      reason: typeof record.reason === 'string' && record.reason.trim()
+        ? record.reason
+        : '生成失败，需要你确认后继续。',
+      answerMode: 'free_text',
+      canSkip: true,
+      intent: typeof record.intent === 'string' && record.intent.trim()
+        ? record.intent
+        : 'recover_from_failure'
+    };
+  },
+  z.object({
+    question: z.string().min(1),
+    reason: z.string().min(1),
+    answerMode: z.literal('free_text'),
+    canSkip: z.boolean(),
+    intent: z.string().min(1)
+  })
+);
 
 const conversationEvaluationFallbackSchema = z.object({
   mode: z.literal('conversation_response'),

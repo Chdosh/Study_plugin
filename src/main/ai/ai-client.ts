@@ -117,20 +117,22 @@ export class AiClient {
           return repaired;
         } catch (repairError) {
           if (request.fallbackSchema) {
-            try {
-              const fallback = request.fallbackSchema.safeParse(parseJsonObject(repairedContent));
-              if (fallback.success) {
-                request.onMetrics?.({
-                  traceId,
-                  inputTokens: null,
-                  outputTokens: null,
-                  latencyMs: nowMs() - start,
-                  errorCategory: null
-                });
-                return fallback.data;
+            for (const candidate of [repairedContent, content]) {
+              try {
+                const fallback = request.fallbackSchema.safeParse(parseJsonObject(candidate));
+                if (fallback.success) {
+                  request.onMetrics?.({
+                    traceId,
+                    inputTokens: null,
+                    outputTokens: null,
+                    latencyMs: nowMs() - start,
+                    errorCategory: null
+                  });
+                  return fallback.data;
+                }
+              } catch {
+                // 候选内容连合法 JSON 都不是时，尝试下一个候选。
               }
-            } catch {
-              // 修复输出连合法 JSON 都不是时，继续抛出原校验错误。
             }
           }
           throw repairError;
@@ -191,12 +193,20 @@ function parseAndValidate<TSchema extends z.ZodTypeAny>(content: string, schema:
 
 function describeSchemaError(error: unknown): string {
   if (error instanceof z.ZodError) {
-    return JSON.stringify(error.issues.map((issue) => ({
-      path: issue.path.join('.'),
+    return JSON.stringify(flattenZodIssues(error.issues).map((issue) => ({
+      path: issue.path.join('.') || '(root)',
       message: issue.message
     })));
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+function flattenZodIssues(issues: z.ZodIssue[]): z.ZodIssue[] {
+  return issues.flatMap((issue) =>
+    issue.code === z.ZodIssueCode.invalid_union
+      ? issue.unionErrors.flatMap((unionError) => flattenZodIssues(unionError.issues))
+      : [issue]
+  );
 }
 
 function parseJsonObject(content: string): unknown {

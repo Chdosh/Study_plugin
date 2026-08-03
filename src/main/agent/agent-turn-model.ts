@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AiClient, type AiCallMetrics } from '../ai/ai-client';
+import { CategorizedError } from '../ai/categorized-error';
 import type {
   AgentTurnDecision,
   AgentTurnModel,
@@ -47,6 +48,11 @@ export class AiAgentTurnModel implements AgentTurnModel {
       onMetrics: (value) => {
         metrics = value;
       }
+    }).catch((error) => {
+      if (error instanceof CategorizedError && error.category === 'schema_violation') {
+        throw new CategorizedError('schema_violation', `Agent 工具决策输出校验失败：${error.message}`, error);
+      }
+      throw error;
     });
 
     const mounted = request.tools.find((tool) => tool.name === decision.toolName);
@@ -104,6 +110,11 @@ export class AiAgentTurnModel implements AgentTurnModel {
       onMetrics: (value) => {
         metrics = value;
       }
+    }).catch((error) => {
+      if (error instanceof CategorizedError && error.category === 'schema_violation') {
+        throw new CategorizedError('schema_violation', `Agent 工具 ${mounted.name} 输出校验失败：${error.message}`, error);
+      }
+      throw error;
     });
     return {
       toolName: mounted.name,

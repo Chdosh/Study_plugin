@@ -46,7 +46,7 @@ export function describeError(error: unknown): {
 export function categorizeThrownError(error: unknown): CategorizedError {
   if (error instanceof CategorizedError) return error;
   if (error instanceof z.ZodError) {
-    const issues = error.issues
+    const issues = flattenZodIssues(error.issues)
       .slice(0, 5)
       .map((issue) => `${issue.path.join('.') || '(root)'}:${issue.message}`)
       .join('；');
@@ -58,4 +58,12 @@ export function categorizeThrownError(error: unknown): CategorizedError {
   }
   const described = describeError(error);
   return new CategorizedError(described.category, described.message, error instanceof Error ? error : undefined);
+}
+
+function flattenZodIssues(issues: z.ZodIssue[]): z.ZodIssue[] {
+  return issues.flatMap((issue) =>
+    issue.code === z.ZodIssueCode.invalid_union
+      ? issue.unionErrors.flatMap((unionError) => flattenZodIssues(unionError.issues))
+      : [issue]
+  );
 }

@@ -149,4 +149,51 @@ describe('AiClient', () => {
     });
     expect(openAiMocks.create).toHaveBeenCalledTimes(2);
   });
+
+  it('fallback 在修复输出连合法 JSON 都不是时改用原始内容重建', async () => {
+    openAiMocks.create
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: JSON.stringify({ result: 'passed' }) } }]
+      })
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: '我无法修复这个 JSON。' } }]
+      });
+
+    const fallbackSchema = z.preprocess(
+      () => ({
+        result: 'unclear',
+        evidence: ['生成评价失败，请人工检查。'],
+        correctParts: [],
+        misconceptions: [],
+        missingRequirements: [],
+        feedback: '评价生成失败，请稍后重试。',
+        recommendedAction: 'request_user_decision'
+      }),
+      z.object({
+        result: z.literal('unclear'),
+        evidence: z.array(z.string()),
+        correctParts: z.array(z.string()),
+        misconceptions: z.array(z.string()),
+        missingRequirements: z.array(z.string()),
+        feedback: z.string().min(1),
+        recommendedAction: z.literal('request_user_decision')
+      })
+    );
+
+    const output = await new AiClient().generateJson({
+      apiKey: 'test-key',
+      baseUrl: 'http://127.0.0.1/v1',
+      model: 'test-model',
+      system: 'test-agent',
+      user: 'return evaluation json',
+      schema: testSchema,
+      fallbackSchema
+    });
+
+    expect(output).toMatchObject({
+      result: 'unclear',
+      recommendedAction: 'request_user_decision'
+    });
+    expect(openAiMocks.create).toHaveBeenCalledTimes(2);
+  });
 });
