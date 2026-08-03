@@ -162,7 +162,10 @@ async function createJsonCompletion<TSchema extends z.ZodTypeAny>(
     model: request.model,
     messages,
     temperature: request.temperature ?? 0.2
-  }, { timeout: request.timeoutMs ?? DEFAULT_AI_REQUEST_TIMEOUT_MS });
+  }, {
+    timeout: request.timeoutMs ?? DEFAULT_AI_REQUEST_TIMEOUT_MS,
+    maxRetries: 0
+  });
 
   const message = response.choices[0]?.message as
     | (OpenAI.Chat.Completions.ChatCompletionMessage & {

@@ -63,7 +63,7 @@ describe('AiClient', () => {
 
     expect(output).toEqual({ result: 'passed', evidence: ['ok'] });
     expect(openAiMocks.create).toHaveBeenCalledTimes(2);
-    expect(openAiMocks.create.mock.calls[0][1]).toEqual({ timeout: 1234 });
+    expect(openAiMocks.create.mock.calls[0][1]).toEqual({ timeout: 1234, maxRetries: 0 });
     expect(openAiMocks.create.mock.calls[1][0].messages[1].content).toContain('上一次 AI 输出');
     expect(openAiMocks.create.mock.calls[1][0].messages[1].content).toContain('解析或校验问题');
   });
@@ -91,7 +91,7 @@ describe('AiClient', () => {
     });
 
     expect(output).toEqual({ result: 'passed', evidence: ['ok'] });
-    expect(openAiMocks.create.mock.calls[0][1]).toEqual({ timeout: 180_000 });
+    expect(openAiMocks.create.mock.calls[0][1]).toEqual({ timeout: 180_000, maxRetries: 0 });
   });
 
   it('throws after repair also fails schema validation', async () => {
