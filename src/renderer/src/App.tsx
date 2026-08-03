@@ -649,7 +649,7 @@ function toUserErrorMessage(error: unknown): string {
     case 'missing_config':
       return '缺少 AI API Key。请先在"设置"里填写当前 AI 服务的密钥，再运行 AI 功能。';
     case 'schema_violation':
-      return 'AI 返回内容未通过业务格式校验；原始数据已保留，请在对应记录中重试。';
+      return categorized.message;
     case 'user_input_error':
       return categorized.message;
     case 'validation_error':
@@ -671,7 +671,7 @@ function describeError(message: string): { category: string; message: string } {
   if (/AI API Key|API [Kk]ey|缺少|密钥/i.test(message)) {
     return { category: 'missing_config', message };
   }
-  if (/JSON|schema|valid|parse|required|expected|格式/i.test(message)) {
+  if (/格式校验|校验问题|结构不完整|格式不完整|ZodError|invalid_type|invalid_union|schema_violation/i.test(message)) {
     return { category: 'schema_violation', message };
   }
   if (/timeout|超时|timed out|ECONNRESET/i.test(message)) {

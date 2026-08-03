@@ -106,6 +106,43 @@ describe('AiAgentTurnModel', () => {
       metrics: undefined
     });
   });
+
+  it('多工具决策为 generateJson 注入 ask_user 降级兜底 schema', async () => {
+    const explainTool: MountedAgentTool = {
+      name: 'explain',
+      description: '解释当前内容',
+      inputDescription: '{"explanation":"讲解"}',
+      effect: 'content',
+      inputSchema: z.object({ explanation: z.string().min(1) })
+    };
+    const askUserTool: MountedAgentTool = {
+      name: 'ask_user',
+      description: '询问用户',
+      inputDescription: '{"question":"问题"}',
+      effect: 'pause',
+      inputSchema: z.object({ question: z.string().min(1) })
+    };
+    let captured: unknown;
+    const generateJson = vi.fn(async (request: { schema: z.ZodTypeAny }) => {
+      captured = request;
+      return request.schema.parse({
+        toolName: 'explain',
+        input: { explanation: '讲解内容' }
+      });
+    });
+    const model = new AiAgentTurnModel({ generateJson } as unknown as AiClient);
+
+    await model.selectNext(createRequest([explainTool, askUserTool]));
+
+    const fallback = (captured as { fallbackSchema?: z.ZodTypeAny }).fallbackSchema;
+    expect(fallback).toBeDefined();
+    const degraded = fallback?.safeParse({});
+    expect(degraded?.success).toBe(true);
+    expect(degraded?.data).toMatchObject({
+      toolName: 'ask_user',
+      input: expect.objectContaining({ canSkip: true })
+    });
+  });
 });
 
 function createRequest(tools: MountedAgentTool[]): AgentTurnModelRequest {

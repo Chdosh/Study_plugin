@@ -78,6 +78,70 @@ const practiceFallbackSchema = z.object({
   requiresSubmission: z.boolean().default(true)
 });
 
+const proposeGoalFallbackSchema = z.object({
+  status: z.literal('need_more_info').default('need_more_info'),
+  reply: z.string().default('我暂时没能完整理解你的目标，请再补充一些关键信息（例如想达成的结果、当前水平、可用时间）。'),
+  missingInfo: z.array(z.string()).default(['目标结果', '当前水平', '可用时间']),
+  shouldForceStart: z.boolean().default(false),
+  brief: z.unknown().default(null)
+});
+
+const askUserFallbackSchema = z.object({
+  question: z.string().default('我生成内容时遇到了困难，请稍后重试；也可以先告诉我你当前的想法或进度。'),
+  reason: z.string().default('生成失败，需要你确认后继续。'),
+  answerMode: z.literal('free_text').default('free_text'),
+  canSkip: z.boolean().default(true),
+  intent: z.string().default('recover_from_failure')
+});
+
+const conversationEvaluationFallbackSchema = z.object({
+  mode: z.literal('conversation_response'),
+  feedback: z.string().default('我暂时没能生成评价，请稍后重试，或先告诉我你的思考过程。'),
+  correctParts: z.array(z.string()).default([]),
+  misconceptions: z.array(z.string()).default([]),
+  nextPrompt: z.string().default('请回到当前步骤继续学习。'),
+  requiresSubmission: z.boolean().default(false)
+});
+
+const submissionEvaluationFallbackSchema = z.object({
+  result: z.literal('unclear'),
+  evidence: z.array(z.string()).default(['生成评价失败，已保留提交内容供人工检查。']),
+  correctParts: z.array(z.string()).default([]),
+  misconceptions: z.array(z.string()).default([]),
+  missingRequirements: z.array(z.string()).default([]),
+  feedback: z.string().default('评价暂时未能生成；你的提交已经保存，可以稍后重试。'),
+  recommendedAction: z.literal('request_user_decision')
+});
+
+const evaluationFallbackSchema = z.preprocess(
+  (value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    if ('result' in (value as Record<string, unknown>)) {
+      return {
+        result: 'unclear',
+        evidence: ['生成评价失败，已保留提交内容供人工检查。'],
+        correctParts: [],
+        misconceptions: [],
+        missingRequirements: [],
+        feedback: '评价暂时未能生成；你的提交已经保存，可以稍后重试。',
+        recommendedAction: 'request_user_decision'
+      };
+    }
+    return {
+      mode: 'conversation_response',
+      feedback: '我暂时没能生成评价，请稍后重试，或先告诉我你的思考过程。',
+      correctParts: [],
+      misconceptions: [],
+      nextPrompt: '请回到当前步骤继续学习。',
+      requiresSubmission: false
+    };
+  },
+  z.union([
+    submissionEvaluationFallbackSchema,
+    conversationEvaluationFallbackSchema
+  ])
+);
+
 const conversationEvaluationArtifactSchema = z.object({
   mode: z.literal('conversation_response'),
   feedback: z.string().min(1),
@@ -167,6 +231,7 @@ export function createBuiltinToolRegistry(
     schema: goalIntakeAgentOutputSchema,
     inputDescription: '{"status":"need_more_info|ready","reply":"中文回复","brief":null 或目标简报对象}',
     effect: 'proposal',
+    fallback: proposeGoalFallbackSchema,
     requestUser: (output) => output.status === 'need_more_info'
       ? {
           question: output.reply,
@@ -259,6 +324,7 @@ export function createBuiltinToolRegistry(
     description: '评价已保存成果或当前对话中的学习回答。',
     contexts: ['study', 'evaluation'],
     inputSchema: evaluationToolInputSchema,
+    fallbackSchema: evaluationFallbackSchema,
     inputDescription: [
       '只直接返回下面两种业务对象之一，不要添加 conversation、submission 或其他包装层：',
       '评价对话回答时返回 {"mode":"conversation_response","feedback":"即时反馈","correctParts":[],"misconceptions":[],"nextPrompt":"返回主线的下一步","requiresSubmission":false}；',
@@ -301,6 +367,7 @@ export function createBuiltinToolRegistry(
     contexts: ['goal_intake', 'planning', 'study', 'evaluation', 'review', 'knowledge'],
     inputSchema: askUserRequestSchema,
     outputSchema: askUserRequestSchema,
+    fallbackSchema: askUserFallbackSchema,
     inputDescription: '{"question":"一个必要问题","reason":"询问原因","answerMode":"free_text|single_choice","options":["单选项"],"canSkip":true,"intent":"恢复意图"}',
     effect: 'pause',
     continuation: 'pause',

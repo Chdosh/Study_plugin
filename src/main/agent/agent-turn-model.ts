@@ -32,6 +32,7 @@ export class AiAgentTurnModel implements AgentTurnModel {
       traceId: request.modelConfig.traceId,
       temperature: request.modelConfig.temperature,
       schema: decisionSchema,
+      fallbackSchema: decisionFallbackSchema,
       user: [
         `本轮学习意图：${request.intent}`,
         request.userInput ? `用户输入：${request.userInput}` : '',
@@ -152,6 +153,29 @@ function validateDecisionInput(
   }
   return input;
 }
+
+const decisionFallbackSchema = z.preprocess(
+  () => ({
+    toolName: 'ask_user',
+    input: {
+      question: '我生成内容时遇到了困难，请稍后重试；也可以先告诉我你当前的想法或进度。',
+      reason: '生成失败，需要你确认后继续。',
+      answerMode: 'free_text',
+      canSkip: true,
+      intent: 'recover_from_failure'
+    }
+  }),
+  z.object({
+    toolName: z.literal('ask_user'),
+    input: z.object({
+      question: z.string().min(1),
+      reason: z.string().min(1),
+      answerMode: z.literal('free_text'),
+      canSkip: z.boolean(),
+      intent: z.string().min(1)
+    })
+  })
+);
 
 function createDecisionSchema(tools: MountedAgentTool[]) {
   return z.object({

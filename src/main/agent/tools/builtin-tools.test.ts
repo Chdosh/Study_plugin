@@ -61,6 +61,40 @@ describe('built-in Agent Loop tools', () => {
     expect(roadmap?.inputDescription).toContain('业务对象结构');
   });
 
+  it('每个工具都有兜底方案：propose_goal/ask_user/evaluate/explain/quiz/practice', () => {
+    const registry = createRegistry();
+    for (const name of ['propose_goal', 'ask_user', 'evaluate', 'explain', 'quiz', 'practice'] as const) {
+      expect(registry.get(name)?.fallbackSchema).toBeDefined();
+    }
+  });
+
+  it('evaluate 兜底按输入形态归一化：提交评价归一为 unclear，对话反馈归一为 conversation_response', () => {
+    const registry = createRegistry();
+    const fallbackSchema = registry.get('evaluate')?.fallbackSchema;
+    expect(fallbackSchema).toBeDefined();
+    const submission = fallbackSchema?.safeParse({
+      result: 'passed',
+      evidence: ['anything'],
+      feedback: '任意内容',
+      recommendedAction: 'complete_task'
+    });
+    expect(submission?.success).toBe(true);
+    expect(submission?.data).toMatchObject({
+      result: 'unclear',
+      recommendedAction: 'request_user_decision'
+    });
+    const conversation = fallbackSchema?.safeParse({
+      mode: 'conversation_response',
+      feedback: '任意反馈',
+      nextPrompt: '继续'
+    });
+    expect(conversation?.success).toBe(true);
+    expect(conversation?.data).toMatchObject({
+      mode: 'conversation_response',
+      requiresSubmission: false
+    });
+  });
+
   it('search_kb 只使用可信上下文中的 Goal ID', async () => {
     const search = vi.fn().mockResolvedValue([]);
     const registry = createBuiltinToolRegistry(search, vi.fn());
