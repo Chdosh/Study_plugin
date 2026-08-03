@@ -43,7 +43,6 @@ export interface BuiltLearningContext {
 const CONTEXT_MAX_AGE_DAYS = 30;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 export const OPERATION_BUDGET_TOKENS = 4000;
-const APPROX_CHARS_PER_TOKEN = 2;
 
 const OPERATION_FIELD_WHITELIST: Record<LearningAiOperation, string[]> = {
   goal_intake: ['operation', 'goal'],
@@ -52,7 +51,7 @@ const OPERATION_FIELD_WHITELIST: Record<LearningAiOperation, string[]> = {
   generate_daily_guide: ['operation', 'goal', 'guide', 'roadmapStage', 'pendingAdjustment', 'latestEvaluation'],
   generate_daily_plan: ['operation', 'goal', 'guide', 'roadmapStage', 'pendingAdjustment', 'latestEvaluation'],
   generate_stage_outline: ['operation', 'goal', 'roadmapStage', 'pendingAdjustment'],
-  teach_step: ['operation', 'guideTask', 'guideAction', 'roadmapStage'],
+  teach_step: ['operation', 'guideTask', 'guideAction', 'roadmapStage', 'currentQuestionThread'],
   answer_step_question: ['operation', 'guideTask', 'guideAction', 'currentQuestionThread'],
   answer_temporary_question: ['operation'],
   evaluate_submission: ['operation', 'guideTask', 'latestSubmission', 'latestEvaluation'],
@@ -316,7 +315,17 @@ function sanitizeExtraField(value: unknown): unknown {
 }
 
 export function estimateContextTokens(context: Record<string, unknown>): number {
-  return Math.ceil(JSON.stringify(context).length / APPROX_CHARS_PER_TOKEN);
+  const text = JSON.stringify(context);
+  let cjkChars = 0;
+  let asciiChars = 0;
+  for (const character of text) {
+    if (character.codePointAt(0)! > 0x2e7f) {
+      cjkChars += 1;
+    } else {
+      asciiChars += 1;
+    }
+  }
+  return Math.ceil(cjkChars + asciiChars / 4);
 }
 
 function enforceTokenBudget(context: Record<string, unknown>, budgetTokens: number): Record<string, unknown> {

@@ -13,6 +13,7 @@ export interface AiJsonRequest<TSchema extends z.ZodTypeAny> {
   schema: TSchema;
   timeoutMs?: number;
   traceId?: string;
+  temperature?: number;
   onMetrics?: (metrics: AiCallMetrics) => void;
 }
 
@@ -136,7 +137,7 @@ async function createJsonCompletion<TSchema extends z.ZodTypeAny>(
   const response = await client.chat.completions.create({
     model: request.model,
     messages,
-    temperature: 0.2
+    temperature: request.temperature ?? 0.2
   }, { timeout: request.timeoutMs ?? DEFAULT_AI_REQUEST_TIMEOUT_MS });
 
   const message = response.choices[0]?.message as

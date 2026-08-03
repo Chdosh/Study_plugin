@@ -115,6 +115,7 @@ export interface AgentTurnModelRequest {
     system: string;
     timeoutMs?: number;
     traceId?: string;
+    temperature?: number;
   };
 }
 

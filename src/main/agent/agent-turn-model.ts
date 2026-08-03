@@ -30,14 +30,15 @@ export class AiAgentTurnModel implements AgentTurnModel {
       system: request.modelConfig.system,
       timeoutMs: request.modelConfig.timeoutMs,
       traceId: request.modelConfig.traceId,
+      temperature: request.modelConfig.temperature,
       schema: decisionSchema,
       user: [
         `本轮学习意图：${request.intent}`,
         request.userInput ? `用户输入：${request.userInput}` : '',
         `可信学习上下文：${JSON.stringify(request.boundedContext)}`,
         `已经完成的工具调用：${JSON.stringify(request.previousToolResults)}`,
-        '你的输出是 Agent 控制信封，不是工具业务结果本身。',
-        '唯一允许的顶层结构是 {"toolName":"已挂载工具名","input":{}}；业务结果必须放在 input 中。',
+        '你是导师在输出内容：讲解要具体、配例子、像真人说话，不要输出模板化套话。',
+        '结构要求：唯一允许的顶层结构是 {"toolName":"已挂载工具名","input":{}}；业务内容必须放在 input 中，字段名与工具说明一致。',
         '从下面已挂载工具中选择且只选择一个工具。input 必须符合该工具的输入说明。',
         '如果已有信息足以直接教学，选择内容类工具结束本轮；只有确实需要外部事实时才先 search_kb。',
         `工具：${JSON.stringify(publicTools)}`
@@ -84,6 +85,7 @@ export class AiAgentTurnModel implements AgentTurnModel {
       system: request.modelConfig.system,
       timeoutMs: request.modelConfig.timeoutMs,
       traceId: request.modelConfig.traceId,
+      temperature: request.modelConfig.temperature,
       // Keep business validation at the Agent boundary while accepting the
       // three provider-neutral shapes seen across OpenAI-compatible services:
       // direct object, legacy Agent envelope, or one named business wrapper.

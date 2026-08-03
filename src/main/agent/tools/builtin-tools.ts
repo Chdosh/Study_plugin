@@ -19,6 +19,10 @@ import { ToolRegistry } from '../tool-registry';
 
 const teachingArtifactSchema = z.object({
   explanation: z.string().min(1),
+  keyPoints: z.array(z.string().min(1)).default([]),
+  example: z.string().default(''),
+  commonMistake: z.string().default(''),
+  checkQuestion: z.string().default(''),
   userAction: z.string().min(1),
   requiresSubmission: z.boolean()
 });
@@ -179,8 +183,9 @@ export function createBuiltinToolRegistry(
     inputSchema: explainToolInputSchema,
     inputDescription: [
       '只直接返回下面两种业务对象之一，不要添加 teaching、questionAnswer 或其他包装层：',
-      '回答用户问题时返回 {"answer":"问题答案","relationToCurrentStep":"与当前 Action 的关系","example":"可选示例","resolved":true,"returnToStepInstruction":"返回主线的动作","resolutionSummary":"可选摘要"}；',
-      '主动讲解时返回 {"explanation":"结合当前 Action 的中文讲解","userAction":"用户接下来可执行的一步","requiresSubmission":false}。'
+      '回答用户问题时返回 {"answer":"问题答案，讲解要具体并配例子","relationToCurrentStep":"与当前 Action 的关系","example":"可选示例","resolved":true,"returnToStepInstruction":"返回主线的动作","resolutionSummary":"可选摘要"}；',
+      '主动讲解时返回 {"explanation":"结合当前 Action 的中文讲解，先讲核心概念，再给具体例子","keyPoints":["2-4 个要点"],"example":"一个具体例子，必须有","commonMistake":"常见误区，可选","checkQuestion":"一个小问题让用户自测理解，可选","userAction":"用户接下来可执行的一步","requiresSubmission":false}。',
+      '讲解要像真人导师：用大白话、例子先行、一次只讲一个核心概念，不要输出模板化套话。'
     ].join(''),
     effect: 'content',
     continuation: 'complete',

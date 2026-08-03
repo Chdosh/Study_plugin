@@ -177,13 +177,14 @@ export class LearningTurnModule {
           apiKey: runtimeSettings.aiApiKey,
           baseUrl: runtimeSettings.aiBaseUrl,
           model: runtimeSettings.aiModel,
+          temperature: 0.7,
           system: [
             systemPromptFor('主线内主动教学'),
             profile.content,
             '程序负责推进业务状态；你只能选择已挂载工具。',
             '若可信上下文含 knowledgePriorities，优先处理第一项：把它和当前 Action 关联起来，选择讲解、练习或理解检查；用户纠正优先于冲突的 AI 判断。它是教学重点，不是阻止用户继续的硬门槛。',
-            '除非缺少继续教学所必需的信息，否则不要询问用户。',
-            '选择 quiz 后必须继续选择 ask_user，让用户在同一个 Learning Turn 中作答；恢复后选择 evaluate 给出即时反馈。'
+            '除非缺少继续教学所必需的信息，否则不要询问用户；不要为了流程完整性而提问。',
+            '选择小测是为了收集用户的回答：quiz 后选择 ask_user 让用户在同一个 Learning Turn 中作答，回答后选择 evaluate 给出即时反馈；若不需要用户作答，就不要触发小测。'
           ].join('\n'),
           traceId: `ta_${crypto.randomUUID()}`
         },
@@ -246,6 +247,7 @@ export class LearningTurnModule {
         apiKey: settings.aiApiKey,
         baseUrl: settings.aiBaseUrl,
         model: settings.aiModel,
+        temperature: teachingToolNames.has(params.toolName) ? 0.7 : 0.2,
         system: [
           AGENT_SYSTEM_PROMPT,
           profile?.content ?? '',
@@ -373,11 +375,30 @@ function normalizeArtifact(output: unknown): LearningTurnArtifact {
   }
   return {
     kind: 'explanation',
-    explanation: stringValue(value.explanation),
+    explanation: [
+      stringValue(value.explanation),
+      ...(Array.isArray(value.keyPoints)
+        ? value.keyPoints
+            .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+            .map((point, index) => `${index + 1}. ${point}`)
+        : []),
+      stringValue(value.example) ? `例子：${stringValue(value.example)}` : '',
+      stringValue(value.commonMistake) ? `常见误区：${stringValue(value.commonMistake)}` : '',
+      stringValue(value.checkQuestion) ? `思考一下：${stringValue(value.checkQuestion)}` : ''
+    ].filter(Boolean).join('\n\n'),
     userAction: stringValue(value.userAction),
     requiresSubmission: value.requiresSubmission === true
   };
 }
+
+const teachingToolNames: ReadonlySet<string> = new Set([
+  'propose_goal',
+  'explain',
+  'quiz',
+  'practice',
+  'evaluate',
+  'reflect'
+]);
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value : '';
