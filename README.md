@@ -95,6 +95,18 @@ npm run build        # 类型检查并构建生产版本
 npm run db:generate  # 生成 Drizzle 迁移
 ```
 
+### AI 教学效果评测
+
+评测在无界面环境下驱动真实业务链路（AppService），不需要手动操作界面：
+
+```bash
+npm run eval:smoke             # 本地假模型验证评测管线（免费、CI 安全）
+npm run eval:ai                # 真实模型全量评测当前场景集（需 STUDY_AI_* 环境变量）
+npm run eval:ai -- --scenarios S1,S6   # 只跑指定场景，快速迭代验证
+```
+
+报告输出到 `docs/eval/reports/<时间戳>/`（Markdown 可读版 + JSON 全量数据），包含场景 × 检查项结果、LLM judge 质量评分、AI 调用耗时与错误分类。
+
 真实 AI 服务合约测试默认跳过。只有同时设置
 `RUN_AI_PROVIDER_CONTRACT=1`、`STUDY_AI_API_KEY`、`STUDY_AI_BASE_URL`
 和 `STUDY_AI_MODEL` 时才会访问明确指定的远程模型；测试不会读取供应商专用环境变量，也没有默认服务地址。
