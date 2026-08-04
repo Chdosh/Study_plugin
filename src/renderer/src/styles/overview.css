@@ -83,12 +83,6 @@
   font-size: var(--font-size-sm);
 }
 
-@media (max-width: 760px) {
-
-  .task-status {
-    align-self: flex-start;
-  }
-}
 .overview-dashboard {
   --overview-card-border: var(--color-border-default);
   --overview-card-gap: var(--space-5);
@@ -486,16 +480,6 @@
   color: var(--color-warning);
 }
 
-.overview-route-steps article.blocked > .overview-route-marker {
-  background: var(--color-error-light);
-  color: var(--color-error);
-}
-
-.overview-route-steps article.adjusted > .overview-route-marker {
-  background: var(--color-info-light);
-  color: var(--color-info);
-}
-
 .overview-route-steps article > div {
   min-width: 0;
   display: grid;
@@ -599,66 +583,6 @@
   gap: var(--space-3);
 }
 
-@media (max-width: 980px) {
-  .overview-dashboard-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 720px) {
-  .overview-task-main {
-    grid-template-columns: 1fr;
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .overview-task-card,
-  .overview-route-card {
-    padding: var(--space-4);
-  }
-
-  .overview-task-primary {
-    width: 100%;
-  }
-
-  .overview-task-topline,
-  .overview-task-heading,
-  .overview-actions-header,
-  .overview-manage-actions {
-    display: grid;
-    grid-template-columns: 1fr;
-  }
-
-  .overview-actions-header span {
-    white-space: normal;
-  }
-
-  .overview-task-footer {
-    grid-template-columns: 1fr;
-  }
-
-  .overview-manage-actions button {
-    width: 100%;
-  }
-
-  .overview-task-details > div,
-  .overview-side-column {
-    grid-template-columns: 1fr;
-  }
-
-  .overview-task-details section:last-child,
-  .overview-route-card {
-    grid-column: auto;
-  }
-
-  .overview-action-list li {
-    grid-template-columns: 18px minmax(0, 1fr) auto;
-  }
-
-  .overview-action-list small {
-    grid-column: auto;
-  }
-}
 .temporary-disposition {
   display: flex;
   flex-wrap: wrap;

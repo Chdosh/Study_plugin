@@ -223,9 +223,3 @@ button:disabled {
 button:disabled:hover {
   opacity: var(--disabled-opacity);
 }
-
-@media (max-width: 760px) {
-  .primary-action {
-    width: 100%;
-  }
-}

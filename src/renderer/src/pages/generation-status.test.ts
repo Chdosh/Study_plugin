@@ -15,10 +15,10 @@ describe('AI generation status presentation', () => {
     expect(pendingGenerationLabel(false, nearTimeout - 1)).toContain('已等待');
     expect(pendingGenerationLabel(false, nearTimeout)).toContain('AI 响应较慢');
     expect(pendingGenerationLabel(false, nearTimeout)).toContain('超时后会自动提示失败原因');
-    expect(pendingGenerationLabel(true, 0)).toContain('正在生成完整学习计划');
     expect(pendingGenerationLabel(true, 0)).toContain('约需 1 分钟');
-    expect(pendingGenerationLabel(true, 0, '③ 学习指南（任务与步骤展开）')).toContain('③ 学习指南');
-    expect(pendingGenerationLabel(true, 65)).toContain('已等待 65 秒');
+    expect(pendingGenerationLabel(true, 0, '正在规划长期学习大纲')).toContain('正在规划长期学习大纲');
+    expect(pendingGenerationLabel(true, 0, '正在规划长期学习大纲')).toContain('约需 1 分钟');
+    expect(pendingGenerationLabel(true, 65, '正在展开今天的学习任务')).toContain('已等待 65 秒');
     expect(pendingGenerationLabel(true, 65)).toContain('接近完成');
   });
 

@@ -1,12 +1,9 @@
 import { useEffect, useState } from 'react';
 import {
-  ArrowRight,
   CheckCircle2,
   ChevronRight,
   Circle,
-  FileText,
   History,
-  Info,
   ListChecks,
   Minus,
   Play,
@@ -193,10 +190,10 @@ export function pendingGenerationLabel(
   planPhase?: string | null
 ): string {
   if (planGenerating) {
-    const phase = planPhase ? `（${planPhase}）` : '';
+    const base = planPhase ?? '正在生成完整学习计划';
     return elapsedSeconds < GENERATION_SLOW_SECONDS
-      ? `正在生成完整学习计划${phase}…约需 1 分钟`
-      : `正在生成完整学习计划${phase}，已等待 ${elapsedSeconds} 秒，接近完成`;
+      ? `${base}…约需 1 分钟`
+      : `${base}，已等待 ${elapsedSeconds} 秒，接近完成`;
   }
   if (elapsedSeconds < 30) {
     return 'AI 正在生成回答';
@@ -339,18 +336,12 @@ onSendOnboarding: (content: string) => Promise<void>;
   const showQuestionForm = onboarding?.intake.status === 'collecting'
     && (onboarding.intake.questions?.length ?? 0) > 0
     && !intakePending;
-  const [summaryDismissed, setSummaryDismissed] = useState(false);
-  useEffect(() => {
-    if (onboarding?.intake.status === 'collecting') {
-      setSummaryDismissed(false);
-    }
-  }, [onboarding?.intake.status]);
   const [showIntakeHistory, setShowIntakeHistory] = useState(false);
 const latestAssistantMessageId = [...(onboarding?.messages ?? [])].reverse().find((item) => item.role === 'assistant')?.id ?? null;
 
   const renderIntakeChat = (detailed: boolean): JSX.Element => (
     <>
-      <div className="intake-thread redesigned" aria-label="目标访谈记录">
+      <div className="intake-thread" aria-label="目标访谈记录">
         {(onboarding?.messages ?? []).length === 0 && (
           <div className="intake-message assistant">
             <span className="intake-message-meta">学习管家</span>
@@ -359,14 +350,35 @@ const latestAssistantMessageId = [...(onboarding?.messages ?? [])].reverse().fin
         )}
         {(onboarding?.messages ?? []).map((item) => (
           <div className={item.role === 'assistant' ? 'intake-message assistant' : 'intake-message user'} key={item.id}>
-            <span className="intake-message-meta">{item.role === 'assistant' ? '学习管家' : '你的输入'}</span>
+            <span className="intake-message-meta">{item.role === 'assistant' ? '学习管家' : '你'}</span>
             <div className="message-content">{item.content}</div>
           </div>
         ))}
         {pendingUserMessage && (
           <div className="intake-message user">
-            <span className="intake-message-meta">你的输入</span>
+            <span className="intake-message-meta">你</span>
             <div className="message-content">{pendingUserMessage}</div>
+          </div>
+        )}
+        {showQuestionForm && (
+          <div className="intake-message assistant">
+            <span className="intake-message-meta">学习管家</span>
+            <div className="message-content">根据你的描述，我还想确认下面几点，以便更精准地制定计划（可直接填写，一次全部回答）：</div>
+            <GoalIntakeQuestionForm
+              questions={onboarding!.intake.questions}
+              disabled={!hasAiConfiguration}
+              onSubmit={(composed) => void send(composed)}
+            />
+          </div>
+        )}
+        {onboarding?.pendingInteraction?.status === 'open' && !intakePending && (
+          <div className="intake-message assistant">
+            <span className="intake-message-meta">学习管家</span>
+            <PendingAgentQuestion
+              interaction={onboarding.pendingInteraction}
+              onCancel={() => void onCancelPendingQuestion()}
+              onAnswer={(text) => void send(text)}
+            />
           </div>
         )}
         {intakePending && (
@@ -380,17 +392,8 @@ const latestAssistantMessageId = [...(onboarding?.messages ?? [])].reverse().fin
         )}
       </div>
 
-      {showQuestionForm && (
-        <GoalIntakeQuestionForm
-          questions={onboarding!.intake.questions}
-          disabled={!hasAiConfiguration}
-          onSubmit={(composed) => void send(composed)}
-        />
-      )}
-
       {onboarding?.intake.status === 'ready'
         && onboarding.intake.brief
-        && !summaryDismissed
         && !intakePending
         && (
           <div className="summary-card">
@@ -431,93 +434,77 @@ const latestAssistantMessageId = [...(onboarding?.messages ?? [])].reverse().fin
               <button className="primary-action" type="button" disabled={!hasAiConfiguration} onClick={() => void onGenerateInitialPlan()}>
                 <Wand2 size={16} />
                 确认并生成计划
-                <ArrowRight size={16} />
-              </button>
-              <button className="secondary-action" type="button" onClick={() => setSummaryDismissed(true)}>
-                修改信息
               </button>
             </div>
           </div>
         )}
 
-      {onboarding?.pendingInteraction?.status === 'open' && !intakePending && (
-        <PendingAgentQuestion
-          interaction={onboarding.pendingInteraction}
-          onCancel={() => void onCancelPendingQuestion()}
-          onAnswer={(text) => void send(text)}
-        />
-      )}
+      {onboarding?.intake.status === 'ready'
+        && !onboarding.intake.brief
+        && !intakePending
+        && (
+          <p className="intake-incomplete-note">目标信息还不完整，请补充你想达到的具体结果（例如能独立完成什么），然后继续。</p>
+        )}
+
+      {onboarding?.intake.status === 'confirmed'
+        && Boolean(onboarding.intake.goalId)
+        && !intakePending
+        && (
+          <div className="summary-card">
+            <div className="summary-card-head">
+              <div>
+                <span className="summary-eyebrow">目标已确认</span>
+                <h3>{onboarding.intake.brief?.title ?? '学习目标'}</h3>
+              </div>
+              {onboarding.intake.brief?.depth && (
+                <span className="badge">{onboarding.intake.brief.depth}</span>
+              )}
+            </div>
+            {onboarding.intake.brief?.direction && (
+              <div className="summary-direction">
+                <span>学习方向</span>
+                <p>{onboarding.intake.brief.direction}</p>
+              </div>
+            )}
+            <p className="summary-confirm-note">目标与方向已确认，生成完整学习计划约需 1 分钟，包含长期大纲、近期安排与首日学习任务。</p>
+            <div className="summary-actions">
+              <button className="primary-action" type="button" disabled={!hasAiConfiguration} onClick={() => void onGenerateInitialPlan()}>
+                <Wand2 size={16} />
+                生成完整学习计划
+              </button>
+              <button className="secondary-action" type="button" disabled={!hasAiConfiguration} onClick={() => void send('请使用当前信息生成初步计划。')}>
+                使用当前信息生成完整计划
+              </button>
+            </div>
+          </div>
+        )}
 
       {!showQuestionForm && (
-        <div className={`intake-input-dock${onboarding?.pendingInteraction?.status === 'open' && !intakePending ? ' collapsed' : ''}`}>
-        {onboarding?.pendingInteraction?.status === 'open' && !intakePending ? (
-          <>
-            <div className="intake-input-hint">
-              <Info size={14} />
-              <span>你也可以在下方直接回复，或补充更多细节...</span>
-            </div>
-            <div className="intake-input-box slim">
-              <FileText size={18} />
-              <textarea
-                value={message}
-                onChange={(event) => setMessage(event.target.value)}
-                placeholder="输入你的补充内容..."
-                aria-label="输入学习目标"
-                disabled={intakePending}
-              />
-              <button className="slim-send" type="button" disabled={!message.trim() || !hasAiConfiguration || intakePending} onClick={() => void send(message)}>
-                <SendHorizontal size={16} />
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="intake-input-box">
-              <FileText size={18} />
-              <textarea
-                value={message}
-                onChange={(event) => setMessage(event.target.value)}
-                placeholder="输入你的回答，或补充更多信息..."
-                aria-label="输入学习目标"
-                disabled={intakePending}
-              />
-            </div>
-            <div className="intake-actions">
-              {detailed && (
-                <button
-                  className="text-action"
-                  type="button"
-                  disabled={!message.trim() || !hasAiConfiguration || intakePending}
-                  onClick={() => {
-                    const question = message.trim();
-                    setMessage('');
-                    void onAskTemporaryQuestion(question);
-                  }}
-                >
-                  <Sparkles size={16} />
-                  临时学习这个问题
-                </button>
-              )}
-              {detailed && !intakePending && hasConfirmedGoalWithoutGuide && (
-                <button className="text-action" type="button" disabled={!hasAiConfiguration} onClick={() => void onGenerateInitialPlan()}>
-                  <Wand2 size={16} />
-                  生成完整学习计划
-                </button>
-              )}
-              {detailed && !intakePending && !canGenerateInitialPlan && (
-                <button className="text-action" type="button" disabled={!hasAiConfiguration} onClick={() => void send('请使用当前信息生成初步计划。')}>
-                  <Wand2 size={16} />
-                  使用当前信息生成完整计划
-                </button>
-              )}
-              <button className="primary-action" type="button" disabled={!message.trim() || !hasAiConfiguration || intakePending} onClick={() => void send(message)}>
-                <SendHorizontal size={16} />
-                {intakePending ? '等待回复' : '发送'}
-              </button>
-            </div>
-          </>
-        )}
-      </div>
+        <div className="intake-input-dock">
+          <div className="intake-input-box">
+            <textarea
+              value={message}
+              onChange={(event) => setMessage(event.target.value)}
+              placeholder="输入你的回答，或补充更多信息..."
+              aria-label="输入学习目标"
+              disabled={intakePending}
+            />
+            <button className="primary-action" type="button" disabled={!message.trim() || !hasAiConfiguration || intakePending} onClick={() => void send(message)}>
+              <SendHorizontal size={16} />
+              {intakePending ? '等待回复' : '发送'}
+            </button>
+          </div>
+          {detailed && !intakePending && (
+            <button className="text-action intake-temporary-trigger" type="button" disabled={!message.trim() || !hasAiConfiguration} onClick={() => {
+              const question = message.trim();
+              setMessage('');
+              void onAskTemporaryQuestion(question);
+            }}>
+              <Sparkles size={16} />
+              临时学习这个问题
+            </button>
+          )}
+        </div>
       )}
     </>
   );
@@ -655,24 +642,6 @@ const latestAssistantMessageId = [...(onboarding?.messages ?? [])].reverse().fin
     return (
       <section className="intake-workspace">
         <div className="intake-main">
-          <div className="intake-header" aria-label="生成预览">
-            <div className="intake-header-row">
-              <div className="intake-header-title">
-                <span className="intake-header-icon"><Sparkles size={16} /></span>
-                <span>生成预览</span>
-              </div>
-              <div className="intake-progress">
-                <div className="step-progress-bar"><div /></div>
-                <span className="intake-progress-label">1 / 3 目标确认</span>
-              </div>
-            </div>
-            <div className="intake-steps">
-              <div className="step-chip active"><span className="step-chip-num">1</span><span>长期大纲</span></div>
-              <div className="step-chip"><span className="step-chip-num">2</span><span>近期计划</span></div>
-              <div className="step-chip"><span className="step-chip-num">3</span><span>Learning Guide</span></div>
-            </div>
-          </div>
-
 <section className="surface intake-chat-panel" aria-label="主动访谈">
             {renderIntakeChat(true)}
           </section>

@@ -175,16 +175,3 @@
 .study-teacher-drawer-trigger { display: none; }
 
 @media (max-width: 1279px) { .study-teacher-drawer-trigger { display: inline-flex; } }
-
-@media (max-width: 980px) {
-  .study-content-grid { grid-template-columns: 1fr; }
-}
-
-@media (max-width: 760px) {
-  .study-page-header,
-  .study-fixed-action-bar { align-items: stretch; flex-direction: column; }
-  .study-header-actions,
-  .bar-right-group { flex-wrap: wrap; }
-  .study-current-step-panel { min-height: 0; padding: 22px 20px; }
-  .study-submit-inline { align-items: stretch; flex-direction: column; }
-}

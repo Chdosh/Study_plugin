@@ -99,13 +99,6 @@
   font-style: normal;
 }
 
-@media (max-width: 760px) {
-  .runtime-audit-banner {
-    flex-direction: column;
-  }
-  .runtime-guide-choices article { grid-template-columns: 1fr; }
-}
-
 @keyframes notice-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }

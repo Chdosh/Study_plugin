@@ -301,11 +301,6 @@
   .teacher { display: none; }
 }
 
-@media (max-width: 959px) {
-  .roadmap { display: none; }
-  .canvas-body { padding: 24px; }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .ab-icon,
   .ab-session-status {

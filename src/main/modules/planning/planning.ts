@@ -100,7 +100,7 @@ export class PlanningModule {
       goalUnderstanding: brief,
       availableTime: windows
     });
-    this.onPhase?.('① 长期大纲');
+    this.onPhase?.('正在规划长期学习大纲');
     const roadmapInput = {
       goal,
       brief,
@@ -149,7 +149,7 @@ export class PlanningModule {
       roadmap: draftRoadmap,
       availableTime: windows
     });
-    this.onPhase?.('② 近期计划');
+    this.onPhase?.('正在安排近期学习计划');
     const shortPlanInput = {
       mode: 'initial' as const,
       goal,
@@ -212,7 +212,7 @@ export class PlanningModule {
       shortPlanDay: targetPlanItem,
       availableMinutes: windows
     });
-    this.onPhase?.('③ 学习指南（任务与步骤展开）');
+    this.onPhase?.('正在展开今天的学习任务');
     let dailyGuideOutput: DailyGuideAgentOutput;
     try {
       const guideInput = {

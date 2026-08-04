@@ -168,7 +168,7 @@ export class AppService {
       }
 
       const { goal } = await this.modules.conversation.confirmGoalIntake(briefPatch);
-      this.planPhase = '① 长期大纲';
+      this.planPhase = '正在规划长期学习大纲';
       try {
         const plan = await this.modules.planning.generateLayeredPlan(goal.id);
         await this.modules.execution.confirmGuide(plan.guide.id);

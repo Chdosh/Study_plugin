@@ -99,9 +99,3 @@
   --activity-item-radius: 10px;
   --card-padding: 24px;
 }
-
-@media (max-width: 820px) {
-  :root {
-    --card-padding: 18px;
-  }
-}

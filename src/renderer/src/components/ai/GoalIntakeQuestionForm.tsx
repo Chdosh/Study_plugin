@@ -32,7 +32,6 @@ export function GoalIntakeQuestionForm({
 
   return (
     <div className="intake-questions">
-      <span className="intake-questions-title">请回答以下问题（可一次全部填写）：</span>
       {questions.map((question, index) => (
         <div className="intake-question" key={`${question.prompt}-${index}`}>
           <span className="intake-question-prompt">

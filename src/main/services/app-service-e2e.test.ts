@@ -101,6 +101,24 @@ describe('学习闭环端到端', { timeout: 15_000 }, () => {
     expect(onboarding.pendingInteraction).toBeNull();
   });
 
+  it('AI 声称 ready 但未产出目标简报时，不进入 ready 而是提示补齐目标结果', async () => {
+    const fixture = await LearningFlowFixture.create();
+    fixtures.push(fixture);
+    fixture.ai.enqueue(toolReply('propose_goal', {
+      status: 'ready',
+      reply: '目标已确认，现在开始生成学习计划',
+      brief: null,
+      missingInfo: [],
+      shouldForceStart: false
+    }));
+
+    const onboarding = await fixture.app.sendOnboardingMessage('我想了解全栈开发的基础概念。');
+
+    expect(onboarding.intake.status).toBe('collecting');
+    expect(onboarding.intake.brief).toBeNull();
+    expect(onboarding.messages.at(-1)?.content).toContain('目标信息还不完整');
+  });
+
   it('脏输出：Markdown 包裹的 propose_goal JSON 能被自动修复并进入 ready', async () => {
     const fixture = await LearningFlowFixture.create();
     fixtures.push(fixture);

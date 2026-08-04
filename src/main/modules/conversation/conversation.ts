@@ -103,7 +103,10 @@ export class LearningConversationModule {
             context,
             audit
           });
-      const saved = await this.store.saveGoalIntakeAgentOutput(current.intake.id, run.output);
+      const saved = await this.store.saveGoalIntakeAgentOutput(
+        current.intake.id,
+        normalizeIntakeOutput(run.output)
+      );
       return this.withPendingInteraction(saved);
     } catch (error) {
       if (error instanceof CategorizedError) throw error;
@@ -326,4 +329,15 @@ function requireQuestion(question: string): string {
   const clean = question.trim();
   if (!clean) throw new CategorizedError('user_input_error', '问题不能为空。');
   return clean;
+}
+
+function normalizeIntakeOutput(output: GoalIntakeAgentOutput): GoalIntakeAgentOutput {
+  if (output.status === 'ready' && !output.brief) {
+    return {
+      ...output,
+      status: 'need_more_info',
+      reply: '目标信息还不完整，还差最关键的一点：请补充你想达到的具体结果（例如"能独立完成一个全栈小项目"）。补充后再告诉我，或直接说"开始"。'
+    };
+  }
+  return output;
 }

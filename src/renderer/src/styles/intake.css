@@ -18,157 +18,33 @@
   min-width: 0;
 }
 
-/* 结构化头部：生成预览 + 进度 + 步骤 chips */
-.intake-header {
-  display: grid;
-  gap: 12px;
-}
-
-.intake-header-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.intake-header-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-}
-
-.intake-header-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: var(--color-primary-surface-soft);
-  color: var(--color-primary);
-  flex: none;
-}
-
-.intake-progress {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.step-progress-bar {
-  flex: 1;
-  height: 4px;
-  border-radius: 999px;
-  background: var(--color-border);
-  overflow: hidden;
-}
-
-.step-progress-bar > div {
-  height: 100%;
-  background: var(--color-primary);
-  width: 33%;
-  transition: width 0.4s var(--ease-out);
-}
-
-.intake-progress-label {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-  font-weight: var(--font-weight-medium);
-  white-space: nowrap;
-}
-
-.intake-steps {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.step-chip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-radius: var(--radius-md);
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-border);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  min-width: 0;
-}
-
-.step-chip > span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.step-chip.active {
-  background: var(--color-primary-surface-soft);
-  border-color: var(--color-primary-border);
-  color: var(--color-primary);
-  font-weight: var(--font-weight-semibold);
-}
-
-.step-chip-num {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: var(--color-bg-surface-muted);
-  color: var(--color-text-subtle);
-  font-size: 10px;
-  font-weight: var(--font-weight-bold);
-  flex: none;
-}
-
-.step-chip.active .step-chip-num {
-  background: var(--color-primary);
-  color: #FFFFFF;
-}
-
-/* 对话 surface */
+/* 对话区：无框——消息直接铺在页面背景上，不包裹在容器里 */
 .intake-chat-panel {
-  min-height: clamp(440px, 56vh, 600px);
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
-  padding: 0;
-  background: var(--color-bg-surface-muted);
-  border-radius: var(--radius-xl);
-  overflow: hidden;
-  box-shadow: var(--shadow-soft);
-  box-sizing: border-box;
+  grid-template-rows: auto auto auto;
+  gap: 12px;
+  padding: 0 24px;
   min-width: 0;
+  box-sizing: border-box;
 }
 
-/* 消息流 */
+/* 消息流：随页面自然流动，无内部滚动 */
 .intake-thread {
   display: grid;
-  gap: 20px;
-  overflow-y: auto;
-  padding: clamp(24px, 4vh, 40px) clamp(16px, 3vw, 40px) 26px 96px;
+  gap: 16px;
+  padding: 4px 0;
   align-content: start;
   align-items: start;
   grid-auto-rows: max-content;
-  min-height: clamp(300px, 38vh, 420px);
-  max-height: clamp(380px, 48vh, 520px);
   box-sizing: border-box;
+  min-width: 0;
 }
 
 .intake-message {
   display: grid;
   gap: 4px;
-  padding: 14px 20px;
-  border-radius: 14px;
-  position: relative;
-  max-width: 85%;
+  min-width: 0;
+  max-width: 92%;
   animation: message-rise 0.24s var(--ease-out) both;
   box-sizing: border-box;
 }
@@ -188,47 +64,15 @@
   line-height: var(--line-height-relaxed);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+  min-width: 0;
 }
 
 .intake-message.assistant {
-  background: var(--color-bg-surface);
   justify-self: start;
-  border-top-left-radius: var(--radius-sm);
-  border: 1px solid var(--color-border);
-}
-
-.intake-message.assistant::before {
-  content: '';
-  position: absolute;
-  top: 4px;
-  left: -60px;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background-color: var(--color-primary-surface);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%23C75C3F' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z'/%3E%3Cpath d='M5 3v4'/%3E%3Cpath d='M19 17v4'/%3E%3Cpath d='M3 5h4'/%3E%3Cpath d='M17 19h4'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: center;
 }
 
 .intake-message.user {
-  background: var(--color-primary-surface-soft);
   justify-self: end;
-  border-top-right-radius: var(--radius-sm);
-  max-width: 75%;
-  border: 1px solid var(--color-primary-border);
-}
-
-.intake-message.user::after {
-  content: '';
-  position: absolute;
-  top: 4px;
-  right: -60px;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: var(--color-bg-surface-subtle);
-  border: 1px solid var(--color-border);
 }
 
 .intake-message-meta {
@@ -242,18 +86,17 @@
   opacity: 0.72;
 }
 
-/* 目标已确认摘要卡 */
+/* 目标确认卡片（与底部输入栏同族：同边框、同圆角、同背景、同水平边距） */
 .summary-card {
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-primary-border);
-  border-radius: var(--radius-xl);
-  padding: var(--card-padding, 24px);
+  margin: 0;
   display: grid;
-  gap: 16px;
-  justify-self: stretch;
-  width: 100%;
-  box-sizing: border-box;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.96);
   box-shadow: var(--shadow-soft);
+  box-sizing: border-box;
   animation: message-rise 0.24s var(--ease-out) both;
 }
 
@@ -290,11 +133,32 @@
   flex: none;
 }
 
+.summary-direction {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--color-bg-surface-subtle);
+  border-radius: var(--radius-md);
+}
+
+.summary-direction > span {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+.summary-direction > p {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  color: var(--color-text-primary);
+}
+
 .summary-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px 32px;
-  padding: 16px 0;
+  gap: 12px 28px;
+  padding: 14px 0;
   border-top: 1px solid var(--color-border);
   border-bottom: 1px solid var(--color-border);
 }
@@ -318,6 +182,13 @@
   overflow-wrap: anywhere;
 }
 
+.summary-confirm-note {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  color: var(--color-text-secondary);
+}
+
 .summary-actions {
   display: flex;
   align-items: center;
@@ -325,44 +196,27 @@
   gap: 12px;
 }
 
-.summary-direction {
-  display: grid;
-  gap: 4px;
-  padding: 12px 14px;
-  background: var(--color-bg-surface-subtle);
-  border-radius: var(--radius-md);
-}
-
-.summary-direction > span {
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-secondary);
-}
-
-.summary-direction > p {
+.intake-incomplete-note {
   margin: 0;
   font-size: var(--font-size-sm);
   line-height: var(--line-height-normal);
-  color: var(--color-text-primary);
+  color: var(--color-text-secondary);
 }
 
-/* 多问题表单 */
-.intake-questions {
-  display: grid;
-  gap: 12px;
-  margin: 0 24px;
-  padding: 16px 18px;
+/* 消息内作答区（追问/多问题表单共用） */
+.intake-message .intake-questions,
+.intake-message .pending-agent-question {
+  margin-top: 10px;
+  padding: 14px 16px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  background: var(--color-bg-surface);
-  box-shadow: var(--shadow-soft);
+  background: var(--color-bg-surface-subtle);
   box-sizing: border-box;
 }
 
-.intake-questions-title {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
+.intake-questions {
+  display: grid;
+  gap: 12px;
 }
 
 .intake-question {
@@ -437,14 +291,17 @@
   color: var(--color-text-subtle);
 }
 
-/* 选项区 */
+/* 追问面板（消息内延续） */
 .pending-agent-question {
   display: grid;
   gap: 8px;
-  margin: 0 24px;
-  padding: 0;
-  border: 0;
-  background: transparent;
+}
+
+.pending-agent-question-text {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  color: var(--color-text-primary);
 }
 
 .pending-agent-options-title {
@@ -489,103 +346,50 @@
   cursor: default;
 }
 
-/* 输入坞 */
+/* 输入坞：吸附底部，随页面滚动保持可用（与学习页操作条一致） */
 .intake-input-dock {
+  position: sticky;
+  bottom: 12px;
+  z-index: 5;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--space-3);
-  align-items: center;
-  margin: 0 24px 24px;
-  padding: 14px 18px;
-  border-radius: var(--radius-xl);
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-border);
-  box-shadow: var(--shadow-soft);
+  gap: 10px;
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 -8px 24px rgba(42, 38, 36, 0.06);
+  backdrop-filter: blur(10px);
   box-sizing: border-box;
 }
 
 .intake-input-box {
-  display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
-  gap: var(--space-3);
-  align-items: center;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
   min-width: 0;
 }
 
-.intake-input-box svg {
-  color: var(--color-text-subtle);
-  flex: none;
-}
-
 .intake-input-box textarea {
-  min-height: 36px;
-  max-height: 76px;
-  border: 0;
-  padding: 0;
-  resize: none;
-  background: transparent;
-  font-size: var(--font-size-md);
-  font-family: inherit;
-  color: var(--color-text-primary);
-}
-
-.intake-input-dock.collapsed {
-  grid-template-columns: 1fr;
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-  margin: 0 24px 20px;
-  padding: 0;
-  gap: 10px;
-}
-
-.intake-input-hint {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-subtle);
-  font-style: italic;
-}
-
-.intake-input-box.slim {
-  grid-template-columns: 24px minmax(0, 1fr) 40px;
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: 6px 6px 6px 14px;
-  box-shadow: var(--shadow-soft);
-}
-
-.slim-send {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 38px;
-  height: 38px;
+  flex: 1;
+  min-height: 40px;
+  max-height: 140px;
+  resize: vertical;
+  padding: var(--input-padding-y) var(--input-padding-x);
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
-  border: 0;
-  background: var(--color-primary);
-  color: #FFFFFF;
-  cursor: pointer;
-  transition: background 160ms var(--ease-out);
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  box-sizing: border-box;
+}
+
+.intake-input-box .primary-action {
   flex: none;
 }
 
-.slim-send:hover {
-  background: var(--color-primary-hover);
-}
-
-.slim-send:disabled {
-  opacity: var(--disabled-opacity);
-  cursor: default;
-}
-
-.intake-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  align-items: center;
+.intake-temporary-trigger {
+  justify-self: start;
 }
 
 /* 收纳的访谈历史 */
@@ -627,46 +431,4 @@
 
 .intake-history-collapsed > button:hover {
   background: var(--color-primary-surface);
-}
-
-/* 窄屏适配 */
-@media (max-width: 960px) {
-  .intake-thread {
-    padding-left: 22px;
-  }
-
-  .intake-message {
-    max-width: 100%;
-  }
-
-  .intake-message.user {
-    max-width: 92%;
-  }
-
-  .intake-message.assistant::before,
-  .intake-message.user::after {
-    display: none;
-  }
-
-  .intake-input-dock {
-    grid-template-columns: 1fr;
-    margin: 0 16px 16px;
-  }
-
-  .intake-input-dock.collapsed {
-    margin: 0 16px 16px;
-  }
-
-  .intake-actions {
-    justify-content: flex-end;
-  }
-
-  .intake-steps {
-    grid-template-columns: 1fr;
-  }
-
-  .summary-fields {
-    grid-template-columns: 1fr;
-    gap: 12px;
-  }
 }

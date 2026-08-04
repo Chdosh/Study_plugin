@@ -54,17 +54,3 @@
 .save-status { display: inline-flex; align-items: center; gap: 8px; color: var(--color-text-subtle); font-size: var(--font-size-sm); }
 .save-status.failed { color: var(--color-error); }
 .save-status.saved { color: var(--color-success); }
-
-@media (max-width: 760px) {
-  .settings-grid,
-  .settings-ai { grid-template-columns: 1fr; }
-  .settings-ai,
-  .settings-context,
-  .settings-diagnostics { grid-column: auto; }
-  .settings-ai .settings-card-title,
-  .settings-ai > .settings-row,
-  .settings-ai > .settings-connection-detail,
-  .settings-ai > .settings-field:first-of-type { grid-column: auto; }
-  .settings-card { padding: 20px; }
-  .settings-save-bar { bottom: -24px; }
-}
