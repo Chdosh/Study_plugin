@@ -98,4 +98,7 @@
   --activity-hit-size: 40px;
   --activity-item-radius: 10px;
   --card-padding: 24px;
+  --page-content-max-width: 1420px;
+  --page-padding-block: 24px;
+  --page-padding-inline: 24px;
 }

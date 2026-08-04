@@ -15,8 +15,8 @@ let isQuitting = false;
 
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
-    width: 1180,
-    height: 760,
+    width: 1080,
+    height: 720,
     minWidth: 600,
     minHeight: 640,
     title: '学习管家',
