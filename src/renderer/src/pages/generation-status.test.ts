@@ -439,7 +439,7 @@ describe('AI generation status presentation', () => {
     expect(html).toContain('查看历史对话');
   });
 
-  it('有计划时概览页展示学习路径总览：阶段卡片、进度、近期计划项', () => {
+  it('有计划时概览页展示学习路径总览：阶段卡片与当前方向', () => {
     const html = renderToStaticMarkup(createElement(OverviewPage, {
       settings: {
         aiBaseUrl: 'https://example.invalid/v1',
@@ -521,9 +521,8 @@ describe('AI generation status presentation', () => {
 
     expect(html).toContain('学习路径');
     expect(html).toContain('先补类型基础，再进入项目实战。');
-    expect(html).toContain('1 / 2 阶段已完成');
-    expect(html).toContain('进度正常');
-    expect(html).toContain('类型基础实践');
+    expect(html).toContain('打好基础');
+    expect(html).toContain('完成项目');
   });
 
   it('does not render the obsolete goal summary or rolling-plan action before a roadmap exists', () => {
