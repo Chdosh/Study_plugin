@@ -219,18 +219,6 @@ export function StudyPage({
             {currentTask?.deliverable && (
               <article className="focus-work-item"><strong>预期产出</strong><MessageContent content={currentTask.deliverable} /></article>
             )}
-            {commandPolicy.canSubmit
-              && commandPolicy.primaryCommand !== 'submit'
-              && !waitingLearningTurn
-              && !showSubmission ? (
-                <button
-                  className="study-direct-submit"
-                  type="button"
-                  onClick={() => setShowSubmission(true)}
-                >
-                  我已经完成，可以直接提交成果
-                </button>
-              ) : null}
           </div>
           {currentTask?.quickHint && (
             <details className="focus-help-row">
@@ -335,6 +323,19 @@ export function StudyPage({
                 return <li key={action.id} className={done ? 'done' : active ? 'active' : ''}><span>{done ? <CheckCircle2 size={15} /> : active ? <Play size={13} /> : index + 1}</span><div><strong>{action.title}</strong><small>{action.status === 'skipped' ? '已跳过' : done ? '已完成' : active ? '正在学习' : '待进行'}</small></div></li>;
               })}
             </ol>
+            {commandPolicy.canSubmit
+              && commandPolicy.primaryCommand !== 'submit'
+              && !waitingLearningTurn
+              && !showSubmission ? (
+                <button
+                  className="study-direct-submit"
+                  type="button"
+                  onClick={() => setShowSubmission(true)}
+                >
+                  <SkipForward size={14} />
+                  跳过当前所有步骤提交结果
+                </button>
+              ) : null}
           </section>
         </aside>}
 
@@ -391,13 +392,13 @@ export function StudyPage({
                   开始学习
                 </button>
               )}
-              {isActive && commandPolicy.canCompleteAction && !allActionsDone && !teaching && !showSubmission ? (
+              {isActive && commandPolicy.canCompleteAction && !allActionsDone && !waitingLearningTurn && !teaching && !showSubmission ? (
                 <button className="primary-action" type="button" disabled={learningPending} title={learningPending ? '正在处理，请稍候' : undefined} onClick={() => void onTeachStep()}>
                   <Sparkles size={16} />
                   请导师讲解这一步
                 </button>
               ) : null}
-              {isActive && commandPolicy.canCompleteAction && !allActionsDone && teaching && !showSubmission ? (
+              {isActive && commandPolicy.canCompleteAction && !allActionsDone && !waitingLearningTurn && !showSubmission ? (
                 <button className="primary-action" type="button" disabled={learningPending} onClick={() => {
                   if (currentAction) {
                     void onCompleteCurrentAction(currentAction.id).then(() => showFeedback('步骤已完成'));
@@ -407,7 +408,7 @@ export function StudyPage({
                   完成步骤
                 </button>
               ) : null}
-              {isActive && commandPolicy.canSkipAction && !allActionsDone && teaching && !showSubmission ? (
+              {isActive && commandPolicy.canSkipAction && !allActionsDone && !waitingLearningTurn && !showSubmission ? (
                 <button className="secondary-action" type="button" disabled={learningPending} onClick={() => {
                   if (currentAction) {
                     void onSkipCurrentAction(currentAction.id).then(() => showFeedback('已跳过当前步骤'));

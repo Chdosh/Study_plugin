@@ -439,17 +439,8 @@ export default function App(): JSX.Element {
                   }
                   const session = await window.studyApp.sessions.start(taskId);
                   setActiveSession(session);
+                  setTeaching(null);
                   await refresh();
-                  try {
-                    const result = await window.studyApp.learning.teachCurrentStep();
-                    setTeaching(result);
-                    setLearningState(await window.studyApp.learning.getState());
-                  } catch (error) {
-                    setLearningState(await window.studyApp.learning.getState());
-                    throw new Error(
-                      `学习已经开始，但导师讲解加载失败：${error instanceof Error ? error.message : String(error)}`
-                    );
-                  }
                 })}
                 onPauseSession={() => activeSession
                   ? runAction('暂停学习', async () => {
@@ -498,38 +489,12 @@ export default function App(): JSX.Element {
                   setLearningState(nextState);
                   await refresh();
                   setTeaching(null);
-                  if (nextState.dailyGuideAction) {
-                    try {
-                      const result = await window.studyApp.learning.teachCurrentStep();
-                      setTeaching(result);
-                      setLearningState(await window.studyApp.learning.getState());
-                    } catch (error) {
-                      setLearningState(await window.studyApp.learning.getState());
-                      setBackgroundNotice({
-                        kind: 'error',
-                        message: `步骤已推进；下一步讲解加载失败：${error instanceof Error ? error.message : String(error)}`
-                      });
-                    }
-                  }
                 })}
                 onSkipCurrentAction={(actionId) => runLearningAction('跳过当前步骤', async () => {
                   const nextState = await window.studyApp.learning.skipCurrentAction(actionId);
                   setLearningState(nextState);
                   await refresh();
                   setTeaching(null);
-                  if (nextState.dailyGuideAction) {
-                    try {
-                      const result = await window.studyApp.learning.teachCurrentStep();
-                      setTeaching(result);
-                      setLearningState(await window.studyApp.learning.getState());
-                    } catch (error) {
-                      setLearningState(await window.studyApp.learning.getState());
-                      setBackgroundNotice({
-                        kind: 'error',
-                        message: `步骤已跳过；下一步讲解加载失败：${error instanceof Error ? error.message : String(error)}`
-                      });
-                    }
-                  }
                 })}
                 onAskQuestion={handleAskQuestion}
                 onResolveQuestion={handleResolveQuestion}
