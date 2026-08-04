@@ -522,6 +522,28 @@ const latestAssistantMessageId = [...(onboarding?.messages ?? [])].reverse().fin
       || preparationState === 'completed';
     const needsRecords = preparationState === 'stage_review_required'
       || preparationState === 'plan_exhausted';
+    if (planGenerating) {
+      return (
+        <section className="overview-dashboard">
+          <section className="overview-reference-card overview-task-card">
+            <GoalContextLine
+              goalTitle={goal.title}
+              stageTitle={activeStage?.title ?? null}
+              contextLabel="生成学习计划"
+              status="生成中"
+              statusClass="active"
+            />
+            <div className="overview-task-main">
+              <div>
+                <span className="section-label">正在生成完整学习计划</span>
+                <h2>{todayGuide.planPhase ?? '正在规划学习计划'}</h2>
+                <p>{pendingGenerationLabel(true, pendingElapsedSeconds, todayGuide.planPhase)}</p>
+              </div>
+            </div>
+          </section>
+        </section>
+      );
+    }
     return (
       <section className="overview-dashboard">
         {preparationState === 'generation_failed' && (

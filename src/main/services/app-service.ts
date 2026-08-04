@@ -262,7 +262,7 @@ export class AppService {
     if (!today.goal) return { state: 'needs_goal' };
 
     const goalId = today.goal.id;
-    if (this.modules.planning.isPreparing(goalId)) return { state: 'generating' };
+    if (this.planPhase || this.modules.planning.isPreparing(goalId)) return { state: 'generating' };
     const usedNearTermPlanItemIds = await this.store.getUsedNearTermPlanItemIds(goalId);
     const hasRecoverablePlanDay = today.shortPlan.some((day) =>
       day.sessionStatus === 'active' && !usedNearTermPlanItemIds.has(day.id)
