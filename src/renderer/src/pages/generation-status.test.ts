@@ -15,8 +15,11 @@ describe('AI generation status presentation', () => {
     expect(pendingGenerationLabel(false, nearTimeout - 1)).toContain('已等待');
     expect(pendingGenerationLabel(false, nearTimeout)).toContain('AI 响应较慢');
     expect(pendingGenerationLabel(false, nearTimeout)).toContain('超时后会自动提示失败原因');
-    expect(pendingGenerationLabel(true, 0)).toBe('目标已确认，正在生成完整学习计划');
-    expect(pendingGenerationLabel(true, 45)).toContain('已等待 45 秒');
+    expect(pendingGenerationLabel(true, 0)).toContain('正在生成完整学习计划');
+    expect(pendingGenerationLabel(true, 0)).toContain('约需 1 分钟');
+    expect(pendingGenerationLabel(true, 0, '③ 学习指南（任务与步骤展开）')).toContain('③ 学习指南');
+    expect(pendingGenerationLabel(true, 65)).toContain('已等待 65 秒');
+    expect(pendingGenerationLabel(true, 65)).toContain('接近完成');
   });
 
   it('shows the persisted generation failure instead of a generic retry message', () => {
@@ -195,7 +198,7 @@ describe('AI generation status presentation', () => {
       knowledgeItems: []
     } as never));
 
-    expect(html).toContain('目标已确认，正在生成完整学习计划');
+    expect(html).toContain('正在生成完整学习计划');
     expect(html).not.toContain('AI 正在生成回答');
   });
 

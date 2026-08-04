@@ -314,6 +314,7 @@ export interface LearningOverviewState {
   preparationState: LearningPreparationState;
   errorMessage?: string;
   pendingEvaluations?: string[];
+  planPhase?: string | null;
 }
 
 export interface PreviousLearningUnitResult {

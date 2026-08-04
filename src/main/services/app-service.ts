@@ -46,6 +46,7 @@ export class AppService {
   private readonly agentLoop: AgentLoop;
   private readonly inFlight = new Map<string, Promise<unknown>>();
   private startupRuntimeAudit: RuntimeAuditResult | null = null;
+  private planPhase: string | null = null;
   readonly modules: LearningModules;
 
   constructor(
@@ -71,6 +72,9 @@ export class AppService {
       new AiAgentTurnModel(this.aiClient)
     );
     this.modules = new LearningModules(store, settings, this.agentLoop);
+    this.modules.planning.setPhaseListener((phase) => {
+      this.planPhase = phase;
+    });
   }
 
   async initialize(): Promise<void> {
@@ -164,8 +168,13 @@ export class AppService {
       }
 
       const { goal } = await this.modules.conversation.confirmGoalIntake(briefPatch);
-      const plan = await this.modules.planning.generateLayeredPlan(goal.id);
-      await this.modules.execution.confirmGuide(plan.guide.id);
+      this.planPhase = '① 长期大纲';
+      try {
+        const plan = await this.modules.planning.generateLayeredPlan(goal.id);
+        await this.modules.execution.confirmGuide(plan.guide.id);
+      } finally {
+        this.planPhase = null;
+      }
       return this.getOverview();
     });
   }
@@ -363,7 +372,8 @@ export class AppService {
       ),
       preparationState: preparation.state,
       errorMessage: preparation.errorMessage,
-      pendingEvaluations
+      pendingEvaluations,
+      planPhase: this.planPhase
     };
   }
 

@@ -184,16 +184,21 @@ function planItemStatusLabel(status: NearTermPlanItemStatus): string {
   return labels[status];
 }
 
-const GENERATION_SLOW_SECONDS = 30;
+const GENERATION_SLOW_SECONDS = 60;
 const GENERATION_NEAR_TIMEOUT_SECONDS = Math.floor(DEFAULT_AI_REQUEST_TIMEOUT_MS / 1000 * 2 / 3);
 
-export function pendingGenerationLabel(planGenerating: boolean, elapsedSeconds: number): string {
+export function pendingGenerationLabel(
+  planGenerating: boolean,
+  elapsedSeconds: number,
+  planPhase?: string | null
+): string {
   if (planGenerating) {
+    const phase = planPhase ? `（${planPhase}）` : '';
     return elapsedSeconds < GENERATION_SLOW_SECONDS
-      ? '目标已确认，正在生成完整学习计划'
-      : `目标已确认，正在生成完整学习计划（已等待 ${elapsedSeconds} 秒，仍在生成）`;
+      ? `正在生成完整学习计划${phase}…约需 1 分钟`
+      : `正在生成完整学习计划${phase}，已等待 ${elapsedSeconds} 秒，接近完成`;
   }
-  if (elapsedSeconds < GENERATION_SLOW_SECONDS) {
+  if (elapsedSeconds < 30) {
     return 'AI 正在生成回答';
   }
   if (elapsedSeconds < GENERATION_NEAR_TIMEOUT_SECONDS) {
@@ -368,7 +373,7 @@ const latestAssistantMessageId = [...(onboarding?.messages ?? [])].reverse().fin
           <div className="intake-message assistant pending" aria-live="polite">
             <span className="intake-message-meta">学习管家</span>
             <div className="message-content">
-              <strong>{pendingGenerationLabel(planGenerating, pendingElapsedSeconds)}</strong>
+              <strong>{pendingGenerationLabel(planGenerating, pendingElapsedSeconds, todayGuide?.planPhase)}</strong>
               <TypingDots />
             </div>
           </div>

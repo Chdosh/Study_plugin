@@ -136,10 +136,14 @@ export default function App(): JSX.Element {
 
   async function generateInitialPlan(briefPatch?: Partial<GoalBrief>): Promise<void> {
     setPlanGenerating(true);
+    const progressTimer = window.setInterval(() => {
+      void refresh();
+    }, 3000);
     try {
       await createAndActivateInitialPlan(briefPatch);
       await refresh();
     } finally {
+      window.clearInterval(progressTimer);
       setPlanGenerating(false);
     }
   }

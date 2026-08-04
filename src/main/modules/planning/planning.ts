@@ -70,8 +70,13 @@ export class PlanningModule {
   constructor(
     private readonly store: PlanningStore,
     private readonly settings?: SettingsService,
-    private readonly learningTurn?: LearningTurnModule
+    private readonly learningTurn?: LearningTurnModule,
+    private onPhase?: (phase: string) => void
   ) {}
+
+  setPhaseListener(listener: (phase: string) => void): void {
+    this.onPhase = listener;
+  }
 
   isPreparing(goalId: Id): boolean {
     return this.generationLocks.has(`daily_guide:${goalId}`);
@@ -95,6 +100,7 @@ export class PlanningModule {
       goalUnderstanding: brief,
       availableTime: windows
     });
+    this.onPhase?.('① 长期大纲');
     const roadmapInput = {
       goal,
       brief,
@@ -143,6 +149,7 @@ export class PlanningModule {
       roadmap: draftRoadmap,
       availableTime: windows
     });
+    this.onPhase?.('② 近期计划');
     const shortPlanInput = {
       mode: 'initial' as const,
       goal,
@@ -205,6 +212,7 @@ export class PlanningModule {
       shortPlanDay: targetPlanItem,
       availableMinutes: windows
     });
+    this.onPhase?.('③ 学习指南（任务与步骤展开）');
     let dailyGuideOutput: DailyGuideAgentOutput;
     try {
       const guideInput = {
