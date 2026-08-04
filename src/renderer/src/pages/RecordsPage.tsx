@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { BookOpenCheck, Brain, CalendarClock, ClipboardCheck, FileCheck2, FileText, Lightbulb, Loader2, Sparkles } from 'lucide-react';
 import type { KnowledgeItem, LearningGoal, LearningOverviewState, LearningRuntimeSnapshot, PlanAdjustmentProposal, PlanVersionEntry, ResumableGuideSummary, ReviewResult } from '../../../shared/types';
-import { deriveLearningTaskStatus } from '../domain/learning-status';
 
 type RecordTab = 'timeline' | 'knowledge' | 'versions';
 type ExportRow = Record<string, unknown>;
@@ -20,13 +19,39 @@ export type TimelineEvent = {
   evaluationStatus?: string;
 };
 
+type TaskRecord = {
+  id: string;
+  kind: 'task';
+  at: string;
+  title: string;
+  statusLabel: string;
+  task: ExportRow;
+  actions: ExportRow[];
+  sessions: ExportRow[];
+  submissions: ExportRow[];
+  evaluations: ExportRow[];
+  questions: Array<{ thread: ExportRow; answer: string }>;
+};
+
+type StandaloneRecord = {
+  id: string;
+  kind: 'question' | 'review';
+  at: string;
+  title: string;
+  summary: string;
+};
+
+type LearningRecord = TaskRecord | StandaloneRecord;
+
 function rows(value: unknown): ExportRow[] { return Array.isArray(value) ? value.filter((item): item is ExportRow => Boolean(item) && typeof item === 'object') : []; }
 function text(value: unknown): string { return typeof value === 'string' ? value : ''; }
-function normalizedText(value: string): string { return value.replace(/[\s，。！？、,.!?；;：:]/gu, '').toLowerCase(); }
 export function getLatestQuestionAnswer(exportData: Record<string, unknown>, threadId: string): string {
   let latestAnswer = '';
   let latestCreatedAt = '';
-  for (const message of rows(exportData.questionMessages)) {
+  const messages = rows(exportData.conversationMessages).length > 0
+    ? rows(exportData.conversationMessages)
+    : rows(exportData.questionMessages);
+  for (const message of messages) {
     const content = text(message.content);
     const createdAt = text(message.createdAt);
     if (text(message.threadId) === threadId && text(message.role) === 'assistant' && content && createdAt >= latestCreatedAt) {
@@ -35,6 +60,53 @@ export function getLatestQuestionAnswer(exportData: Record<string, unknown>, thr
     }
   }
   return latestAnswer;
+}
+function dateTime(value: string): string {
+  if (!value) return '';
+  return new Date(value).toLocaleString('zh-CN', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+function latestDate(values: string[]): string {
+  return values.filter(Boolean).sort((left, right) => right.localeCompare(left))[0] ?? '';
+}
+function taskStatusLabel(task: ExportRow, isCurrent: boolean): string {
+  if (isCurrent) return '当前学习';
+  const closure = text(task.closureKind);
+  if (closure === 'completed') return '已完成';
+  if (closure === 'partial') return '部分完成';
+  if (closure === 'abandoned') return '已放弃';
+  if (closure === 'replaced') return '已替换';
+  if (text(task.status) === 'deferred') return '已暂缓';
+  return '学习记录';
+}
+function actionStatusLabel(status: string): string {
+  if (status === 'done') return '已完成';
+  if (status === 'skipped') return '已跳过';
+  return '未完成';
+}
+function evaluationEvent(evaluation: ExportRow, title: string): TimelineEvent {
+  const source = text(evaluation.source);
+  return {
+    id: `evaluation-${text(evaluation.id)}`,
+    at: text(evaluation.createdAt),
+    kind: source === 'user_correction' ? '评价纠正' : '评价',
+    title,
+    summary: text(evaluation.feedback) || '评价已完成',
+    evaluationId: source === 'user_correction' ? undefined : text(evaluation.id) || undefined,
+    recommendedAction: extractRecommendationAction(text(evaluation.recommendationJson)),
+    recommendationDecision: text(evaluation.recommendationDecision) || undefined,
+    applicationStatus: text(evaluation.applicationStatus) || null
+  };
+}
+function submissionEvent(submission: ExportRow, title: string): TimelineEvent {
+  return {
+    id: `submission-${text(submission.id)}`,
+    at: text(submission.createdAt),
+    kind: '提交',
+    title,
+    summary: text(submission.content),
+    submissionId: text(submission.id),
+    evaluationStatus: text(submission.evaluationStatus) || 'waiting'
+  };
 }
 function readableVersionTitle(summary: string, version: number): string {
   if (!summary) return `更新学习计划（版本 ${version}）`;
@@ -109,90 +181,104 @@ export function RecordsPage({ review, todayGuide, learningState, availableGoals,
 
   const knowledgeItemsForView = selectedGoalIsCurrent ? knowledgeItems : selectedKnowledgeItems;
 
-  const events = useMemo<TimelineEvent[]>(() => {
+  const records = useMemo<LearningRecord[]>(() => {
     const tasks = rows(exportData.learningTasks);
-    const taskTitle = new Map(tasks.map((task) => [text(task.id), text(task.title) || '学习任务']));
     const actions = rows(exportData.learningActions);
-    const actionTitle = new Map(actions.map((action) => [text(action.id), text(action.title) || '行动步骤']));
-    const submissions = rows(exportData.learningSubmissions)
-      .sort((left, right) => text(left.createdAt).localeCompare(text(right.createdAt)));
-    const attemptIndex = new Map<string, number>();
-    const taskAttempts = new Map<string, number>();
-    for (const submission of submissions) {
-      const taskId = text(submission.taskId);
-      const next = (taskAttempts.get(taskId) ?? 0) + 1;
-      taskAttempts.set(taskId, next);
-      attemptIndex.set(text(submission.id), next);
+    const sessions = rows(exportData.focusSessions);
+    const submissions = rows(exportData.learningSubmissions);
+    const evaluations = rows(exportData.learningEvaluations);
+    const messages = rows(exportData.conversationMessages);
+    const threads = rows(exportData.conversationThreads);
+    const currentTaskId = learningState?.dailyGuideTask?.id ?? '';
+    const threadTaskId = new Map<string, string>();
+    for (const message of messages) {
+      const linkedTaskId = text(message.linkedTaskId);
+      if (linkedTaskId) threadTaskId.set(text(message.threadId), linkedTaskId);
     }
-    const submissionById = new Map(submissions.map((submission) => [text(submission.id), submission]));
-    const result: TimelineEvent[] = [];
-    const currentTaskStatus = learningState?.dailyGuideTask
-      ? deriveLearningTaskStatus(learningState.dailyGuideTask)
-      : null;
-    rows(exportData.focusSessions).forEach((session) => {
-      const isCurrent = text(session.taskId) === learningState?.dailyGuideTask?.id && ['active', 'paused'].includes(text(session.status));
-      const sessionLabel = isCurrent && currentTaskStatus?.phase !== 'executing'
-        ? currentTaskStatus?.label ?? '进行中'
-          : text(session.status) === 'completed' ? '已完成' : text(session.status) === 'paused' ? '已暂停' : '进行中';
-      result.push({ id: `session-${text(session.id)}`, at: text(session.startedAt), kind: '学习会话', title: taskTitle.get(text(session.taskId)) ?? '学习会话', summary: `${sessionLabel}${Number(session.durationMinutes) > 0 ? ` · ${Number(session.durationMinutes)} 分钟` : ''}` });
+
+    const taskRecords: TaskRecord[] = tasks.flatMap((task) => {
+      const taskId = text(task.id);
+      const taskActions = actions.filter((item) => text(item.taskId) === taskId);
+      const taskSessions = sessions.filter((item) => text(item.taskId) === taskId);
+      const taskSubmissions = submissions.filter((item) => text(item.taskId) === taskId)
+        .sort((left, right) => text(right.createdAt).localeCompare(text(left.createdAt)));
+      const submissionIds = new Set(taskSubmissions.map((item) => text(item.id)));
+      const taskEvaluations = evaluations.filter((item) => submissionIds.has(text(item.submissionId)))
+        .sort((left, right) => text(right.createdAt).localeCompare(text(left.createdAt)));
+      const taskQuestions = threads
+        .filter((thread) => threadTaskId.get(text(thread.id)) === taskId)
+        .map((thread) => ({ thread, answer: getLatestQuestionAnswer(exportData, text(thread.id)) }));
+      const isCurrent = taskId === currentTaskId;
+      const hasActivity = isCurrent
+        || text(task.status) !== 'planned'
+        || taskActions.some((item) => text(item.status) !== 'planned')
+        || taskSessions.length > 0
+        || taskSubmissions.length > 0
+        || taskQuestions.length > 0;
+      if (!hasActivity) return [];
+      const at = latestDate([
+        text(task.updatedAt),
+        ...taskActions.map((item) => text(item.completedAt)),
+        ...taskSessions.map((item) => text(item.endedAt) || text(item.startedAt)),
+        ...taskSubmissions.map((item) => text(item.createdAt)),
+        ...taskEvaluations.map((item) => text(item.createdAt)),
+        ...taskQuestions.map(({ thread }) => text(thread.updatedAt) || text(thread.createdAt))
+      ]);
+      return [{
+        id: `task-${taskId}`,
+        kind: 'task' as const,
+        at,
+        title: text(task.title) || '学习任务',
+        statusLabel: taskStatusLabel(task, isCurrent),
+        task,
+        actions: taskActions.sort((left, right) => Number(left.position) - Number(right.position)),
+        sessions: taskSessions,
+        submissions: taskSubmissions,
+        evaluations: taskEvaluations,
+        questions: taskQuestions
+      }];
     });
-    actions.filter((action) => ['done', 'skipped'].includes(text(action.status))).forEach((action) => result.push({ id: `action-${text(action.id)}`, at: text(action.completedAt) || text(action.updatedAt), kind: '行动', title: actionTitle.get(text(action.id)) ?? '行动步骤', summary: text(action.status) === 'done' ? '步骤已完成' : '步骤已跳过' }));
-    submissions.forEach((submission) => {
-      const attempt = attemptIndex.get(text(submission.id)) ?? 1;
-      const title = taskTitle.get(text(submission.taskId)) ?? '学习任务';
-      const evaluationStatus = text(submission.evaluationStatus) || 'waiting';
-      const evaluationSummary = evaluationStatus === 'completed'
-        ? '导师反馈已生成'
-        : evaluationStatus === 'failed'
-          ? '导师反馈未生成，学习进度不受影响'
-          : '导师反馈生成中';
-      result.push({
-        id: `submission-${text(submission.id)}`,
-        at: text(submission.createdAt),
-        kind: '提交',
-        title: `${title} · 第 ${attempt} 次尝试`,
-        summary: `成果原文已保存 · ${evaluationSummary}`,
-        details: [text(submission.content)],
-        submissionId: text(submission.id),
-        evaluationStatus
-      });
-    });
-    rows(exportData.learningEvaluations).forEach((evaluation) => {
-      const submission = submissionById.get(text(evaluation.submissionId));
-      const attempt = attemptIndex.get(text(evaluation.submissionId)) ?? 1;
-      const title = submission
-        ? taskTitle.get(text(submission.taskId)) ?? '学习任务'
-        : '学习任务';
-      const source = text(evaluation.source);
-      const recommendationDecision = text(evaluation.recommendationDecision);
-      const recommendationAction = extractRecommendationAction(text(evaluation.recommendationJson));
-      result.push({
-        id: `evaluation-${text(evaluation.id)}`,
-        at: text(evaluation.createdAt),
-        kind: source === 'user_correction' ? '评价纠正' : '评价',
-        title: `${title} · 第 ${attempt} 次尝试`,
-        summary: text(evaluation.feedback) || '评价已完成',
-        details: [
-          source === 'user_correction'
-            ? `纠正原评价：${text(evaluation.supersedesEvaluationId)}`
-            : `结果：${evaluationResultLabel(text(evaluation.result))}`,
-          recommendationDecision
-            ? `本评价建议：${recommendationDecisionLabel(recommendationDecision)}`
-            : ''
-        ].filter(Boolean),
-        evaluationId: source === 'user_correction' ? undefined : text(evaluation.id) || undefined,
-        recommendedAction: recommendationAction,
-        recommendationDecision: recommendationDecision || undefined,
-        applicationStatus: text(evaluation.applicationStatus) || null
-      });
-    });
-    rows(exportData.conversationThreads).forEach((thread) => result.push({ id: `question-${text(thread.id)}`, at: text(thread.createdAt), kind: '问题', title: text(thread.question) || '问题分支', summary: getLatestQuestionAnswer(exportData, text(thread.id)) || text(thread.resolutionSummary) || (text(thread.status) === 'resolved' ? '问题已解决' : '待继续处理') }));
-    if (selectedGoalIsCurrent && review) result.push({ id: `review-${review.reviewId}`, at: `${todayGuide?.guide?.date ?? new Date().toISOString().slice(0, 10)}T23:59:00`, kind: '复盘', title: '学习复盘', summary: review.summary });
-    return result.filter((item) => item.at).sort((a, b) => b.at.localeCompare(a.at));
+
+    const standaloneQuestions: StandaloneRecord[] = threads
+      .filter((thread) => !threadTaskId.get(text(thread.id)))
+      .map((thread) => ({
+        id: `question-${text(thread.id)}`,
+        kind: 'question' as const,
+        at: text(thread.updatedAt) || text(thread.createdAt),
+        title: text(thread.question) || '独立问题',
+        summary: getLatestQuestionAnswer(exportData, text(thread.id)) || text(thread.resolutionSummary) || '尚未形成回答'
+      }));
+    const reviewRecords: StandaloneRecord[] = selectedGoalIsCurrent && review ? [{
+      id: `review-${review.reviewId}`,
+      kind: 'review',
+      at: `${todayGuide?.guide?.date ?? new Date().toISOString().slice(0, 10)}T23:59:00`,
+      title: '学习复盘',
+      summary: review.summary
+    }] : [];
+    return [...taskRecords, ...standaloneQuestions, ...reviewRecords]
+      .filter((item) => item.at)
+      .sort((left, right) => right.at.localeCompare(left.at));
   }, [exportData, learningState, review, selectedGoalIsCurrent, todayGuide?.guide?.date]);
 
-  const selected = events.find((item) => item.id === selectedId) ?? events[0] ?? null;
-  const selectedSummary = selected && normalizedText(selected.summary) !== normalizedText(selected.title) ? selected.summary : '';
+  const selected = records.find((item) => item.id === selectedId) ?? records[0] ?? null;
+  const selectedTask = selected?.kind === 'task' ? selected : null;
+  const selectedTaskDoneActions = selectedTask?.actions.filter((item) => text(item.status) === 'done').length ?? 0;
+  const selectedTaskMinutes = selectedTask
+    ? Math.round(selectedTask.sessions.reduce((total, item) => total + Number(item.durationSeconds || 0), 0) / 60)
+    : 0;
+  const latestSubmission = selectedTask?.submissions[0] ?? null;
+  const latestSubmissionEvent = latestSubmission && selectedTask
+    ? submissionEvent(latestSubmission, selectedTask.title)
+    : null;
+  const latestEvaluation = selectedTask?.evaluations[0] ?? null;
+  const latestEvaluationEvent = latestEvaluation && selectedTask
+    ? evaluationEvent(latestEvaluation, selectedTask.title)
+    : null;
+  const selectedTaskFollowup = selectedTask && text(selectedTask.task.closureKind)
+    ? text(selectedTask.task.nextStartPoint)
+      || text(selectedTask.task.closureReason)
+      || (text(selectedTask.task.closureKind) === 'completed' ? '任务已完成，后续学习按当前计划继续。' : '')
+    : '';
   const stageReady = selectedGoalIsCurrent
     ? todayGuide?.roadmap.find((stage) => stage.status === 'ready_for_review') ?? null
     : null;
@@ -204,28 +290,26 @@ export function RecordsPage({ review, todayGuide, learningState, availableGoals,
 
   return (
     <section className="records-page">
-      <header className="records-header"><p>追溯学习过程、结果证据，以及计划如何随学习结果变化。</p>{loading && <span className="records-loading"><Loader2 className="spin" size={15} />正在整理记录</span>}</header>
-
-      <section className="records-history-toolbar" aria-label="历史目标">
-        <label htmlFor="records-goal-select">查看目标</label>
-        <select
-          id="records-goal-select"
-          value={selectedGoal?.id ?? ''}
-          onChange={(event) => {
-            setSelectedGoalId(event.target.value || null);
-            setConfirmingGuideId(null);
-          }}
-          disabled={availableGoals.length === 0}
-        >
-          {availableGoals.length === 0 && <option value="">暂无目标</option>}
-          {availableGoals.map((goal) => (
-            <option key={goal.id} value={goal.id}>
-              {goal.title} · {goal.status === 'active' ? '进行中' : goal.status === 'done' ? '已完成' : '已归档'}
-            </option>
-          ))}
-        </select>
-        {!selectedGoalIsCurrent && selectedGoal && <span className="records-history-readonly">历史记录只读</span>}
-      </section>
+      <div className="records-view-toolbar">
+        <nav className="records-tabs" aria-label="记录类型">{([['timeline', '学习记录', records.length], ['knowledge', '知识与薄弱点', knowledgeItemsForView.length], ['versions', '计划变更', versions.length]] as const).map(([key, label, count]) => <button key={key} type="button" className={tab === key ? 'active' : ''} onClick={() => setTab(key)}><span>{label}</span>{count > 0 && <small>{count}</small>}</button>)}</nav>
+        <div className="records-goal-filter">
+          <select
+            id="records-goal-select"
+            aria-label="选择要查看的学习目标"
+            value={selectedGoal?.id ?? ''}
+            onChange={(event) => {
+              setSelectedGoalId(event.target.value || null);
+              setConfirmingGuideId(null);
+            }}
+            disabled={availableGoals.length === 0}
+          >
+            {availableGoals.length === 0 && <option value="">暂无目标</option>}
+            {availableGoals.map((goal) => <option key={goal.id} value={goal.id}>{goal.title}</option>)}
+          </select>
+          {loading && <span className="records-loading"><Loader2 className="spin" size={15} />正在整理</span>}
+          {!selectedGoalIsCurrent && selectedGoal && <span className="records-history-readonly">历史记录只读</span>}
+        </div>
+      </div>
 
       {selectedGoal?.status === 'archived' && resumableForSelectedGoal.length > 0 && (
         <section className="records-history-recovery">
@@ -265,48 +349,40 @@ export function RecordsPage({ review, todayGuide, learningState, availableGoals,
         {pendingAdjustment?.status === 'pending' && <div className="records-pending-row"><span className="records-pending-icon"><BookOpenCheck size={18} /></span><div><strong>即时调整待决定</strong><p>{pendingAdjustment.reason}</p></div><div className="records-pending-buttons"><button className="primary-action" type="button" onClick={() => void onDecideAdjustment(pendingAdjustment.id, 'accepted')}>采纳建议</button><button className="secondary-action" type="button" onClick={() => void onDecideAdjustment(pendingAdjustment.id, 'rejected')}>保持原计划</button></div></div>}
       </section>}
 
-      <section className="records-browser-card">
-        <nav className="records-tabs" aria-label="记录类型">{([['timeline', '时间线', events.length], ['knowledge', '知识沉淀', knowledgeItemsForView.length], ['versions', '计划版本', versions.length]] as const).map(([key, label, count]) => <button key={key} type="button" className={tab === key ? 'active' : ''} onClick={() => setTab(key)}><span>{label}</span><small>{count}</small></button>)}</nav>
+      {tab === 'timeline' && <div className="records-dashboard-grid">
+        <article className="record-detail records-reference-card">{selectedTask ? <>
+          <header className="record-detail-header"><div><span className="section-label">任务记录</span><h2>{selectedTask.title}</h2><p>{dateTime(selectedTask.at)}</p></div></header>
+          <div className="record-overview"><span>完成 <strong>{selectedTaskDoneActions}/{selectedTask.actions.length}</strong> 个行动</span>{selectedTaskMinutes > 0 && <span>学习 <strong>{selectedTaskMinutes}</strong> 分钟</span>}{selectedTask.questions.length > 0 && <span>提出 <strong>{selectedTask.questions.length}</strong> 个问题</span>}{selectedTask.submissions.length > 0 && <span>提交 <strong>{selectedTask.submissions.length}</strong> 次成果</span>}</div>
 
-        {tab === 'timeline' && <div className="records-master-detail">
-        <div className="record-list">{events.length === 0 ? <div className="records-empty"><CalendarClock size={20} /><strong>还没有学习记录</strong><span>开始一次学习后，Session、步骤、提交和评价会按时间汇总在这里。</span></div> : events.map((event) => <button type="button" key={event.id} className={selected?.id === event.id ? 'record-row active' : 'record-row'} onClick={() => setSelectedId(event.id)}><span>{event.kind}</span><strong>{event.title}</strong><small>{new Date(event.at).toLocaleString('zh-CN', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</small></button>)}</div>
-        <article className="record-detail">{selected ? <><span className="record-kind">{selected.kind}</span><h2>{selected.title}</h2>{selectedSummary && <p>{selectedSummary}</p>}{selected.details?.map((detail) => <p key={detail}>{detail}</p>)}
-          {selectedGoalIsCurrent && selected.kind === '评价' && canDecideEvaluationRecommendation(selected) && onDecideEvaluationRecommendation ? (
-            <div className="records-pending-buttons">
-              <button className="primary-action" type="button" onClick={() => void onDecideEvaluationRecommendation(selected.evaluationId!, 'accepted')}>{selected.recommendedAction === 'complete_task' ? '采纳推荐并完成任务' : '采纳推荐'}</button>
-              <button className="secondary-action" type="button" onClick={() => void onDecideEvaluationRecommendation(selected.evaluationId!, 'deferred')}>稍后决定</button>
-              <button className="secondary-action" type="button" onClick={() => void onDecideEvaluationRecommendation(selected.evaluationId!, 'declined')}>不采纳</button>
-            </div>
-          ) : null}
-          {selectedGoalIsCurrent && selected.kind === '评价' && canRetryEvaluationRecommendation(selected) && onDecideEvaluationRecommendation ? (
-            <div className="records-pending-buttons">
-              <button className="primary-action" type="button" onClick={() => void onDecideEvaluationRecommendation(selected.evaluationId!, 'accepted')}>重试应用</button>
-            </div>
-          ) : null}
-          {canRetrySubmissionEvaluation(selected) && onRetryEvaluation ? (
-            <div className="records-pending-buttons">
-              <button
-                className="primary-action"
-                type="button"
-                disabled={retryingSubmissionId === selected.submissionId}
-                onClick={() => {
-                  setRetryingSubmissionId(selected.submissionId!);
-                  void onRetryEvaluation(selected.submissionId!).finally(() => setRetryingSubmissionId(null));
-                }}
-              >
-                {retryingSubmissionId === selected.submissionId ? '正在重试…' : '重试导师评价'}
-              </button>
-            </div>
-          ) : null}
-        </> : <div className="records-empty"><FileText size={20} /><span>选择一条记录查看详情。</span></div>}
-          {selectedGoalIsCurrent && review && selected?.kind === '复盘' && <section className="review-result"><h3>后续行动与计划调整</h3>{review.nextActions.length > 0 && <ul>{review.nextActions.map((item) => <li key={item}>{item}</li>)}</ul>}{review.planAdjustments.length > 0 && onApplyPlanAdjustments && <><div className="proposal-note"><Brain size={16} /><span>以下是 AI 建议，尚未应用到正式计划。</span></div>{review.planAdjustments.map((item) => <div className="record-proposal" key={`${item.itemIndex}-${item.title}`}><strong>第 {item.itemIndex} 单元 · {item.title}</strong><span>{item.focus}</span><small>影响范围：尚未执行的对应学习单元</small></div>)}<button className="primary-action" type="button" disabled={applying} onClick={() => { setApplying(true); void onApplyPlanAdjustments(review.planAdjustments).finally(() => setApplying(false)); }}>{applying ? '正在应用…' : '确认应用调整'}</button></>}</section>}
-        </article>
-        </div>}
+          <section className="record-detail-section"><h3>本次完成</h3>{selectedTask.actions.length > 0 ? <div className="record-action-list">{selectedTask.actions.map((action) => <div key={text(action.id)} className={`record-action ${text(action.status)}`}><span>{actionStatusLabel(text(action.status))}</span><div><strong>{text(action.title)}</strong>{text(action.progressNote) && <p>{text(action.progressNote)}</p>}</div></div>)}</div> : <p className="record-section-empty">没有单独拆分行动步骤。</p>}</section>
 
-        {tab === 'knowledge' && <div className="knowledge-records">{knowledgeItemsForView.length === 0 ? <div className="records-empty"><Lightbulb size={20} /><strong>暂无知识沉淀</strong><span>重复薄弱点、纠正和洞见会在完成评价后出现。</span></div> : knowledgeItemsForView.map((item) => <article key={item.id}><span>{item.masteryLabel}</span><h3>{item.key}</h3><p>{item.summary}</p><p>{item.masteryReason}</p><small>{item.evidenceCount > 1 ? `${item.evidenceCount} 条真实证据` : '1 条真实证据'} · {item.status === 'resolved' ? '用户已确认' : item.status === 'dormant' ? '已排除后续关注' : '持续关注'}</small>{selectedGoalIsCurrent && <div className="records-pending-buttons">{item.status === 'active' ? <><button className="secondary-action" type="button" onClick={() => void onSetKnowledgeStatus(item.id, 'resolved')}>纠正为已掌握</button><button className="secondary-action" type="button" onClick={() => void onSetKnowledgeStatus(item.id, 'dormant')}>排除后续关注</button></> : <button className="secondary-action" type="button" onClick={() => void onSetKnowledgeStatus(item.id, 'active')}>恢复关注</button>}</div>}</article>)}</div>}
+          {selectedTask.submissions.length > 0 && <section className="record-detail-section"><h3>成果与证据</h3>{selectedTask.submissions.map((submission, index) => <div className="record-evidence" key={text(submission.id)}><div><strong>第 {selectedTask.submissions.length - index} 次提交</strong><time>{dateTime(text(submission.createdAt))}</time></div><p>{text(submission.content) || '已提交成果，但没有文字说明。'}</p></div>)}
+          {latestSubmissionEvent && canRetrySubmissionEvaluation(latestSubmissionEvent) && onRetryEvaluation && <button className="secondary-action" type="button" disabled={retryingSubmissionId === latestSubmissionEvent.submissionId} onClick={() => { setRetryingSubmissionId(latestSubmissionEvent.submissionId!); void onRetryEvaluation(latestSubmissionEvent.submissionId!).finally(() => setRetryingSubmissionId(null)); }}>{retryingSubmissionId === latestSubmissionEvent.submissionId ? '正在重试…' : '重试导师评价'}</button>}</section>}
 
-        {tab === 'versions' && <div className="version-records">{versions.length === 0 ? <div className="records-empty"><FileCheck2 size={20} /><strong>暂无计划版本</strong><span>生成或确认计划调整后会在这里保留版本记录。</span></div> : versions.map((version) => <article key={version.version}><span>v{version.version}</span><div><h3>{readableVersionTitle(version.changeSummary, version.version)}</h3><p>{new Date(version.createdAt).toLocaleString('zh-CN')}</p>{version.snapshot?.shortPlan?.length ? <small>涉及：{version.snapshot.shortPlan.map((item) => `第 ${item.itemIndex} 单元`).join('、')}</small> : null}</div></article>)}</div>}
-      </section>
+          {latestEvaluation && <section className="record-detail-section"><h3>导师评价</h3><div className="record-evaluation-result"><span>{evaluationResultLabel(text(latestEvaluation.result))}</span><p>{text(latestEvaluation.feedback) || '评价已完成。'}</p></div>{text(latestEvaluation.recommendationDecision) && <small>建议状态：{recommendationDecisionLabel(text(latestEvaluation.recommendationDecision))}</small>}
+          {selectedGoalIsCurrent && latestEvaluationEvent && canDecideEvaluationRecommendation(latestEvaluationEvent) && onDecideEvaluationRecommendation && <div className="records-pending-buttons"><button className="primary-action" type="button" onClick={() => void onDecideEvaluationRecommendation(latestEvaluationEvent.evaluationId!, 'accepted')}>{latestEvaluationEvent.recommendedAction === 'complete_task' ? '采纳推荐并完成任务' : '采纳推荐'}</button><button className="secondary-action" type="button" onClick={() => void onDecideEvaluationRecommendation(latestEvaluationEvent.evaluationId!, 'deferred')}>稍后决定</button><button className="secondary-action" type="button" onClick={() => void onDecideEvaluationRecommendation(latestEvaluationEvent.evaluationId!, 'declined')}>不采纳</button></div>}
+          {selectedGoalIsCurrent && latestEvaluationEvent && canRetryEvaluationRecommendation(latestEvaluationEvent) && onDecideEvaluationRecommendation && <button className="primary-action" type="button" onClick={() => void onDecideEvaluationRecommendation(latestEvaluationEvent.evaluationId!, 'accepted')}>重试应用</button>}</section>}
+
+          {selectedTask.questions.length > 0 && <section className="record-detail-section"><h3>提问与澄清</h3>{selectedTask.questions.map(({ thread, answer }) => <div className="record-question" key={text(thread.id)}><strong>{text(thread.question)}</strong><p>{answer || text(thread.resolutionSummary) || '尚未形成回答。'}</p></div>)}</section>}
+
+          {selectedTask.submissions.length === 0 && <p className="record-completion-note">完成任务并提交成果后，这里会保存成果证据和导师评价。</p>}
+          {selectedTaskFollowup && <section className="record-detail-section"><h3>后续安排</h3><p>{selectedTaskFollowup}</p></section>}
+        </> : selected && selected.kind !== 'task' ? <>
+          <header className="record-detail-header"><div><span className="section-label">{selected.kind === 'review' ? '学习复盘' : '独立问题'}</span><h2>{selected.title}</h2><p>{dateTime(selected.at)}</p></div></header><p>{selected.summary}</p>
+          {selected.kind === 'review' && selectedGoalIsCurrent && review && <section className="review-result"><h3>后续行动与计划调整</h3>{review.nextActions.length > 0 && <ul>{review.nextActions.map((item) => <li key={item}>{item}</li>)}</ul>}{review.planAdjustments.length > 0 && onApplyPlanAdjustments && <><div className="proposal-note"><Brain size={16} /><span>以下是 AI 建议，尚未应用到正式计划。</span></div>{review.planAdjustments.map((item) => <div className="record-proposal" key={`${item.itemIndex}-${item.title}`}><strong>第 {item.itemIndex} 单元 · {item.title}</strong><span>{item.focus}</span><small>影响范围：尚未执行的对应学习单元</small></div>)}<button className="primary-action" type="button" disabled={applying} onClick={() => { setApplying(true); void onApplyPlanAdjustments(review.planAdjustments).finally(() => setApplying(false)); }}>{applying ? '正在应用…' : '确认应用调整'}</button></>}</section>}
+        </> : <div className="records-empty"><FileText size={20} /><span>选择一条记录查看详情。</span></div>}</article>
+
+        <aside className="record-index records-reference-card"><header><h2>学习记录</h2><span>{records.length} 项</span></header><div className="record-list">{records.length === 0 ? <div className="records-empty"><CalendarClock size={20} /><strong>还没有学习记录</strong><span>开始执行学习任务后，这里会按任务汇总记录。</span></div> : records.map((record) => {
+          const isTask = record.kind === 'task';
+          const doneActions = isTask ? record.actions.filter((item) => text(item.status) === 'done').length : 0;
+          const summaryParts = isTask ? [record.actions.length > 0 ? `${doneActions}/${record.actions.length} 步` : '', record.questions.length > 0 ? `${record.questions.length} 个问题` : '', record.submissions.length > 0 ? `${record.submissions.length} 次提交` : ''].filter(Boolean) : [];
+          return <button type="button" key={record.id} className={selected?.id === record.id ? 'record-row active' : 'record-row'} onClick={() => setSelectedId(record.id)}><div className="record-row-heading"><strong>{record.title}</strong><span>{isTask ? record.statusLabel : record.kind === 'review' ? '复盘' : '独立问题'}</span></div><small>{dateTime(record.at)}</small>{isTask && summaryParts.length > 0 && <em>{summaryParts.join(' · ')}</em>}</button>;
+        })}</div></aside>
+      </div>}
+
+      {tab === 'knowledge' && <section className="records-reference-card knowledge-records">{knowledgeItemsForView.length === 0 ? <div className="records-empty"><Lightbulb size={20} /><strong>暂无知识与薄弱点记录</strong><span>重复薄弱点、纠正和洞见会在完成评价后出现。</span></div> : knowledgeItemsForView.map((item) => <article key={item.id}><span>{item.masteryLabel}</span><h3>{item.key}</h3><p>{item.summary}</p><p>{item.masteryReason}</p><small>{item.evidenceCount > 1 ? `${item.evidenceCount} 条真实证据` : '1 条真实证据'} · {item.status === 'resolved' ? '用户已确认' : item.status === 'dormant' ? '已排除后续关注' : '持续关注'}</small>{selectedGoalIsCurrent && <div className="records-pending-buttons">{item.status === 'active' ? <><button className="secondary-action" type="button" onClick={() => void onSetKnowledgeStatus(item.id, 'resolved')}>纠正为已掌握</button><button className="secondary-action" type="button" onClick={() => void onSetKnowledgeStatus(item.id, 'dormant')}>排除后续关注</button></> : <button className="secondary-action" type="button" onClick={() => void onSetKnowledgeStatus(item.id, 'active')}>恢复关注</button>}</div>}</article>)}</section>}
+
+      {tab === 'versions' && <section className="records-reference-card version-records">{versions.length === 0 ? <div className="records-empty"><FileCheck2 size={20} /><strong>暂无计划变更</strong><span>生成或确认计划调整后会在这里保留变更记录。</span></div> : versions.map((version) => <article key={version.version}><span>v{version.version}</span><div><h3>{readableVersionTitle(version.changeSummary, version.version)}</h3><p>{new Date(version.createdAt).toLocaleString('zh-CN')}</p>{version.snapshot?.shortPlan?.length ? <small>涉及：{version.snapshot.shortPlan.map((item) => `第 ${item.itemIndex} 单元`).join('、')}</small> : null}</div></article>)}</section>}
 
       <section className="records-actions">
         {selectedGoalIsCurrent && !review && hasAiConfiguration && <button className="secondary-action records-review-action" type="button" disabled={generating} onClick={() => { setGenerating(true); void onGenerate().finally(() => setGenerating(false)); }}><Sparkles size={16} />{generating ? '正在生成复盘…' : '按需生成复盘'}</button>}
