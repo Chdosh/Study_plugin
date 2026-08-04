@@ -157,14 +157,26 @@ async function createJsonCompletion<TSchema extends z.ZodTypeAny>(
   request: AiJsonRequest<TSchema>,
   messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[]
 ): Promise<string> {
-  const response = await client.chat.completions.create({
+  const complete = (jsonMode: boolean) => client.chat.completions.create({
     model: request.model,
     messages,
-    temperature: request.temperature ?? 0.2
+    temperature: request.temperature ?? 0.2,
+    ...(jsonMode ? { response_format: { type: 'json_object' as const } } : {})
   }, {
     timeout: request.timeoutMs ?? DEFAULT_AI_REQUEST_TIMEOUT_MS,
     maxRetries: 0
   });
+
+  let response: OpenAI.Chat.Completions.ChatCompletion;
+  try {
+    response = await complete(true);
+  } catch (error) {
+    if (isUnsupportedJsonFormatError(error)) {
+      response = await complete(false);
+    } else {
+      throw error;
+    }
+  }
 
   const message = response.choices[0]?.message as
     | (OpenAI.Chat.Completions.ChatCompletionMessage & {
@@ -179,6 +191,13 @@ async function createJsonCompletion<TSchema extends z.ZodTypeAny>(
     throw new Error('AI 返回了空内容。');
   }
   return content;
+}
+
+function isUnsupportedJsonFormatError(error: unknown): boolean {
+  const candidate = error as { status?: unknown; statusCode?: unknown; message?: unknown };
+  const status = candidate.status ?? candidate.statusCode;
+  return status === 400 && typeof candidate.message === 'string'
+    && /json|response_format|format/i.test(candidate.message);
 }
 
 function firstNonEmptyText(...values: unknown[]): string | null {

@@ -118,6 +118,30 @@ describe('AiClient', () => {
     expect(openAiMocks.create).toHaveBeenCalledTimes(2);
   });
 
+  it('requests JSON output mode and falls back to plain mode when the provider rejects it', async () => {
+    const unsupported = new Error('response_format is not supported');
+    Object.assign(unsupported, { status: 400 });
+    openAiMocks.create
+      .mockRejectedValueOnce(unsupported)
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: JSON.stringify({ result: 'passed', evidence: ['ok'] }) } }]
+      });
+
+    const output = await new AiClient().generateJson({
+      apiKey: 'test-key',
+      baseUrl: 'http://127.0.0.1/v1',
+      model: 'test-model',
+      system: 'test-agent',
+      user: 'return evaluation json',
+      schema: testSchema
+    });
+
+    expect(output).toEqual({ result: 'passed', evidence: ['ok'] });
+    expect(openAiMocks.create).toHaveBeenCalledTimes(2);
+    expect(openAiMocks.create.mock.calls[0][0].response_format).toEqual({ type: 'json_object' });
+    expect(openAiMocks.create.mock.calls[1][0].response_format).toBeUndefined();
+  });
+
   it('reconstructs a usable object from the fallback schema when repair also fails', async () => {
     openAiMocks.create
       .mockResolvedValueOnce({
