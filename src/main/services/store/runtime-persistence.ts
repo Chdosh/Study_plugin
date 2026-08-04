@@ -390,23 +390,6 @@ export class RuntimePersistence {
     return this.getSnapshot();
   }
 
-  async archiveGuide(guideId: string): Promise<void> {
-    await this.db.transaction(async (tx) => {
-      const guide = (await tx.select().from(learningGuides)
-        .where(eq(learningGuides.id, guideId)).limit(1))[0];
-      if (!guide) throw new Error(`Learning guide not found: ${guideId}`);
-      if (guide.status !== 'archived') {
-        await tx.update(learningGuides).set({ status: 'archived' })
-          .where(eq(learningGuides.id, guideId));
-        if (guide.nearTermPlanItemId) {
-          await tx.update(nearTermPlanItems).set({ status: 'skipped' })
-            .where(eq(nearTermPlanItems.id, guide.nearTermPlanItemId));
-        }
-      }
-      await this.currentLearningContext.clearIfCurrentGuideInTransaction(tx, guideId);
-    });
-  }
-
   async closeTaskInTransaction(
     tx: DatabaseTransaction,
     taskId: string,

@@ -191,7 +191,6 @@ export class PlanningModule {
       tasks: item.tasks,
       expectedOutput: item.expectedOutput,
       successCriteria: item.successCriteria,
-      locked: false,
       createdAt: ''
     }));
     const targetPlanItem = draftPlanItems.find((item) => item.itemIndex === 1);

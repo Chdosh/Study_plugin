@@ -15,9 +15,7 @@ export function getRoadmapStagePresentation(
     pending: { className: 'pending', label: '未开始' },
     active: { className: 'active', label: '进行中' },
     ready_for_review: { className: 'review', label: '待确认' },
-    completed: { className: 'done', label: '已完成' },
-    blocked: { className: 'blocked', label: '需要处理' },
-    adjusted: { className: 'adjusted', label: '已调整' }
+    completed: { className: 'done', label: '已完成' }
   };
   const presentation = byStatus[stage.status];
   return {

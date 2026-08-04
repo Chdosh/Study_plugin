@@ -93,7 +93,6 @@ export function mapNearTermPlanItem(row: typeof nearTermPlanItems.$inferSelect):
     tasks: parseStringArray(row.tasksJson),
     expectedOutput: row.expectedOutput,
     successCriteria: row.successCriteria,
-    locked: false,
     createdAt: row.createdAt
   };
 }

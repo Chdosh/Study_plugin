@@ -403,13 +403,7 @@ export class AppService {
 
   async selectCurrentGuide(guideId: Id): Promise<RuntimeAuditResult> {
     this.startupRuntimeAudit = null;
-    await this.modules.execution.selectGuide(guideId);
-    return this.runRuntimeAudit();
-  }
-
-  async resolveLearningUnit(guideId: Id, decision: 'restore' | 'skip'): Promise<RuntimeAuditResult> {
-    this.startupRuntimeAudit = null;
-    await this.modules.execution.resolveLearningUnit(guideId, decision);
+    await this.store.selectCurrentGuide(guideId);
     return this.runRuntimeAudit();
   }
 

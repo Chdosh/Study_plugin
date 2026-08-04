@@ -44,7 +44,6 @@ export const ipcChannels = {
   learnerContextDeleteFact: 'learnerContext:deleteFact',
   systemAuditRuntime: 'system:auditRuntime',
   systemSelectCurrentGuide: 'system:selectCurrentGuide',
-  systemResolveLearningUnit: 'system:resolveLearningUnit',
   dataExportGoal: 'data:exportGoal',
   dataListGoals: 'data:listGoals',
   dataGetPlanVersions: 'data:getPlanVersions',

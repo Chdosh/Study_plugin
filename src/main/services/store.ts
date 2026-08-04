@@ -244,12 +244,6 @@ export class StudyStore extends KnowledgeStore {
     return this.currentLearningContext.selectCurrentGuide(guideId);
   }
 
-  resolveAmbiguousLearningUnit(guideId: string, decision: 'restore' | 'skip'): Promise<void> {
-    return decision === 'restore'
-      ? this.currentLearningContext.selectCurrentGuide(guideId)
-      : this.runtime.archiveGuide(guideId);
-  }
-
   async getTokenCostStats(opts: { goalId?: string; operation?: string; fromDate?: string; toDate?: string }): Promise<{
     totalInputTokens: number;
     totalOutputTokens: number;

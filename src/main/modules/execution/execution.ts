@@ -14,7 +14,7 @@ export class LearningExecutionModule {
     return this.store.getLearningRuntimeSnapshot();
   }
 
-  async confirmGuide(guideId: Id): Promise<DailyGuide> {
+  async   confirmGuide(guideId: Id): Promise<DailyGuide> {
     const existing = await this.store.getDailyGuideById(guideId);
     if (existing?.status === 'confirmed') {
       return existing;
@@ -22,16 +22,8 @@ export class LearningExecutionModule {
     return this.store.confirmLearningGuide(guideId);
   }
 
-  selectGuide(guideId: Id): Promise<void> {
-    return this.store.selectCurrentGuide(guideId);
-  }
-
   restoreArchivedGuide(guideId: Id): Promise<LearningRuntimeSnapshot> {
     return this.store.restoreArchivedGuide(guideId);
-  }
-
-  resolveLearningUnit(guideId: Id, decision: 'restore' | 'skip'): Promise<void> {
-    return this.store.resolveAmbiguousLearningUnit(guideId, decision);
   }
 
   startSession(taskId: Id): Promise<StudySession> {

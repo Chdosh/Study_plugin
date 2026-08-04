@@ -115,7 +115,7 @@ export interface GoalIntakeState {
   pendingInteraction?: PendingAgentInteraction | null;
 }
 
-export type RoadmapStageStatus = 'pending' | 'active' | 'ready_for_review' | 'completed' | 'blocked' | 'adjusted';
+export type RoadmapStageStatus = 'pending' | 'active' | 'ready_for_review' | 'completed';
 
 export interface RoadmapStage {
   id: Id;
@@ -159,7 +159,6 @@ export interface NearTermPlanItem {
   tasks: string[];
   expectedOutput: string;
   successCriteria: string;
-  locked: boolean;
   createdAt: string;
 }
 
@@ -681,7 +680,6 @@ export interface StudyAppApi {
   system: {
     auditRuntime: () => Promise<RuntimeAuditResult>;
     selectCurrentGuide: (guideId: Id) => Promise<RuntimeAuditResult>;
-    resolveLearningUnit: (guideId: Id, decision: 'restore' | 'skip') => Promise<RuntimeAuditResult>;
   };
   data: {
     listGoals: () => Promise<LearningGoal[]>;

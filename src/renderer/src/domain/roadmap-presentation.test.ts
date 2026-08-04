@@ -23,8 +23,6 @@ describe('getRoadmapStagePresentation', () => {
     ['completed', 'done', '已完成'],
     ['active', 'active', '进行中'],
     ['ready_for_review', 'review', '待确认'],
-    ['blocked', 'blocked', '需要处理'],
-    ['adjusted', 'adjusted', '已调整'],
     ['pending', 'pending', '未开始']
   ] as const)('maps %s from the formal roadmap status', (status, className, label) => {
     expect(getRoadmapStagePresentation(stage('stage-1', status), 'stage-2')).toMatchObject({ className, label });

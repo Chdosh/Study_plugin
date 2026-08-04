@@ -40,7 +40,7 @@ export const roadmapStages = sqliteTable('roadmap_stages', {
   successCriteria: text('success_criteria').notNull(),
   targetDate: text('target_date'),
   status: text('status', {
-    enum: ['pending', 'active', 'ready_for_review', 'completed', 'blocked', 'adjusted']
+    enum: ['pending', 'active', 'ready_for_review', 'completed']
   }).notNull().default('pending'),
   position: integer('position').notNull(),
   createdAt: text('created_at').notNull(),

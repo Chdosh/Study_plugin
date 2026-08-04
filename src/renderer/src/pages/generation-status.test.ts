@@ -485,7 +485,7 @@ describe('AI generation status presentation', () => {
           {
             id: 'item-1', goalId: 'goal-1', roadmapStageId: 'stage-2', itemIndex: 2, date: null,
             sessionStatus: 'active', title: '类型基础实践', focus: '用类型约束实现功能',
-            tasks: [], expectedOutput: '可运行函数', successCriteria: '类型检查通过', locked: false, createdAt: ''
+            tasks: [], expectedOutput: '可运行函数', successCriteria: '类型检查通过', createdAt: ''
           }
         ],
         guide: {

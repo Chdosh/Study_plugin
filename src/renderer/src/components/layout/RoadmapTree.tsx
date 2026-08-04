@@ -2,8 +2,7 @@ import { useState } from 'react';
 import {
   CheckCircle2,
   Circle,
-  CircleDot,
-  Lock
+  CircleDot
 } from 'lucide-react';
 import type { NearTermPlanItem, RoadmapStage } from '../../../../shared/types';
 
@@ -27,7 +26,7 @@ export function RoadmapTree({
     });
   }
 
-  function getPlanStatus(items: NearTermPlanItem[]): 'done' | 'active' | 'pending' | 'locked' {
+  function getPlanStatus(items: NearTermPlanItem[]): 'done' | 'active' | 'pending' {
     if (items.length === 0) return 'pending';
     if (items.every((item) => item.sessionStatus === 'completed')) return 'done';
     if (items.some((item) => item.sessionStatus === 'active')) return 'active';
@@ -69,7 +68,6 @@ export function RoadmapTree({
                     >
                       <span className={`dot ${item.sessionStatus === 'completed' ? 'done' : item.sessionStatus === 'active' ? 'active' : 'pending'}`} />
                       <span className="label">{item.title}</span>
-                      {item.locked && <Lock size={10} style={{ color: 'var(--color-text-subtle)', opacity: 0.5 }} />}
                     </div>
                   ))}
                 </div>

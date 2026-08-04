@@ -134,9 +134,7 @@ const api: StudyAppApi = {
   },
   system: {
     auditRuntime: () => ipcRenderer.invoke(ipcChannels.systemAuditRuntime),
-    selectCurrentGuide: (guideId: Id) => ipcRenderer.invoke(ipcChannels.systemSelectCurrentGuide, { guideId }),
-    resolveLearningUnit: (guideId: Id, decision: 'restore' | 'skip') =>
-      ipcRenderer.invoke(ipcChannels.systemResolveLearningUnit, { guideId, decision })
+    selectCurrentGuide: (guideId: Id) => ipcRenderer.invoke(ipcChannels.systemSelectCurrentGuide, { guideId })
   },
   data: {
     listGoals: () => ipcRenderer.invoke(ipcChannels.dataListGoals),
