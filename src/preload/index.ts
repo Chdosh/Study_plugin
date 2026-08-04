@@ -76,8 +76,8 @@ const api: StudyAppApi = {
       }),
     cancelLearningTurn: (pendingInteractionId: Id): Promise<boolean> =>
       ipcRenderer.invoke(ipcChannels.learningCancelTurn, { pendingInteractionId }),
-    completeCurrentAction: (actionId: Id): Promise<LearningRuntimeSnapshot> =>
-      ipcRenderer.invoke(ipcChannels.learningCompleteCurrentAction, { actionId }),
+    completeCurrentAction: (actionId: Id, note?: string): Promise<LearningRuntimeSnapshot> =>
+      ipcRenderer.invoke(ipcChannels.learningCompleteCurrentAction, { actionId, note }),
     skipCurrentAction: (actionId: Id): Promise<LearningRuntimeSnapshot> =>
       ipcRenderer.invoke(ipcChannels.learningSkipCurrentAction, { actionId }),
     askQuestion: (question: string, promptProfileId?: Id): Promise<QuestionAnswerResult> =>

@@ -54,7 +54,10 @@ describe('LearningExecutionModule', () => {
     const execution = new LearningExecutionModule(store);
 
     await expect(execution.completeAction('action-1')).resolves.toBe(after);
-    expect(store.completeCurrentAction).toHaveBeenCalledWith('action-1');
+    expect(store.completeCurrentAction).toHaveBeenCalledWith('action-1', undefined);
+
+    await expect(execution.completeAction('action-1', '完成了一个可运行函数')).resolves.toBe(after);
+    expect(store.completeCurrentAction).toHaveBeenCalledWith('action-1', '完成了一个可运行函数');
   });
 
   it('returns the active Session from the resolved learning context', async () => {

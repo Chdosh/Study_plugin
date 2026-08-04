@@ -638,7 +638,7 @@ export interface StudyAppApi {
       expectedContextVersion: number
     ) => Promise<TeachStepResult>;
     cancelLearningTurn: (pendingInteractionId: Id) => Promise<boolean>;
-    completeCurrentAction: (actionId: Id) => Promise<LearningRuntimeSnapshot>;
+    completeCurrentAction: (actionId: Id, note?: string) => Promise<LearningRuntimeSnapshot>;
     skipCurrentAction: (actionId: Id) => Promise<LearningRuntimeSnapshot>;
     askQuestion: (question: string, promptProfileId?: Id) => Promise<QuestionAnswerResult>;
     askTemporaryQuestion: (

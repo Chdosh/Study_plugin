@@ -51,8 +51,8 @@ export class LearningExecutionModule {
     return context.session;
   }
 
-  async completeAction(actionId: Id): Promise<LearningRuntimeSnapshot> {
-    return this.advanceAction(actionId, 'done');
+  async completeAction(actionId: Id, note?: string): Promise<LearningRuntimeSnapshot> {
+    return this.advanceAction(actionId, 'done', note);
   }
 
   async skipAction(actionId: Id): Promise<LearningRuntimeSnapshot> {
@@ -61,7 +61,8 @@ export class LearningExecutionModule {
 
   private async advanceAction(
     actionId: Id,
-    mode: 'done' | 'skipped'
+    mode: 'done' | 'skipped',
+    note?: string
   ): Promise<LearningRuntimeSnapshot> {
     const flow = deriveLearningFlow(await this.store.getLearningRuntimeSnapshot());
     const canAdvance = mode === 'done' ? flow.canCompleteAction : flow.canSkipAction;
@@ -69,7 +70,7 @@ export class LearningExecutionModule {
       throw new Error(`当前步骤不可${mode === 'done' ? '完成' : '跳过'}，请刷新学习状态后重试。`);
     }
     return mode === 'done'
-      ? this.store.completeCurrentAction(actionId)
+      ? this.store.completeCurrentAction(actionId, note)
       : this.store.skipCurrentAction(actionId);
   }
 

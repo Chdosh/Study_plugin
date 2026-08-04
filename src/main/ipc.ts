@@ -48,7 +48,7 @@ export function registerIpcHandlers(appService: AppService): void {
     appService.cancelLearningTurn(payload.pendingInteractionId)
   );
   ipcMain.handle(ipcChannels.learningCompleteCurrentAction, (_event, payload) =>
-    appService.completeCurrentAction(payload.actionId)
+    appService.completeCurrentAction(payload.actionId, payload?.note)
   );
   ipcMain.handle(ipcChannels.learningSkipCurrentAction, (_event, payload) =>
     appService.skipCurrentAction(payload.actionId)

@@ -484,8 +484,8 @@ export default function App(): JSX.Element {
                     await window.studyApp.learning.cancelLearningTurn(pendingInteractionId);
                     setTeaching(null);
                   })}
-                onCompleteCurrentAction={(actionId) => runLearningAction('完成当前步骤', async () => {
-                  const nextState = await window.studyApp.learning.completeCurrentAction(actionId);
+                onCompleteCurrentAction={(actionId, note) => runLearningAction('完成当前步骤', async () => {
+                  const nextState = await window.studyApp.learning.completeCurrentAction(actionId, note);
                   setLearningState(nextState);
                   await refresh();
                   setTeaching(null);

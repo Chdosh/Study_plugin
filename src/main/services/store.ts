@@ -464,8 +464,8 @@ export class StudyStore extends KnowledgeStore {
     return this.runtime.getSnapshot();
   }
 
-  async completeCurrentAction(actionId: string): Promise<LearningRuntimeSnapshot> {
-    return this.runtime.completeCurrentAction(actionId);
+  async completeCurrentAction(actionId: string, note?: string): Promise<LearningRuntimeSnapshot> {
+    return this.runtime.completeCurrentAction(actionId, note);
   }
 
   async skipCurrentAction(actionId: string): Promise<LearningRuntimeSnapshot> {

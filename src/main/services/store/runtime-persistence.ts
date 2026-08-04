@@ -202,8 +202,8 @@ export class RuntimePersistence {
     return this.getSnapshot();
   }
 
-  async completeCurrentAction(actionId: string): Promise<LearningRuntimeSnapshot> {
-    return this.finishCurrentAction(actionId, 'done');
+  async completeCurrentAction(actionId: string, note?: string): Promise<LearningRuntimeSnapshot> {
+    return this.finishCurrentAction(actionId, 'done', note);
   }
 
   async skipCurrentAction(actionId: string): Promise<LearningRuntimeSnapshot> {
@@ -512,7 +512,8 @@ export class RuntimePersistence {
 
   private async finishCurrentAction(
     actionId: string,
-    status: 'done' | 'skipped'
+    status: 'done' | 'skipped',
+    note?: string
   ): Promise<LearningRuntimeSnapshot> {
     const resolved = await this.currentLearningContext.resolve();
     if (!resolved.taskId) throw new Error('当前没有可处理的 Action。');
@@ -529,6 +530,7 @@ export class RuntimePersistence {
       }
       await tx.update(learningActions).set({
         status,
+        progressNote: status === 'done' && note?.trim() ? note.trim() : null,
         completedAt: now
       }).where(and(
         eq(learningActions.id, actionId),

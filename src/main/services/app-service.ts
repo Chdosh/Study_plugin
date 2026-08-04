@@ -508,8 +508,8 @@ export class AppService {
     return this.modules.learningTurn.cancel(pendingInteractionId);
   }
 
-  completeCurrentAction(actionId: Id) {
-    return this.modules.execution.completeAction(actionId);
+  completeCurrentAction(actionId: Id, note?: string) {
+    return this.modules.execution.completeAction(actionId, note);
   }
 
   skipCurrentAction(actionId: Id) {
