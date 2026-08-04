@@ -139,22 +139,8 @@ export function StudyPage({
   const [submissionContent, setSubmissionContent] = useState('');
   const [turnAnswer, setTurnAnswer] = useState('');
   const [actionNote, setActionNote] = useState('');
-  const [showSubmission, setShowSubmission] = useState(false);
   const submissionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const remainingActionCount = taskActions.filter(
-    (action) => action.status !== 'done' && action.status !== 'skipped'
-  ).length;
-
-  useEffect(() => {
-    if (showSubmission && !submissionContent && currentTask) {
-      const summary = composeActionSummary(currentTask);
-      if (summary) {
-        setSubmissionContent(`${summary}\n\n`);
-      }
-    }
-  }, [showSubmission, currentTask, submissionContent]);
 
   const showFeedback = useCallback((message: string, kind: FeedbackKind = 'success') => {
     if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
@@ -372,13 +358,13 @@ export function StudyPage({
             </div>
           ) : (
             <div className="bar-right-group">
-              {commandPolicy.primaryCommand === 'end_session' && !showSubmission ? (
+              {commandPolicy.primaryCommand === 'end_session' ? (
                 <button className="primary-action" type="button" onClick={() => void onEndSession()}>
                   <Square size={16} />
                   结束上一步并继续
                 </button>
               ) : null}
-              {isNotStarted && currentTaskId && commandPolicy.canStart && !showSubmission ? (
+              {isNotStarted && currentTaskId && commandPolicy.canStart ? (
                 <button className="primary-action" type="button" disabled={learningPending} onClick={() => {
                   void onStartSession(currentTaskId!).then(() => showFeedback('已开始学习'));
                 }}>
@@ -387,19 +373,19 @@ export function StudyPage({
                 </button>
               ) : null}
               {isNotStarted && currentTaskId && !commandPolicy.canStart
-                && commandPolicy.primaryCommand !== 'end_session' && !showSubmission && (
+                && commandPolicy.primaryCommand !== 'end_session' && (
                 <button className="primary-action" type="button" disabled title={commandPolicy.reasons.canStart ?? ''}>
                   <Play size={16} />
                   开始学习
                 </button>
               )}
-              {isActive && commandPolicy.canCompleteAction && !allActionsDone && !waitingLearningTurn && !teaching && !showSubmission ? (
+              {isActive && commandPolicy.canCompleteAction && !allActionsDone && !waitingLearningTurn && !teaching ? (
                 <button className="primary-action" type="button" disabled={learningPending} title={learningPending ? '正在处理，请稍候' : undefined} onClick={() => void onTeachStep()}>
                   <Sparkles size={16} />
                   请导师讲解这一步
                 </button>
               ) : null}
-              {isActive && commandPolicy.canCompleteAction && !allActionsDone && !waitingLearningTurn && !showSubmission ? (
+              {isActive && commandPolicy.canCompleteAction && !allActionsDone && !waitingLearningTurn ? (
                 <>
                   <input
                     className="action-note-input"
@@ -420,7 +406,7 @@ export function StudyPage({
                   </button>
                 </>
               ) : null}
-              {isActive && commandPolicy.canSkipAction && !allActionsDone && !waitingLearningTurn && !showSubmission ? (
+              {isActive && commandPolicy.canSkipAction && !allActionsDone && !waitingLearningTurn ? (
                 <button className="secondary-action" type="button" disabled={learningPending} onClick={() => {
                   if (currentAction) {
                     void onSkipCurrentAction(currentAction.id).then(() => showFeedback('已跳过当前步骤'));
@@ -430,13 +416,7 @@ export function StudyPage({
                   跳过步骤
                 </button>
               ) : null}
-              {commandPolicy.canSubmit && commandPolicy.primaryCommand !== 'submit' && !showSubmission && !waitingLearningTurn && !allActionsDone ? (
-                <button className="secondary-action" type="button" onClick={() => setShowSubmission(true)}>
-                  <CheckCircle2 size={16} />
-                  提交结果
-                </button>
-              ) : null}
-              {isPaused && commandPolicy.canResume && !showSubmission ? (
+              {isPaused && commandPolicy.canResume ? (
                 <button className="primary-action" type="button" onClick={() => {
                   void onResumeSession().then(() => showFeedback('已恢复学习'));
                 }}>
@@ -444,30 +424,18 @@ export function StudyPage({
                   继续学习
                 </button>
               ) : null}
-              {commandPolicy.canSubmit && (
-                commandPolicy.primaryCommand === 'submit' || showSubmission
-              ) ? (
+              {commandPolicy.canSubmit && commandPolicy.primaryCommand === 'submit' ? (
                 <div className="study-submit-inline">
-                  {showSubmission && commandPolicy.primaryCommand !== 'submit' && remainingActionCount > 0 && (
-                    <span className="micro-hint" style={{ margin: 0 }}>
-                      还有 {remainingActionCount} 步未完成，提交将跳过这些步骤。
-                    </span>
-                  )}
-                  <textarea ref={submissionInputRef} value={submissionContent} onChange={(event) => setSubmissionContent(event.target.value)} placeholder={currentTask?.deliverable ? `提交结果：${currentTask.deliverable}` : '说明你完成了什么，并粘贴必要的运行结果或验证证据'} aria-label="学习结果" />
-                  <button className="primary-action" type="button" disabled={!submissionContent.trim()} title={!submissionContent.trim() ? '请先填写学习结果或验证证据' : undefined} onClick={() => {
+                  {currentTask && renderActionSummary(currentTask)}
+                  <textarea ref={submissionInputRef} value={submissionContent} onChange={(event) => setSubmissionContent(event.target.value)} placeholder={currentTask?.deliverable ? `补充最终总结与验证证据：${currentTask.deliverable}` : '补充最终总结与验证证据（前面步骤的成果已自动汇总）'} aria-label="学习结果" />
+                  <button className="primary-action" type="button" disabled={!submissionContent.trim()} title={!submissionContent.trim() ? '请补充最终总结与验证证据' : undefined} onClick={() => {
                     const content = submissionContent.trim();
                     if (!content) return;
                     void onSubmitResult(content).then(() => {
                       setSubmissionContent('');
-                      setShowSubmission(false);
                       showFeedback('学习结果已提交');
                     });
                   }}><CheckCircle2 size={16} />提交结果</button>
-                  {showSubmission && commandPolicy.primaryCommand !== 'submit' ? (
-                    <button className="secondary-action" type="button" onClick={() => setShowSubmission(false)}>
-                      返回当前步骤
-                    </button>
-                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -478,15 +446,31 @@ export function StudyPage({
   );
 }
 
-function composeActionSummary(task: { actions: Array<{ title: string; status: string; progressNote: string | null }> }): string {
-  const doneWithNotes = task.actions.filter(
-    (action) => action.status === 'done' && action.progressNote
+function renderActionSummary(task: { actions: Array<{ title: string; status: string; progressNote: string | null }> }): JSX.Element | null {
+  const entries = task.actions.map((action, index) => {
+    if (action.status === 'done') {
+      return (
+        <li key={action.title}>
+          <span>{index + 1}. {action.title}</span>
+          {action.progressNote ? <em>{action.progressNote}</em> : <em className="empty">（未记录产出）</em>}
+        </li>
+      );
+    }
+    if (action.status === 'skipped') {
+      return (
+        <li key={action.title} className="skipped">
+          <span>{index + 1}. {action.title}</span>
+          <em>已跳过</em>
+        </li>
+      );
+    }
+    return null;
+  }).filter(Boolean) as JSX.Element[];
+  if (entries.length === 0) return null;
+  return (
+    <div className="study-submit-summary">
+      <strong>步骤成果</strong>
+      <ul>{entries}</ul>
+    </div>
   );
-  if (doneWithNotes.length === 0) return '';
-  return [
-    '已完成步骤成果：',
-    ...doneWithNotes.map((action, index) => `${index + 1}. ${action.title}：${action.progressNote}`),
-    '',
-    '请补充最终总结与验证证据：'
-  ].join('\n');
 }

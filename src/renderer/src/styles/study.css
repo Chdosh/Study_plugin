@@ -162,7 +162,15 @@
 .bar-left { min-height: 32px; }
 .bar-right { min-width: 0; flex: 1; justify-content: flex-end; margin-left: auto; }
 .bar-right-group { width: 100%; justify-content: flex-end; min-width: 0; }
-.study-submit-inline { width: min(760px, 100%); display: flex; align-items: flex-end; gap: 12px; }
+.study-submit-inline { width: min(760px, 100%); display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.study-submit-summary { width: 100%; display: grid; gap: 6px; padding: 12px 14px; border: 1px solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-surface-subtle); }
+.study-submit-summary > strong { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+.study-submit-summary ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.study-submit-summary li { display: grid; gap: 2px; font-size: var(--font-size-sm); }
+.study-submit-summary li span { font-weight: var(--font-weight-medium); color: var(--color-text-primary); }
+.study-submit-summary li em { font-style: normal; color: var(--color-text-secondary); line-height: var(--line-height-normal); }
+.study-submit-summary li em.empty { color: var(--color-text-subtle); }
+.study-submit-summary li.skipped em { color: var(--color-warning); }
 .study-submit-inline textarea { flex: 1; min-height: 64px; max-height: 140px; resize: vertical; padding: var(--input-padding-y) var(--input-padding-x); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); background: var(--color-bg-surface); color: var(--color-text-primary); font: inherit; }
 .study-teacher-drawer-trigger { display: none; }
 
