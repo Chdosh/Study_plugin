@@ -54,6 +54,9 @@ export class LearningEvaluationModule {
       const [evaluationContext, profile, runtimeSettings, knowledge] = await Promise.all([
         this.context.build('evaluate_submission', {
           submission: submission.content,
+          stepResults: guideTask.actions
+            .filter((action) => action.status === 'done' && action.progressNote?.trim())
+            .map((action) => ({ title: action.title, result: action.progressNote! })),
           evaluationGoal: goal,
           evaluationGuide: guide,
           evaluationTask: guideTask,

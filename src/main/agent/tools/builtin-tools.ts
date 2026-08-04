@@ -364,7 +364,8 @@ export function createBuiltinToolRegistry(
     inputDescription: [
       '只直接返回下面两种业务对象之一，不要添加 conversation、submission 或其他包装层：',
       '评价对话回答时返回 {"mode":"conversation_response","feedback":"即时反馈","correctParts":[],"misconceptions":[],"nextPrompt":"返回主线的下一步","requiresSubmission":false}；',
-      '评价正式提交时返回 {"result":"passed|partial|failed|unclear","evidence":[],"correctParts":[],"misconceptions":[],"missingRequirements":[],"feedback":"反馈","recommendedAction":"passed 时只能为 advance 或 complete_task；其他结果不能推荐完成"}。'
+      '评价正式提交时返回 {"result":"passed|partial|failed|unclear","evidence":[],"correctParts":[],"misconceptions":[],"missingRequirements":[],"feedback":"反馈","recommendedAction":"passed 时只能为 advance 或 complete_task；其他结果不能推荐完成"}。',
+      '评价正式提交时，可信上下文中的 stepResults 是当前 Task 各已完成步骤的成果记录（不含本次提交），评价必须综合这些步骤成果与当前提交，不能只看当前提交。'
     ].join(''),
     effect: 'content',
     continuation: 'complete',

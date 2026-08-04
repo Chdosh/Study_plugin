@@ -71,7 +71,7 @@ const OPERATION_EXTRA_FIELD_WHITELIST: Record<LearningAiOperation, string[]> = {
   teach_step: ['learningStyle'],
   answer_step_question: ['question'],
   answer_temporary_question: ['question', 'conversationHistory', 'linkedGoalId'],
-  evaluate_submission: ['submission'],
+  evaluate_submission: ['submission', 'stepResults'],
   decide_next_step: ['remainingMinutes'],
   summarize_step: [],
   generate_review: ['guideTasks', 'sessions'],

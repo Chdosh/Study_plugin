@@ -92,6 +92,37 @@ describe('ContextBuilder arbitration', () => {
     expect(ctx.context.learnerFacts).toEqual([{ key: 'outputStyle', value: '只给命令', scope: 'task' }]);
   });
 
+  it('evaluate_submission 上下文包含当前 Task 各已完成步骤的成果', async () => {
+    const snapshot = createTestSnapshot({ dailyGuideTask: makeTask() });
+    const store = createMockStore(snapshot);
+
+    const ctx = await new ContextBuilder(store as never).build('evaluate_submission', {
+      submission: '最终总结与验证证据',
+      stepResults: [
+        { title: '了解 RAG 检索流程', result: '口述了检索、重排、生成的完整链路' },
+        { title: '向量库选型', result: '对比了 FAISS 与 pgvector' }
+      ]
+    });
+
+    expect(ctx.context.stepResults).toEqual([
+      { title: '了解 RAG 检索流程', result: '口述了检索、重排、生成的完整链路' },
+      { title: '向量库选型', result: '对比了 FAISS 与 pgvector' }
+    ]);
+    expect(ctx.context.submission).toBe('最终总结与验证证据');
+  });
+
+  it('evaluate_submission 没有步骤成果时不注入该字段', async () => {
+    const snapshot = createTestSnapshot({ dailyGuideTask: makeTask() });
+    const store = createMockStore(snapshot);
+
+    const ctx = await new ContextBuilder(store as never).build('evaluate_submission', {
+      submission: '唯一一次提交'
+    });
+
+    expect(ctx.context.stepResults).toBeUndefined();
+    expect(ctx.context.submission).toBe('唯一一次提交');
+  });
+
   it('injects user corrections and recurring weaknesses into the next Learning Turn', async () => {
     const snapshot = createTestSnapshot({ dailyGuideTask: makeTask() });
     const store = createMockStore(snapshot);
