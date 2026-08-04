@@ -50,10 +50,12 @@ React Renderer
       ▼
 Electron IPC / AppService
       │
-      ├─ Planning Module
-      ├─ Runtime Module
-      ├─ Context Module
-      └─ Branch Module
+      ├─ Planning       分层计划生成、滚动计划与复盘调整
+      ├─ Conversation   目标访谈、问题分支与临时学习
+      ├─ Learning Turn  统一 Agent Loop：教学 / 提问 / 小测 / 评价
+      ├─ Review         复盘证据与计划建议
+      ├─ Evaluation     提交成果结构化评价与纠正
+      └─ Execution      Task / Action / Session 状态机
       │
       ▼
 Store / Persistence / CurrentLearningContext
@@ -120,8 +122,16 @@ src/
 ├─ renderer/   React 页面、组件、交互策略与样式
 └─ shared/     跨进程共享类型、schema 与 IPC 契约
 drizzle/       数据库迁移
-docs/          当前项目规则与架构文档
+docs/          项目规则与架构文档
 ```
+
+## 文档
+
+- [`docs/README.md`](docs/README.md) — 文档索引
+- [`docs/DECISIONS.md`](docs/DECISIONS.md) — 产品与架构决策账本（D001–D072）
+- [`docs/rules/ARCHITECTURE_DATA_COMPATIBILITY.md`](docs/rules/ARCHITECTURE_DATA_COMPATIBILITY.md) — 架构边界、数据模型与兼容策略
+- [`docs/rules/ENGINEERING_CONSTRAINTS.md`](docs/rules/ENGINEERING_CONSTRAINTS.md) — 状态所有权、AI 边界、迁移与验证要求
+- [`docs/rules/PRODUCT_SEMANTICS.md`](docs/rules/PRODUCT_SEMANTICS.md) — 业务语义与 UI 约束
 
 ## 本地数据与隐私
 

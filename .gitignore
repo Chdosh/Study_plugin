@@ -36,5 +36,6 @@ test-results/
 output/
 docs/_legacy/
 docs/archive/
+docs/TODO-*.md
 *.corrupt
 .hallmark/
