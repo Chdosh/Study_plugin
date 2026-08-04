@@ -1,6 +1,6 @@
 .study-layout {
   width: 100%;
-  max-width: 1180px;
+  max-width: var(--page-content-max-width);
   margin: 0 auto;
   display: grid;
   gap: 24px;
@@ -139,6 +139,15 @@
 .study-action-list li.active > span { background: var(--color-primary); color: var(--color-text-inverse); }
 .study-action-list li.active strong { color: var(--color-text-primary); font-weight: var(--font-weight-semibold); }
 .study-action-list li.active small { color: var(--color-primary); }
+.study-action-list li.reviewing {
+  margin: 4px -8px;
+  padding-right: 8px;
+  padding-left: 8px;
+  border-bottom-color: transparent;
+  border-radius: var(--radius-md);
+  background: var(--color-success-light);
+}
+.study-action-list li.reviewing strong { color: var(--color-text-primary); font-weight: var(--font-weight-semibold); }
 
 .study-fixed-action-bar {
   position: sticky;

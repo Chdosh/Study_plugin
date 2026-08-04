@@ -1,49 +1,28 @@
 import { useState, useRef, useEffect } from 'react';
 import { SendHorizontal } from 'lucide-react';
-import type { KnowledgeItem, QuestionAnswerResult } from '../../../../shared/types';
-
-interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-}
+import type { KnowledgeItem, QuestionMessage } from '../../../../shared/types';
 
 function ChatTab({
   onAskQuestion,
-  questionAnswer,
+  messages,
+  pendingQuestion,
   isAsking
 }: {
   onAskQuestion: (question: string) => void;
-  questionAnswer?: QuestionAnswerResult | null;
+  messages: QuestionMessage[];
+  pendingQuestion?: string | null;
   isAsking?: boolean;
 }): JSX.Element {
   const [input, setInput] = useState('');
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isAsking]);
-
-  useEffect(() => {
-    if (questionAnswer && messages.length > 0) {
-      const lastMessage = messages[messages.length - 1];
-      if (lastMessage.role === 'user') {
-        setMessages((prev) => [
-          ...prev,
-          { id: `assistant-${Date.now()}`, role: 'assistant', content: questionAnswer.answer }
-        ]);
-      }
-    }
-  }, [questionAnswer]);
+  }, [messages, isAsking, pendingQuestion]);
 
   function send(): void {
     const value = input.trim();
     if (!value) return;
-    setMessages((prev) => [
-      ...prev,
-      { id: `user-${Date.now()}`, role: 'user', content: value }
-    ]);
     setInput('');
     onAskQuestion(value);
   }
@@ -86,6 +65,17 @@ function ChatTab({
             </div>
           </div>
         ))}
+        {pendingQuestion && (
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <div style={{
+              maxWidth: '85%', padding: '10px 14px', borderRadius: 12,
+              background: 'var(--color-primary)', color: 'white',
+              fontSize: 13, lineHeight: 1.65, borderBottomRightRadius: 3
+            }}>
+              {pendingQuestion}
+            </div>
+          </div>
+        )}
         {isAsking && (
           <div style={{ display: 'flex', gap: 8 }}>
             <div style={{
@@ -173,7 +163,8 @@ export function TeacherSidebar({
   onToggleCollapse,
   onAskQuestion,
   contextSummary,
-  questionAnswer,
+  messages,
+  pendingQuestion,
   isAsking
 }: {
   knowledgeItems: KnowledgeItem[];
@@ -181,7 +172,8 @@ export function TeacherSidebar({
   onToggleCollapse: () => void;
   onAskQuestion: (question: string) => void;
   contextSummary?: string;
-  questionAnswer?: QuestionAnswerResult | null;
+  messages: QuestionMessage[];
+  pendingQuestion?: string | null;
   isAsking?: boolean;
 }): JSX.Element {
   const [activeTab, setActiveTab] = useState<'chat' | 'context'>('chat');
@@ -209,7 +201,7 @@ export function TeacherSidebar({
       <div className="teacher-body">
         {contextSummary && <p className="teacher-context-line" title={contextSummary}>当前上下文：{contextSummary}</p>}
         {activeTab === 'chat' ? (
-          <ChatTab onAskQuestion={onAskQuestion} questionAnswer={questionAnswer} isAsking={isAsking} />
+          <ChatTab onAskQuestion={onAskQuestion} messages={messages} pendingQuestion={pendingQuestion} isAsking={isAsking} />
         ) : (
           <ContextTab knowledgeItems={knowledgeItems} />
         )}

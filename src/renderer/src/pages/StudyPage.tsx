@@ -23,6 +23,8 @@ import { StatePanel } from '../components/shared/StatePanel';
 import { getCurrentGuideTaskSelection } from '../domain/guide-selection';
 import { computeCommandPolicy } from '../domain/command-policy';
 import { deriveLearningTaskStatus } from '../domain/learning-status';
+import { resolveStudyView } from '../domain/study-view';
+import type { StudyViewTarget } from '../types/navigation';
 import { areAllActionsTerminal } from '../../../shared/learning-flow';
 
 type FeedbackKind = 'success' | 'error';
@@ -34,6 +36,8 @@ export function StudyPage({
   teaching,
   questionAnswer,
   learningPending,
+  viewTarget,
+  onReturnToCurrent,
   onStartSession,
   onPauseSession,
   onResumeSession,
@@ -55,6 +59,8 @@ export function StudyPage({
   teaching: TeachStepResult | null;
   questionAnswer: QuestionAnswerResult | null;
   learningPending: boolean;
+  viewTarget: StudyViewTarget;
+  onReturnToCurrent: () => void;
   onStartSession: (taskId: string) => Promise<void>;
   onPauseSession: () => Promise<void>;
   onResumeSession: () => Promise<void>;
@@ -76,6 +82,10 @@ export function StudyPage({
 }): JSX.Element {
   const guide = todayGuide?.guide ?? null;
   const currentSelection = guide ? getCurrentGuideTaskSelection(guide.tasks, activeSession, learningState) : null;
+  const resolvedView = guide
+    ? resolveStudyView(guide.tasks, activeSession, learningState, viewTarget)
+    : { mode: 'execution' as const, task: null, action: null };
+  const isReadOnly = resolvedView.mode === 'read_only';
   const currentTaskId = currentSelection?.task?.id ?? activeSession?.taskId ?? null;
 
   const currentTask = currentSelection?.task ?? null;
@@ -98,6 +108,12 @@ export function StudyPage({
     ? guide!.tasks.find((t) => t.status === 'planned' || t.status === 'active') ?? null
     : null;
   const currentAction = taskActions.find((a) => a.status !== 'done' && a.status !== 'skipped') ?? null;
+  const displayedTask = isReadOnly ? resolvedView.task : currentTask;
+  const displayedAction = isReadOnly ? resolvedView.action : currentAction;
+  const displayedTaskActions = displayedTask?.actions ?? [];
+  const displayedCompletedActionCount = displayedTaskActions.filter(
+    (action) => action.status === 'done' || action.status === 'skipped'
+  ).length;
   const learningStatus = currentTask ? deriveLearningTaskStatus(currentTask) : null;
   const taskObjective = currentTask?.objective ?? '';
   const completedActionCount = taskActions.filter((action) => action.status === 'done' || action.status === 'skipped').length;
@@ -122,6 +138,10 @@ export function StudyPage({
     : allActionsDone
       ? currentTask?.doneWhen.join('\n') ?? ''
     : currentAction?.checkpoint ?? '';
+  const displayedStepTitle = isReadOnly ? displayedAction?.title ?? '历史步骤' : stepTitle;
+  const displayedInstruction = isReadOnly ? displayedAction?.instruction ?? '' : stepInstruction;
+  const displayedCriteria = isReadOnly ? displayedAction?.checkpoint ?? '' : stepCriteria;
+  const displayedObjective = isReadOnly ? displayedTask?.objective ?? '' : taskObjective;
   const sessionStatusText = openSessionBelongsToPreviousTask
     ? activeSession?.status === 'paused' ? '上一步学习已暂停' : '上一步学习仍在进行'
     : isActive ? '专注中' : isPaused ? '已暂停' : isNotStarted ? '未开始' : '进行中';
@@ -158,10 +178,16 @@ export function StudyPage({
   }, []);
 
   useEffect(() => {
-    if (learningStatus?.phase === 'awaiting_result') {
+    if (!isReadOnly && learningStatus?.phase === 'awaiting_result') {
       submissionInputRef.current?.focus();
     }
-  }, [learningStatus?.phase]);
+  }, [isReadOnly, learningStatus?.phase]);
+
+  useEffect(() => {
+    if (viewTarget.kind === 'review' && !isReadOnly) {
+      onReturnToCurrent();
+    }
+  }, [isReadOnly, onReturnToCurrent, viewTarget.kind]);
 
   if (!guide) {
     return (
@@ -177,50 +203,59 @@ export function StudyPage({
     <section className="study-layout">
       <header className="study-page-header">
         <div className="study-header-actions">
-          <span className={`focus-state-pill ${taskDone || allTasksDone ? 'completed' : sessionStatusClass}`}>{taskDone || allTasksDone ? '已完成' : sessionStatusText}</span>
-          {activeSession?.status === 'active' ? (
-            <button className="session-pause-button" type="button" onClick={() => void onPauseSession()}><Pause size={14} />暂停</button>
-          ) : null}
-          {hasOpenSession ? (
-            <button className="secondary-action" type="button" onClick={() => void onEndSession()}>
-              <Square size={14} />结束本次学习
-            </button>
-          ) : null}
-          <button className="secondary-action" type="button" onClick={onOpenRoadmap}><ListTree size={15} />学习路径</button>
-          <button className="secondary-action study-teacher-drawer-trigger" type="button" onClick={onOpenTeacher}><MessageCircle size={15} />向导师提问</button>
+          <span className={`focus-state-pill ${isReadOnly || taskDone || allTasksDone ? 'completed' : sessionStatusClass}`}>
+            {isReadOnly ? displayedAction?.status === 'skipped' ? '已跳过' : '已完成' : taskDone || allTasksDone ? '已完成' : sessionStatusText}
+          </span>
+          {!isReadOnly && (
+            <>
+              {activeSession?.status === 'active' ? (
+                <button className="session-pause-button" type="button" onClick={() => void onPauseSession()}><Pause size={14} />暂停</button>
+              ) : null}
+              {hasOpenSession ? (
+                <button className="secondary-action" type="button" onClick={() => void onEndSession()}>
+                  <Square size={14} />结束本次学习
+                </button>
+              ) : null}
+              <button className="secondary-action" type="button" onClick={onOpenRoadmap}><ListTree size={15} />学习路径</button>
+              <button className="secondary-action study-teacher-drawer-trigger" type="button" onClick={onOpenTeacher}><MessageCircle size={15} />向导师提问</button>
+            </>
+          )}
         </div>
       </header>
 
       <div className="study-content-grid">
-        <section className="study-current-step-panel focus-execution-panel" aria-label="当前步骤">
+        <section className="study-current-step-panel focus-execution-panel" aria-label={isReadOnly ? '历史步骤' : '当前步骤'}>
           <div className="current-step-heading">
             <div className="current-step-title-block">
-              <span className="focus-eyebrow">当前步骤</span>
-              <h2>{stepTitle}</h2>
+              <span className="focus-eyebrow">{isReadOnly ? displayedAction?.status === 'skipped' ? '已跳过步骤' : '已完成步骤' : '当前步骤'}</span>
+              <h2>{displayedStepTitle}</h2>
             </div>
           </div>
           <div className="focus-work-list">
-            {taskObjective && (
+            {displayedObjective && (
               <article className="focus-work-item">
                 <strong>学习目标</strong>
-                <MessageContent content={taskObjective} />
+                <MessageContent content={displayedObjective} />
               </article>
             )}
             <article className="focus-work-item primary">
               <strong>操作说明</strong>
-              <MessageContent content={stepInstruction} />
+              <MessageContent content={displayedInstruction} />
             </article>
-            {stepCriteria && (
+            {displayedCriteria && (
               <article className="focus-work-item">
                 <strong>完成标准</strong>
-                <MessageContent content={stepCriteria} />
+                <MessageContent content={displayedCriteria} />
               </article>
             )}
-            {currentTask?.deliverable && (
-              <article className="focus-work-item"><strong>预期产出</strong><MessageContent content={currentTask.deliverable} /></article>
+            {displayedTask?.deliverable && (
+              <article className="focus-work-item"><strong>预期产出</strong><MessageContent content={displayedTask.deliverable} /></article>
+            )}
+            {isReadOnly && displayedAction?.progressNote && (
+              <article className="focus-work-item"><strong>已记录成果</strong><MessageContent content={displayedAction.progressNote} /></article>
             )}
           </div>
-          {currentTask?.quickHint && (
+          {!isReadOnly && currentTask?.quickHint && (
             <details className="focus-help-row">
               <summary>
                 <HelpCircle size={18} />
@@ -230,7 +265,7 @@ export function StudyPage({
               <MessageContent content={currentTask.quickHint} />
             </details>
           )}
-          {teaching && (
+          {!isReadOnly && teaching && (
             <div className="assistant-message assistant-message-system">
               {teaching.artifacts.map((artifact, index) => (
                 <div key={`${artifact.kind}-${index}`} className="learning-turn-artifact">
@@ -313,14 +348,14 @@ export function StudyPage({
           )}
         </section>
 
-        {taskActions.length > 0 && <aside className="study-side-column">
-          <section className="study-progress-card" aria-label={`任务步骤，已处理 ${completedActionCount} / ${taskActions.length}`}>
-            <header><strong>任务步骤</strong><span>{completedActionCount} / {taskActions.length} 已处理</span></header>
+        {displayedTaskActions.length > 0 && <aside className="study-side-column">
+          <section className="study-progress-card" aria-label={`任务步骤，已处理 ${displayedCompletedActionCount} / ${displayedTaskActions.length}`}>
+            <header><strong>任务步骤</strong><span>{displayedCompletedActionCount} / {displayedTaskActions.length} 已处理</span></header>
             <ol className="study-action-list">
-              {taskActions.map((action, index) => {
+              {displayedTaskActions.map((action, index) => {
                 const done = action.status === 'done' || action.status === 'skipped';
-                const active = action.id === currentAction?.id;
-                return <li key={action.id} className={done ? 'done' : active ? 'active' : ''}><span>{done ? <CheckCircle2 size={15} /> : active ? <Play size={13} /> : index + 1}</span><div><strong>{action.title}</strong><small>{action.status === 'skipped' ? '已跳过' : done ? '已完成' : active ? '正在学习' : '待进行'}</small></div></li>;
+                const active = action.id === displayedAction?.id;
+                return <li key={action.id} className={`${done ? 'done' : active ? 'active' : ''}${isReadOnly && active ? ' reviewing' : ''}`}><span>{done ? <CheckCircle2 size={15} /> : active ? <Play size={13} /> : index + 1}</span><div><strong>{action.title}</strong><small>{action.status === 'skipped' ? '已跳过' : done ? '已完成' : active ? '正在学习' : '待进行'}</small></div></li>;
               })}
             </ol>
           </section>
@@ -330,14 +365,20 @@ export function StudyPage({
 
       <div className="study-fixed-action-bar">
         <div className="bar-left">
-          {feedback && (
+          {!isReadOnly && feedback && (
             <span className={`inline-feedback ${feedback.kind === 'success' ? 'success' : 'error'}`}>
               {feedback.kind === 'success' ? '✓ ' : '✗ '}{feedback.message}
             </span>
           )}
         </div>
         <div className="bar-right">
-          {waitingLearningTurn ? (
+          {isReadOnly ? (
+            <div className="bar-right-group">
+              <button className="primary-action" type="button" onClick={onReturnToCurrent}>
+                回到当前进度
+              </button>
+            </div>
+          ) : waitingLearningTurn ? (
             <div className="bar-right-group">
               <span className="micro-hint" style={{ margin: 0 }}>
                 导师正在等待你的回答；回答或取消后再推进当前步骤。

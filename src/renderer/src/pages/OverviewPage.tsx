@@ -15,13 +15,12 @@ import {
 import type {
   AppSettings,
   DailyGuideAction,
+  DailyGuideTask,
   GoalIntakeState,
   GoalProgressStatus,
   KnowledgeItem,
   LearningGoal,
   LearningRuntimeSnapshot,
-  NearTermPlanItem,
-  NearTermPlanItemStatus,
   QuestionAnswerResult,
   RoadmapStage,
   StudySession,
@@ -35,6 +34,7 @@ import { GoalIntakeQuestionForm } from '../components/ai/GoalIntakeQuestionForm'
 import { MessageContent } from '../components/ai/MessageContent';
 import { deriveLearningTaskStatus } from '../domain/learning-status';
 import { getRoadmapStagePresentation } from '../domain/roadmap-presentation';
+import type { StudyViewTarget } from '../types/navigation';
 
 function GoalContextLine({
   goalTitle,
@@ -61,8 +61,18 @@ function GoalContextLine({
   );
 }
 
-function TaskActionList({ actions }: { actions: DailyGuideAction[] }): JSX.Element | null {
-  if (actions.length === 0) return null;
+function TaskActionList({
+  actions,
+  taskId,
+  currentTaskEntryLabel,
+  onOpen
+}: {
+  actions: DailyGuideAction[];
+  taskId: string;
+  currentTaskEntryLabel?: string | null;
+  onOpen: (target: StudyViewTarget) => void;
+}): JSX.Element | null {
+  if (actions.length === 0 && !currentTaskEntryLabel) return null;
   const currentActionId = actions.find((action) => action.status === 'planned')?.id ?? null;
   return (
     <ul className="overview-action-list" aria-label="当前任务行动">
@@ -70,16 +80,58 @@ function TaskActionList({ actions }: { actions: DailyGuideAction[] }): JSX.Eleme
         const isDone = action.status === 'done';
         const isSkipped = action.status === 'skipped';
         const isCurrent = action.id === currentActionId;
-        return (
-          <li className={isDone ? 'done' : isSkipped ? 'skipped' : isCurrent ? 'current' : 'planned'} key={action.id}>
+        const className = isDone ? 'done' : isSkipped ? 'skipped' : isCurrent ? 'current' : 'planned';
+        const content = (
+          <>
             <span className="overview-action-marker" aria-hidden="true">
               {isDone ? <CheckCircle2 size={18} /> : isSkipped ? <Minus size={18} /> : <Circle size={18} />}
             </span>
-            <span>{action.title}</span>
+            <span className="overview-action-title">{action.title}</span>
             <small>{isDone ? '已完成' : isSkipped ? '已跳过' : isCurrent ? '当前' : '待进行'}</small>
+          </>
+        );
+        return (
+          <li className={className} key={action.id}>
+            {isDone || isSkipped ? (
+              <button
+                className="overview-action-entry"
+                type="button"
+                onClick={() => onOpen({ kind: 'review', taskId, actionId: action.id })}
+                aria-label={`查看${isSkipped ? '已跳过' : '已完成'}步骤：${action.title}`}
+              >
+                {content}
+              </button>
+            ) : isCurrent ? (
+              <button
+                className="overview-action-entry"
+                type="button"
+                onClick={() => onOpen({ kind: 'current' })}
+                aria-label={`进入当前步骤：${action.title}`}
+              >
+                {content}
+              </button>
+            ) : (
+              <div className="overview-action-entry" aria-disabled="true">
+                {content}
+              </div>
+            )}
           </li>
         );
       })}
+      {!currentActionId && currentTaskEntryLabel && (
+        <li className="current">
+          <button
+            className="overview-action-entry"
+            type="button"
+            onClick={() => onOpen({ kind: 'current' })}
+            aria-label={currentTaskEntryLabel}
+          >
+            <span className="overview-action-marker" aria-hidden="true"><Circle size={18} /></span>
+            <span className="overview-action-title">{currentTaskEntryLabel}</span>
+            <small>当前</small>
+          </button>
+        </li>
+      )}
     </ul>
   );
 }
@@ -87,62 +139,66 @@ function TaskActionList({ actions }: { actions: DailyGuideAction[] }): JSX.Eleme
 function LearningPathSidebar({
   stages,
   currentStageId,
-  items,
+  currentTaskId,
+  tasks,
   direction,
-  goalProgressStatus,
-  showFull,
-  onToggleFull
+  goalProgressStatus
 }: {
   stages: RoadmapStage[];
   currentStageId: string | null;
-  items: NearTermPlanItem[];
+  currentTaskId: string | null;
+  tasks: DailyGuideTask[];
   direction?: string;
   goalProgressStatus?: GoalProgressStatus;
-  showFull: boolean;
-  onToggleFull: () => void;
 }): JSX.Element | null {
   if (stages.length === 0) return null;
-  const activeIndex = Math.max(0, stages.findIndex((stage) => stage.id === currentStageId));
-  const compactStart = Math.max(0, Math.min(activeIndex - 1, Math.max(0, stages.length - 3)));
-  const visibleStages = showFull ? stages : stages.slice(compactStart, compactStart + 3);
-  const completedCount = stages.filter((stage) => stage.status === 'completed').length;
-
   return (
     <section className="overview-reference-card overview-route-card" aria-labelledby="learning-path-title">
       <header>
         <h2 id="learning-path-title">学习路径</h2>
-        <span>{completedCount} / {stages.length} 阶段已完成</span>
       </header>
-      <div className="overview-route-summary">
-        {goalProgressStatus && (
-          <span className={`goal-progress-chip ${goalProgressStatus}`}>
-            {goalProgressLabel(goalProgressStatus)}
-          </span>
-        )}
-        {direction && <p className="overview-route-direction">{direction}</p>}
-      </div>
+      {((goalProgressStatus && goalProgressStatus !== 'on_schedule') || direction) && (
+        <div className="overview-route-summary">
+          {goalProgressStatus && goalProgressStatus !== 'on_schedule' && (
+            <span className={`goal-progress-chip ${goalProgressStatus}`}>
+              {goalProgressLabel(goalProgressStatus)}
+            </span>
+          )}
+          {direction && <p className="overview-route-direction">{direction}</p>}
+        </div>
+      )}
       <div className="overview-route-steps">
-        {visibleStages.map((stage) => {
+        {stages.map((stage) => {
           const index = stages.findIndex((item) => item.id === stage.id);
           const presentation = getRoadmapStagePresentation(stage, currentStageId);
-          const stageItems = items.filter((item) => item.roadmapStageId === stage.id);
+          const stageTasks = tasks.filter((task) => {
+            const isCurrentTask = task.id === currentTaskId || task.status === 'active';
+            const belongsToStage = task.roadmapStageId === stage.id
+              || (isCurrentTask && stage.id === currentStageId);
+            return belongsToStage
+            && (
+              task.status === 'closed'
+              || isCurrentTask
+            );
+          });
           return (
             <article className={presentation.className} key={stage.id} aria-current={presentation.isCurrentLearningUnit ? 'step' : undefined}>
-              <span className="overview-route-marker">{stage.status === 'completed' ? <CheckCircle2 size={17} /> : index + 1}</span>
+              <span className="overview-route-marker">{index + 1}</span>
               <div>
                 <strong>{stage.title}</strong>
-                <small>{presentation.label}</small>
-                {presentation.isCurrentLearningUnit && stage.targetDate && (
-                  <small className="overview-route-checkpoint">检查点：{stage.targetDate}</small>
-                )}
-                {stageItems.length > 0 && (
+                {stageTasks.length > 0 && (
                   <ul className="overview-route-items">
-                    {stageItems.map((item) => (
-                      <li key={item.id} className={item.sessionStatus}>
-                        <span className="plan-item-status">{planItemStatusLabel(item.sessionStatus)}</span>
-                        <span>{item.title}</span>
-                      </li>
-                    ))}
+                    {stageTasks.map((task) => {
+                      const isCurrentTask = task.id === currentTaskId || task.status === 'active';
+                      const className = task.status === 'closed'
+                        ? 'completed'
+                        : isCurrentTask ? 'active current' : task.status;
+                      return (
+                        <li key={task.id} className={className}>
+                          <span>学习单元 · {task.title}</span>
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>
@@ -150,12 +206,6 @@ function LearningPathSidebar({
           );
         })}
       </div>
-      {stages.length > 3 && (
-        <button className="text-action overview-route-toggle" type="button" aria-expanded={showFull} onClick={onToggleFull}>
-          {showFull ? '收起学习路径' : '查看完整学习路径'}
-          <ChevronRight size={15} />
-        </button>
-      )}
     </section>
   );
 }
@@ -167,16 +217,6 @@ function goalProgressLabel(status: GoalProgressStatus): string {
     checkpoint_missed: '错过检查点',
     goal_due: '目标到期',
     completed: '目标已完成'
-  };
-  return labels[status];
-}
-
-function planItemStatusLabel(status: NearTermPlanItemStatus): string {
-  const labels: Record<NearTermPlanItemStatus, string> = {
-    pending: '未开始',
-    active: '进行中',
-    completed: '已完成',
-    skipped: '已跳过'
   };
   return labels[status];
 }
@@ -214,7 +254,7 @@ function PlanManagement({
   onRestart: () => void;
 }): JSX.Element {
   return (
-    <details className="overview-manage">
+    <details className="overview-manage overview-reference-card">
       <summary>
         <span>计划与历史</span>
         <ChevronRight size={16} />
@@ -257,6 +297,7 @@ export function OverviewPage({
   onArchiveTodayAndRestart,
   onPrepareCurrentLearningDay,
   onNavigate,
+  onOpenStudyTarget,
   knowledgeItems
 }: {
   settings: AppSettings;
@@ -279,12 +320,12 @@ onSendOnboarding: (content: string) => Promise<void>;
   onArchiveTodayAndRestart: () => Promise<void>;
   onPrepareCurrentLearningDay: () => Promise<void>;
   onNavigate?: (view: 'study' | 'records') => void;
+  onOpenStudyTarget: (target: StudyViewTarget) => void;
   knowledgeItems: KnowledgeItem[];
 }): JSX.Element {
   const [message, setMessage] = useState('');
   const [pendingUserMessage, setPendingUserMessage] = useState<string | null>(null);
   const [showRestartConfirm, setShowRestartConfirm] = useState(false);
-  const [showFullRoadmap, setShowFullRoadmap] = useState(false);
   const [temporaryMessage, setTemporaryMessage] = useState('');
   const [temporaryGoalId, setTemporaryGoalId] = useState('');
   const [pendingElapsedSeconds, setPendingElapsedSeconds] = useState(0);
@@ -605,11 +646,10 @@ const latestAssistantMessageId = [...(onboarding?.messages ?? [])].reverse().fin
             <LearningPathSidebar
               stages={roadmap}
               currentStageId={activeStage?.id ?? null}
-              items={nearTermPlanItems}
+              currentTaskId={learningState?.dailyGuideTask?.id ?? null}
+              tasks={[]}
               direction={onboarding?.intake.brief?.direction}
               goalProgressStatus={todayGuide.goalProgress.status}
-              showFull={showFullRoadmap}
-              onToggleFull={() => setShowFullRoadmap((current) => !current)}
             />
           </aside>
         </div>
@@ -775,25 +815,13 @@ const latestAssistantMessageId = [...(onboarding?.messages ?? [])].reverse().fin
   const currentLearningStatus = currentTask ? deriveLearningTaskStatus(currentTask) : null;
   const activeStage = todayGuide?.currentStage ?? null;
   const goalProgress = todayGuide?.goalProgress ?? null;
-  const statusLabel = (status: string): string => ({ planned: '待开始', active: '进行中', deferred: '已暂缓', closed: '已结束' })[status] ?? status;
   const actions = currentTask?.actions ?? [];
   const completedActionCount = actions.filter((action) => action.status === 'done' || action.status === 'skipped').length;
-  const primaryActionLabel = currentLearningStatus?.phase === 'awaiting_result'
+  const currentTaskEntryLabel = currentLearningStatus?.phase === 'awaiting_result'
     ? '提交学习成果'
-    : activeSession?.status === 'paused'
-      ? '继续学习'
-      : currentTask?.status === 'planned'
-        ? '开始学习'
-        : '继续学习';
-  const taskConclusion = currentLearningStatus?.phase === 'awaiting_result'
-    ? '当前任务内容已处理，下一步提交学习成果。'
-    : currentLearningStatus?.phase === 'done'
-      ? '当前任务已经结束，可前往记录查看结果。'
-      : activeSession?.status === 'paused'
-        ? '学习已暂停，可以从上次位置继续。'
-        : '继续处理当前任务中的行动。';
-
-
+    : actions.length === 0 && currentLearningStatus?.phase !== 'done'
+      ? '进入当前任务'
+      : null;
   return (
     <section className="overview-dashboard">
       {goalProgress?.status === 'checkpoint_missed' && (
@@ -826,34 +854,33 @@ const latestAssistantMessageId = [...(onboarding?.messages ?? [])].reverse().fin
             <section className="overview-reference-card overview-task-card" aria-label="当前任务">
               <div className="overview-task-heading">
                 <h2>{currentTask.title}</h2>
-                <span className={`task-status ${currentTask.status}`}>
-                  {currentLearningStatus?.label ?? statusLabel(currentTask.status)}
-                </span>
               </div>
               <p className="overview-task-objective">{currentNearTermPlanItem?.focus || currentTask.objective}</p>
-              <p className="overview-task-conclusion">{taskConclusion}</p>
-              {actions.length > 0 && (
+              {(actions.length > 0 || currentTaskEntryLabel) && (
                 <div className="overview-actions-block">
                   <div className="overview-actions-header">
-                    <strong>行动</strong>
-                    <span>{completedActionCount} / {actions.length} 已处理 · 约 {currentTask.estimatedMinutes.target} 分钟</span>
+                    <strong>行动步骤</strong>
+                    <span>{actions.length > 0 ? `${completedActionCount} / ${actions.length} 已处理 · ` : ''}约 {currentTask.estimatedMinutes.target} 分钟</span>
                   </div>
-                  <TaskActionList actions={actions} />
+                  <TaskActionList
+                    actions={actions}
+                    taskId={currentTask.id}
+                    currentTaskEntryLabel={currentTaskEntryLabel}
+                    onOpen={(target) => {
+                      if (target.kind === 'current' && guide.status === 'draft') {
+                        void onConfirmGuide(guide.id);
+                        return;
+                      }
+                      onOpenStudyTarget(target);
+                    }}
+                  />
                 </div>
               )}
               <div className="overview-task-footer">
-                <details className="overview-task-details" open>
+                <details className="overview-task-details">
                   <summary><ListChecks size={16} />查看任务摘要<ChevronRight size={16} /></summary>
                   <div><section><h3>目标与范围</h3><p>{currentTask.objective}</p><p>{currentTask.scope}</p></section><section><h3>预期产出</h3><p>{currentTask.deliverable}</p></section><section><h3>完成标准</h3><ul>{currentTask.doneWhen.map((item) => <li key={item}>{item}</li>)}</ul></section></div>
                 </details>
-                {guide.status === 'draft' ? (
-                  <button className="primary-action overview-task-primary" type="button" onClick={() => void onConfirmGuide(guide.id)}><Play size={16} />开始学习</button>
-                ) : currentLearningStatus?.phase !== 'done' ? (
-                  <button className="primary-action overview-task-primary" type="button" onClick={() => onNavigate?.('study')}>
-                    {currentLearningStatus?.phase === 'awaiting_result' ? <SendHorizontal size={16} /> : <Play size={16} />}
-                    {primaryActionLabel}
-                  </button>
-                ) : null}
               </div>
             </section>
           ) : <section className="overview-reference-card overview-empty-task"><strong>当前没有可执行任务</strong><p>计划和历史记录仍然保留，请根据上方状态继续处理。</p></section>}
@@ -869,11 +896,10 @@ const latestAssistantMessageId = [...(onboarding?.messages ?? [])].reverse().fin
           <LearningPathSidebar
             stages={roadmap}
             currentStageId={activeStage?.id ?? null}
-            items={nearTermPlanItems}
+            currentTaskId={currentTask?.id ?? null}
+            tasks={guide.tasks}
             direction={onboarding?.intake.brief?.direction}
             goalProgressStatus={todayGuide?.goalProgress.status}
-            showFull={showFullRoadmap}
-            onToggleFull={() => setShowFullRoadmap((current) => !current)}
           />
         </aside>
       </div>

@@ -7,7 +7,7 @@ import { RecordsPage } from './pages/RecordsPage';
 import { OverviewPage } from './pages/OverviewPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { Drawer } from './components/shared/Drawer';
-import type { ViewKey } from './types/navigation';
+import type { StudyViewTarget, ViewKey } from './types/navigation';
 import { Timer } from 'lucide-react';
 import type {
   AppSettings,
@@ -33,6 +33,7 @@ const todayIso = localDateIso();
 
 export default function App(): JSX.Element {
   const [view, setView] = useState<ViewKey>('overview');
+  const [studyViewTarget, setStudyViewTarget] = useState<StudyViewTarget>({ kind: 'current' });
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [onboarding, setOnboarding] = useState<GoalIntakeState | null>(null);
   const [todayGuide, setTodayGuide] = useState<LearningOverviewState | null>(null);
@@ -58,6 +59,7 @@ export default function App(): JSX.Element {
   const [onboardingOperationPending, setOnboardingOperationPending] = useState(false);
   const [planGenerating, setPlanGenerating] = useState(false);
   const [askingQuestion, setAskingQuestion] = useState(false);
+  const [pendingTeacherQuestion, setPendingTeacherQuestion] = useState<string | null>(null);
   const [learningPending, setLearningPending] = useState(false);
   const [recordsReloadKey, setRecordsReloadKey] = useState(0);
   const mountedRef = useRef(false);
@@ -102,6 +104,22 @@ export default function App(): JSX.Element {
     setActiveSession(active);
     setLearningState(nextLearningState);
     setTodayGuide(nextTodayGuide);
+  }
+
+  function openStudyTarget(target: StudyViewTarget): void {
+    setStudyViewTarget(target);
+    setRoadmapDrawerOpen(false);
+    setTeacherDrawerOpen(false);
+    setView('study');
+  }
+
+  function selectView(nextView: ViewKey): void {
+    if (nextView === 'study') {
+      setStudyViewTarget({ kind: 'current' });
+      setRoadmapDrawerOpen(false);
+      setTeacherDrawerOpen(false);
+    }
+    setView(nextView);
   }
 
   async function createAndActivateInitialPlan(briefPatch?: Partial<GoalBrief>): Promise<void> {
@@ -175,12 +193,14 @@ export default function App(): JSX.Element {
 
   const handleAskQuestion = (question: string) => runAction('回答问题', async () => {
     setAskingQuestion(true);
+    setPendingTeacherQuestion(question);
     try {
       const result = await window.studyApp.learning.askQuestion(question);
       setQuestionAnswer(result);
       setLearningState(await window.studyApp.learning.getState());
     } finally {
       setAskingQuestion(false);
+      setPendingTeacherQuestion(null);
     }
   });
 
@@ -261,7 +281,7 @@ export default function App(): JSX.Element {
     : view === 'study'
       ? learningState?.dailyGuideTask?.title ?? '当前任务'
       : view === 'records'
-        ? '记录'
+        ? '查看学习过程、成果证据和后续变化'
         : '设置';
 
   if (!settings) {
@@ -289,9 +309,9 @@ export default function App(): JSX.Element {
     <AppShell
       current={view}
       pageTitle={shellPageTitle}
-      teacherCollapsed={teacherCollapsed}
+      teacherCollapsed={studyViewTarget.kind === 'current' ? teacherCollapsed : false}
       onToggleTeacher={() => setTeacherCollapsed((c) => !c)}
-      onSelectView={setView}
+      onSelectView={selectView}
       sessionLabel={sessionLabel}
       center={
         <main className="canvas">
@@ -410,7 +430,7 @@ export default function App(): JSX.Element {
                 onConfirmGuide={(guideId) => runAction('确认当前 Learning Guide', async () => {
                   await window.studyApp.guides.confirmLearningGuide(guideId);
                   await refresh();
-                  setView('study');
+                  openStudyTarget({ kind: 'current' });
                 })}
                 onArchiveTodayAndRestart={() => runAction('归档计划并重新开始', async () => {
                   setOnboarding(await window.studyApp.guides.resetLearningWorkspace());
@@ -418,7 +438,8 @@ export default function App(): JSX.Element {
                   setActiveSession(null); setReview(null);
                   setQuestionAnswer(null); setTeaching(null);
                 })}
-                onNavigate={setView}
+                onNavigate={selectView}
+                onOpenStudyTarget={openStudyTarget}
                 onPrepareCurrentLearningDay={() => runAction('重新生成当前学习单元', async () => {
                   const result = await window.studyApp.guides.prepareCurrentLearningUnit(true);
                   await refresh();
@@ -437,6 +458,8 @@ export default function App(): JSX.Element {
                 teaching={teaching}
                 questionAnswer={questionAnswer}
                 learningPending={learningPending}
+                viewTarget={studyViewTarget}
+                onReturnToCurrent={() => setStudyViewTarget({ kind: 'current' })}
                 onStartSession={(taskId) => runLearningAction('开始学习', async () => {
                   if (todayGuide?.guide?.status === 'draft') {
                     await window.studyApp.guides.confirmLearningGuide(todayGuide.guide.id);
@@ -521,7 +544,7 @@ export default function App(): JSX.Element {
                   setReview(null);
                   await refresh();
                   setRecordsReloadKey((key) => key + 1);
-                  setView('study');
+                  openStudyTarget({ kind: 'current' });
                 })}
                 pendingAdjustment={learningState?.pendingAdjustment ?? null}
                 onGenerate={() => runAction('生成复盘', async () => {
@@ -582,23 +605,24 @@ export default function App(): JSX.Element {
           </div>
         </main>
       }
-      teacher={view === 'study' && !teacherDrawerOpen ? (
+      teacher={view === 'study' && studyViewTarget.kind === 'current' && !teacherDrawerOpen ? (
         <TeacherSidebar
           knowledgeItems={knowledgeItems}
           collapsed={teacherCollapsed}
           onToggleCollapse={() => setTeacherCollapsed((c) => !c)}
           onAskQuestion={handleAskQuestion}
           contextSummary={learningState?.dailyGuideAction?.title ?? learningState?.dailyGuideTask?.title}
-          questionAnswer={questionAnswer}
+          messages={questionAnswer?.messages ?? learningState?.questionMessages ?? []}
+          pendingQuestion={pendingTeacherQuestion}
           isAsking={askingQuestion}
         />
       ) : undefined}
     />
-    <Drawer open={roadmapDrawerOpen} title="学习大纲" onClose={() => setRoadmapDrawerOpen(false)}>
+    <Drawer open={roadmapDrawerOpen && studyViewTarget.kind === 'current'} title="学习大纲" onClose={() => setRoadmapDrawerOpen(false)}>
         <RoadmapTree stages={todayGuide?.roadmap ?? []} nearTermPlanItems={todayGuide?.shortPlan ?? []} />
       </Drawer>
-      <Drawer open={teacherDrawerOpen} title="AI 导师" onClose={() => setTeacherDrawerOpen(false)}>
-        <TeacherSidebar knowledgeItems={knowledgeItems} collapsed={false} onToggleCollapse={() => setTeacherDrawerOpen(false)} contextSummary={learningState?.dailyGuideAction?.title ?? learningState?.dailyGuideTask?.title} questionAnswer={questionAnswer} isAsking={askingQuestion} onAskQuestion={handleAskQuestion} />
+      <Drawer open={teacherDrawerOpen && studyViewTarget.kind === 'current'} title="AI 导师" onClose={() => setTeacherDrawerOpen(false)}>
+        <TeacherSidebar knowledgeItems={knowledgeItems} collapsed={false} onToggleCollapse={() => setTeacherDrawerOpen(false)} contextSummary={learningState?.dailyGuideAction?.title ?? learningState?.dailyGuideTask?.title} messages={questionAnswer?.messages ?? learningState?.questionMessages ?? []} pendingQuestion={pendingTeacherQuestion} isAsking={askingQuestion} onAskQuestion={handleAskQuestion} />
     </Drawer>
     </>
   );
